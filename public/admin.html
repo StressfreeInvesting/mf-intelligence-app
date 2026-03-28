@@ -2,206 +2,467 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <title>MF Intelligence — Admin</title>
 <style>
-:root{--bg:#060A10;--s1:#0C1018;--s2:#141C28;--bdr:#1C2840;--acc:#00E599;--accA:rgba(0,229,153,.12);--red:#FF4D6A;--t1:#EDF2F7;--t2:#8B9AB4;--t3:#4F6180}
-*{box-sizing:border-box;margin:0;padding:0}body{background:var(--bg);font-family:'Segoe UI',system-ui,sans-serif;color:var(--t1);min-height:100vh;display:flex;justify-content:center;padding:16px}
-.wrap{max-width:460px;width:100%}
-h1{font-size:18px;font-weight:800}h1 b{color:var(--acc)}
-.sub{font-size:11px;color:var(--t3);margin-bottom:16px}
+:root{--bg:#060A10;--s1:#0C1018;--s2:#141C28;--bdr:#1C2840;--acc:#00E599;--accA:rgba(0,229,153,.12);--red:#FF4D6A;--redA:rgba(255,77,106,.1);--org:#FF9F43;--orgA:rgba(255,159,67,.1);--blu:#3B82F6;--t1:#EDF2F7;--t2:#8B9AB4;--t3:#4F6180}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);font-family:'Segoe UI',system-ui,sans-serif;color:var(--t1);min-height:100vh;display:flex;justify-content:center;padding:16px 12px 40px}
+.wrap{max-width:480px;width:100%}
+h1{font-size:18px;font-weight:800;margin-bottom:2px}h1 b{color:var(--acc)}
+.sub{font-size:10px;color:var(--t3);margin-bottom:14px}
 .card{background:var(--s1);border:1px solid var(--bdr);border-radius:10px;padding:14px;margin-bottom:10px}
+.ctitle{font-size:10px;font-weight:700;color:var(--t2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.4px}
 label{font-size:10px;color:var(--t2);font-weight:600;display:block;margin-bottom:4px}
-input[type=password]{width:100%;padding:9px 10px;background:var(--s2);border:1px solid var(--bdr);border-radius:7px;color:var(--t1);font-size:12px;outline:none;margin-bottom:10px}input:focus{border-color:var(--acc)}
-.upbox{border:2px dashed var(--bdr);border-radius:10px;padding:18px;text-align:center;cursor:pointer;transition:all .2s;margin-bottom:10px}
+input[type=password],input[type=text]{width:100%;padding:9px 10px;background:var(--s2);border:1px solid var(--bdr);border-radius:7px;color:var(--t1);font-size:12px;outline:none}
+input[type=password]{margin-bottom:10px}
+input:focus{border-color:var(--acc)}
+.upbox{border:2px dashed var(--bdr);border-radius:10px;padding:20px;text-align:center;cursor:pointer;transition:all .2s;margin-bottom:10px}
 .upbox:hover,.upbox.over{border-color:var(--acc);background:var(--accA)}
 .upbox.loaded{border-color:var(--acc);border-style:solid;background:var(--accA)}
 .upbox h3{font-size:13px;color:var(--t2);margin-bottom:3px}.upbox p{font-size:9px;color:var(--t3)}
-.btn{width:100%;padding:11px;border:none;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer}
+.btn{width:100%;padding:11px;border:none;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;transition:.15s}
 .btn:active{transform:scale(.97)}
-.btn-go{background:var(--acc);color:var(--bg)}.btn-go:disabled{opacity:.35;cursor:not-allowed}
-.st{padding:8px;border-radius:7px;font-size:10px;margin-top:8px;display:none}
+.btn-go{background:var(--acc);color:#060A10}.btn-go:disabled{opacity:.35;cursor:not-allowed}
+.st{padding:9px 10px;border-radius:7px;font-size:10px;margin-top:8px;display:none;line-height:1.6}
 .st.ok{display:block;background:var(--accA);color:var(--acc)}
-.st.er{display:block;background:rgba(255,77,106,.1);color:var(--red)}
-.fl{display:flex;justify-content:space-between;padding:5px 7px;background:var(--s2);border-radius:5px;margin-bottom:3px;font-size:9px}
+.st.er{display:block;background:var(--redA);color:var(--red)}
+.st.warn{display:block;background:var(--orgA);color:var(--org)}
+.fl{display:flex;justify-content:space-between;align-items:center;padding:6px 8px;background:var(--s2);border-radius:5px;margin-bottom:3px;font-size:9px}
+.tabs{display:flex;gap:2px;margin-bottom:10px;background:var(--s2);border-radius:8px;padding:3px}
+.tab{flex:1;padding:6px 4px;border-radius:6px;font-size:9px;font-weight:700;background:none;border:none;color:var(--t3);cursor:pointer;transition:.15s}
+.tab.a{background:var(--s1);color:var(--acc)}
+.cal-hdrs{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-bottom:3px}
+.cal-hdrs span{font-size:7px;color:var(--t3);text-align:center;font-weight:700}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
+.cd{aspect-ratio:1;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:600;font-family:monospace}
+.cd.uploaded{background:var(--accA);color:var(--acc);border:1px solid rgba(0,229,153,.25)}
+.cd.missing{background:var(--redA);color:var(--red)}
+.cd.weekend{background:var(--s2);color:var(--t3);opacity:.4}
+.cd.future{opacity:.2;color:var(--t3)}
+.cd.empty{background:transparent}
+.cd.today{outline:1.5px solid var(--acc)}
+.vrow{display:flex;align-items:flex-start;gap:7px;padding:5px 0;border-bottom:1px solid var(--bdr);font-size:9px}
+.vrow:last-child{border-bottom:none}
+.vdot{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:1px}
+.vdot.ok{background:var(--acc)}.vdot.warn{background:var(--org)}.vdot.er{background:var(--red)}
+.hrow{display:flex;align-items:center;gap:8px;padding:7px 9px;background:var(--s2);border-radius:6px;margin-bottom:4px}
+.hrow .hdate{font-family:monospace;font-size:10px;font-weight:700;color:var(--t1);flex:1}
+.hrow .hdel{padding:3px 8px;border-radius:4px;font-size:8px;font-weight:700;background:var(--redA);color:var(--red);border:none;cursor:pointer}
+.stat-row{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--bdr);font-size:10px}
+.stat-row:last-child{border-bottom:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+.spr{display:inline-block;width:9px;height:9px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:4px}
 #loginView,#adminView{display:none}
 </style></head><body>
 <div class="wrap">
-<h1><b>◇</b> MF Intelligence Admin</h1>
-<div class="sub">Upload FOVOLT → auto-pushed to all users via secure API</div>
+<h1><b>◇</b> MF Intelligence</h1>
+<div class="sub">Admin Panel · Upload FOVOLT · Manage History · Monitor Quality</div>
 
 <div id="loginView" style="display:block">
 <div class="card">
-<label>Admin Password</label>
-<input type="password" id="pw" placeholder="Enter admin password" onkeydown="if(event.key==='Enter')doLogin()">
-<button class="btn btn-go" onclick="doLogin()">Login</button>
-<div class="st" id="lSt"></div>
+  <label>Admin Password</label>
+  <input type="password" id="pw" placeholder="Enter admin password" onkeydown="if(event.key==='Enter')doLogin()">
+  <button class="btn btn-go" onclick="doLogin()">Login</button>
+  <div class="st" id="lSt"></div>
 </div>
 </div>
 
 <div id="adminView">
-<div class="card">
-<label>Upload FOVOLT CSV Files (select 1 or more days)</label>
-<div class="upbox" id="dz" onclick="document.getElementById('fi').click()">
-<input type="file" id="fi" accept=".csv" multiple style="display:none" onchange="handleFiles(this.files)">
-<h3 id="dl">📂 Drop FOVOLT CSV files here</h3>
-<p>Or click to browse · Dates auto-detected from filename</p>
-</div>
-<div id="fList"></div>
-<button class="btn btn-go" id="pushBtn" onclick="doPush()" disabled>Push to All Users</button>
-<div class="st" id="pSt"></div>
+<div class="tabs">
+  <button class="tab a" id="tab-upload" onclick="switchTab('upload')">📤 Upload</button>
+  <button class="tab" id="tab-calendar" onclick="switchTab('calendar')">📅 Calendar</button>
+  <button class="tab" id="tab-history" onclick="switchTab('history')">🗂 History</button>
+  <button class="tab" id="tab-status" onclick="switchTab('status')">📊 Status</button>
 </div>
 
-<div class="card">
-<label>Current Data Status</label>
-<div id="fresh" style="font-size:10px;color:var(--t2)">Checking...</div>
+<!-- UPLOAD -->
+<div id="pane-upload">
+  <div class="card">
+    <div class="ctitle">Upload FOVOLT CSV Files</div>
+    <div class="upbox" id="dz" onclick="document.getElementById('fi').click()">
+      <input type="file" id="fi" accept=".csv" multiple style="display:none" onchange="handleFiles(this.files)">
+      <h3 id="dl">📂 Drop FOVOLT CSV files here</h3>
+      <p>Click to browse · Multiple files OK · Dates auto-detected from filename</p>
+    </div>
+    <div id="fList"></div>
+    <div id="valPanel" style="display:none;margin-top:8px" class="card">
+      <div class="ctitle">✅ Pre-Upload Validation</div>
+      <div id="valChecks"></div>
+    </div>
+    <button class="btn btn-go" id="pushBtn" onclick="doPush()" disabled style="margin-top:8px">Push to All Users</button>
+    <div class="st" id="pSt"></div>
+  </div>
+  <div class="card" style="font-size:9px;color:var(--t3);line-height:1.7">
+    <b style="color:var(--t2)">How it works:</b><br>
+    1. Drop FOVOLT CSV → parsed in browser<br>
+    2. Validation runs automatically<br>
+    3. Push → Vercel API → saved as latest + daily history on GitHub<br>
+    4. Users see updated data on next app load<br><br>
+    <b style="color:var(--t2)">Security:</b> Token lives in Vercel env vars. Never in browser code.
+  </div>
 </div>
 
-<div class="card" style="font-size:9px;color:var(--t3);line-height:1.6">
-<b style="color:var(--t2)">How it works:</b><br>
-1. You upload FOVOLT CSV here<br>
-2. Data is parsed in your browser (nothing leaves until you push)<br>
-3. Click "Push" → sends to secure Vercel API → stored on GitHub<br>
-4. Users' app auto-fetches from GitHub on page load<br>
-<br>
-<b style="color:var(--t2)">Security:</b> GitHub token is stored as Vercel environment variable. It never appears in browser code. Admin password is verified server-side.
+<!-- CALENDAR -->
+<div id="pane-calendar" style="display:none">
+  <div class="card">
+    <div class="ctitle">Upload Calendar — Last 35 Days</div>
+    <div style="display:flex;gap:10px;margin-bottom:8px;font-size:9px">
+      <span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--accA);border:1px solid rgba(0,229,153,.3);vertical-align:middle"></span> Uploaded</span>
+      <span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--redA);vertical-align:middle"></span> Missing</span>
+      <span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--s2);vertical-align:middle"></span> Weekend</span>
+    </div>
+    <div id="calGrid"><div style="color:var(--t3);font-size:10px"><span class="spr"></span>Loading...</div></div>
+    <div id="calSummary" style="margin-top:10px;font-size:9px;color:var(--t3)"></div>
+  </div>
 </div>
+
+<!-- HISTORY -->
+<div id="pane-history" style="display:none">
+  <div class="card">
+    <div class="ctitle" style="display:flex;justify-content:space-between;align-items:center">
+      <span>Upload History</span>
+      <span id="histCount" style="color:var(--acc);font-size:11px"></span>
+    </div>
+    <div id="histList"><div style="color:var(--t3);font-size:10px"><span class="spr"></span>Loading...</div></div>
+  </div>
+  <div class="card">
+    <div class="ctitle" style="color:var(--red)">⚠️ Delete Specific Day</div>
+    <div style="font-size:9px;color:var(--t3);margin-bottom:10px">Remove a day's data from history. Cannot be undone. Click Delete next to any date above to pre-fill.</div>
+    <div style="display:flex;gap:6px;align-items:center">
+      <input type="text" id="delDate" placeholder="YYYY-MM-DD" style="flex:1;font-family:monospace">
+      <button onclick="doDelete()" style="padding:9px 14px;background:var(--redA);color:var(--red);border:1px solid rgba(255,77,106,.3);border-radius:7px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap">Delete</button>
+    </div>
+    <div class="st" id="delSt"></div>
+  </div>
+</div>
+
+<!-- STATUS -->
+<div id="pane-status" style="display:none">
+  <div class="card">
+    <div class="ctitle">Live Data Status</div>
+    <div id="statusContent"><div style="color:var(--t3);font-size:10px"><span class="spr"></span>Checking...</div></div>
+  </div>
+  <div class="card">
+    <div class="ctitle">History Stats</div>
+    <div id="statsContent" style="font-size:10px;color:var(--t3)">Loading...</div>
+  </div>
+</div>
+
 </div>
 </div>
 
 <script>
 var adminPw = "";
 var parsedFiles = [];
+var indexData = null;
+
+function switchTab(name) {
+  ["upload","calendar","history","status"].forEach(function(t) {
+    document.getElementById("pane-"+t).style.display = t===name?"block":"none";
+    document.getElementById("tab-"+t).classList.toggle("a", t===name);
+  });
+  if(name==="calendar") loadCalendar();
+  if(name==="history") loadHistory();
+  if(name==="status") loadStatus();
+}
 
 function doLogin() {
   adminPw = document.getElementById("pw").value;
-  if (!adminPw || adminPw.length < 4) { showSt("lSt","Enter a valid password","er"); return; }
-  // We don't verify locally — the API will reject wrong passwords
-  document.getElementById("loginView").style.display = "none";
-  document.getElementById("adminView").style.display = "block";
-  checkFresh();
+  if(!adminPw||adminPw.length<4){showSt("lSt","Enter a valid password","er");return;}
+  document.getElementById("loginView").style.display="none";
+  document.getElementById("adminView").style.display="block";
+  loadIndex();
 }
 
-function showSt(id, msg, type) {
-  var el = document.getElementById(id);
-  el.textContent = msg; el.className = "st " + type;
+function showSt(id,msg,type){
+  var el=document.getElementById(id);
+  el.innerHTML=msg; el.className="st "+type;
 }
 
-// Parse FOVOLT
-function parseFOVOLT(csv) {
-  var lines = csv.trim().split("\n"), r = {};
-  for (var i = 1; i < lines.length; i++) {
-    var c = lines[i].split(","); if (c.length < 16) continue;
-    var sym = c[1].trim(), cl = parseFloat(c[2]), pr = parseFloat(c[3]);
-    var fc = parseFloat(c[8]), fp = parseFloat(c[9]), vol = parseFloat(c[15]) * 100;
-    if (isNaN(cl) || isNaN(pr) || pr === 0) continue;
-    r[sym] = { cl: cl, pr: pr, fc: fc, fp: fp, vol: vol };
+async function loadIndex(){
+  try{
+    var r=await fetch("/api/history?type=index");
+    if(r.ok) indexData=await r.json();
+  }catch(e){indexData=null;}
+}
+
+function parseFOVOLT(csv){
+  var lines=csv.trim().split("\n"),r={};
+  for(var i=1;i<lines.length;i++){
+    var c=lines[i].split(",");if(c.length<16)continue;
+    var sym=c[1].trim(),cl=parseFloat(c[2]),pr=parseFloat(c[3]);
+    var fc=parseFloat(c[8]),fp=parseFloat(c[9]),vol=parseFloat(c[15])*100;
+    if(isNaN(cl)||isNaN(pr)||pr===0)continue;
+    r[sym]={cl:cl,pr:pr,fc:fc,fp:fp,vol:vol};
   }
   return r;
 }
 
-function parseDateFromName(name) {
-  var m = name.match(/(\d{2})(\d{2})(\d{4})/);
-  if (!m) return null;
-  var months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  return { ts: new Date(parseInt(m[3]), parseInt(m[2])-1, parseInt(m[1])).getTime(),
-    label: m[1] + "-" + months[parseInt(m[2])-1] + "-" + m[3] };
+function parseDateFromName(name){
+  var m=name.match(/(\d{2})(\d{2})(\d{4})/);
+  if(!m)return null;
+  var months=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return{
+    ts:new Date(parseInt(m[3]),parseInt(m[2])-1,parseInt(m[1])).getTime(),
+    label:m[1]+"-"+months[parseInt(m[2])-1]+"-"+m[3],
+    iso:m[3]+"-"+m[2]+"-"+m[1]
+  };
 }
 
-function computeSignals(files) {
-  files.sort(function(a,b) { return a.ts - b.ts; });
-  var latest = files[files.length-1], prev = files.length >= 2 ? files[files.length-2] : null;
-  var nd = latest.d, n1d = prev ? prev.d : null, signals = {};
-  Object.keys(nd).forEach(function(sym) {
-    var d = nd[sym], d1 = ((d.cl-d.pr)/d.pr)*100;
-    var prem = d.fc ? ((d.fc-d.cl)/d.cl)*100 : 0;
-    var d2 = d1;
-    if (n1d && n1d[sym]) d2 = ((d.cl - n1d[sym].pr) / n1d[sym].pr) * 100;
-    var sc = Math.round((d2*0.30 + d1*0.20 + prem*50 - (d.vol>35?(d.vol-35)*0.02:0))*100)/100;
-    sc = Math.max(-5, Math.min(5, sc));
-    var lb = sc>=2?"Strong Bullish":sc>=1?"Bullish":sc>=0.3?"Mild Bullish":sc<=-2?"Strong Bearish":sc<=-1?"Bearish":sc<=-0.3?"Mild Bearish":"Neutral";
-    signals[sym] = { score:sc, label:lb, cl:d.cl, pr:d.pr, d1:d1.toFixed(2), d2:d2.toFixed(2), prem:prem.toFixed(3), vol:d.vol.toFixed(1) };
+function computeSignals(files){
+  files.sort(function(a,b){return a.ts-b.ts;});
+  var latest=files[files.length-1],prev=files.length>=2?files[files.length-2]:null;
+  var nd=latest.d,n1d=prev?prev.d:null,signals={};
+  Object.keys(nd).forEach(function(sym){
+    var d=nd[sym],d1=((d.cl-d.pr)/d.pr)*100;
+    var prem=d.fc?((d.fc-d.cl)/d.cl)*100:0;
+    var d2=d1;
+    if(n1d&&n1d[sym])d2=((d.cl-n1d[sym].pr)/n1d[sym].pr)*100;
+    var sc=Math.round((d2*0.30+d1*0.20+prem*50-(d.vol>35?(d.vol-35)*0.02:0))*100)/100;
+    sc=Math.max(-5,Math.min(5,sc));
+    var lb=sc>=2?"Strong Bullish":sc>=1?"Bullish":sc>=0.3?"Mild Bullish":sc<=-2?"Strong Bearish":sc<=-1?"Bearish":sc<=-0.3?"Mild Bearish":"Neutral";
+    signals[sym]={score:sc,label:lb,cl:d.cl,pr:d.pr,d1:d1.toFixed(2),d2:d2.toFixed(2),prem:prem.toFixed(3),vol:d.vol.toFixed(1)};
   });
   return signals;
 }
 
-function handleFiles(fileList) {
-  parsedFiles = [];
-  var total = fileList.length, done = 0;
-  Array.from(fileList).forEach(function(file) {
-    var reader = new FileReader();
-    reader.onload = function(e) {
-      var data = parseFOVOLT(e.target.result);
-      var di = parseDateFromName(file.name);
-      if (Object.keys(data).length > 0) {
-        parsedFiles.push({ d: data, label: di ? di.label : file.name, ts: di ? di.ts : Date.now(), stocks: Object.keys(data).length });
+function runValidation(files){
+  var checks=[];
+  var avgStocks=Math.round(files.reduce(function(a,f){return a+f.stocks},0)/files.length);
+
+  // Stock count
+  if(avgStocks>=150) checks.push({ok:"ok",msg:"Stock count good ("+avgStocks+" stocks — expected 150+)"});
+  else if(avgStocks>=100) checks.push({ok:"warn",msg:"Stock count low ("+avgStocks+") — check if full F&O file"});
+  else checks.push({ok:"er",msg:"Very few stocks ("+avgStocks+") — possibly wrong or corrupt file"});
+
+  // Date detection
+  var datesOk=files.filter(function(f){return f.label&&f.label.match(/\d{2}-\w{3}-\d{4}/)}).length;
+  if(datesOk===files.length) checks.push({ok:"ok",msg:"Dates detected: "+files.map(function(f){return f.label}).join(", ")});
+  else checks.push({ok:"warn",msg:"Could not detect date from some filenames. Rename as DDMMYYYY.csv"});
+
+  // Duplicate
+  if(indexData&&indexData.dates){
+    var dupes=files.filter(function(f){return f.iso&&indexData.dates.indexOf(f.iso)>=0});
+    if(dupes.length===0) checks.push({ok:"ok",msg:"No duplicate dates — all files are new"});
+    else checks.push({ok:"er",msg:"Duplicate dates already uploaded: "+dupes.map(function(f){return f.iso}).join(", ")});
+  } else {
+    checks.push({ok:"ok",msg:"First upload — no duplicates possible"});
+  }
+
+  // Weekend
+  var wknd=files.filter(function(f){if(!f.ts)return false;var d=new Date(f.ts).getDay();return d===0||d===6});
+  if(wknd.length===0) checks.push({ok:"ok",msg:"All dates are weekdays — valid trading days"});
+  else checks.push({ok:"warn",msg:"Weekend date: "+wknd.map(function(f){return f.label}).join(", ")+" (NSE is closed)"});
+
+  // Count
+  if(files.length===1) checks.push({ok:"ok",msg:"Single day upload"});
+  else checks.push({ok:"ok",msg:"Batch upload: "+files.length+" days — each saved as separate daily file"});
+
+  return checks;
+}
+
+function showValidation(files){
+  var checks=runValidation(files);
+  var hasError=checks.some(function(c){return c.ok==="er"});
+  var hasWarn=checks.some(function(c){return c.ok==="warn"});
+  document.getElementById("valChecks").innerHTML=checks.map(function(c){
+    return'<div class="vrow"><div class="vdot '+c.ok+'"></div><div>'+c.msg+'</div></div>';
+  }).join("");
+  document.getElementById("valPanel").style.display="block";
+  document.getElementById("pushBtn").disabled=hasError;
+  if(hasError) showSt("pSt","❌ Fix errors above before pushing.","er");
+  else if(hasWarn) showSt("pSt","⚠️ Warnings found. Review above — you can still push.","warn");
+  else document.getElementById("pSt").style.display="none";
+}
+
+function handleFiles(fileList){
+  parsedFiles=[];
+  var total=fileList.length,done=0;
+  Array.from(fileList).forEach(function(file){
+    var reader=new FileReader();
+    reader.onload=function(e){
+      var data=parseFOVOLT(e.target.result);
+      var di=parseDateFromName(file.name);
+      if(Object.keys(data).length>0){
+        parsedFiles.push({d:data,label:di?di.label:file.name,ts:di?di.ts:Date.now(),stocks:Object.keys(data).length,iso:di?di.iso:null});
       }
       done++;
-      if (done === total) {
-        var h = "";
-        parsedFiles.sort(function(a,b){return a.ts-b.ts}).forEach(function(f) {
-          h += '<div class="fl"><span style="color:var(--t1);font-weight:600">FOVOLT '+f.label+'</span><span style="color:var(--acc)">'+f.stocks+' stocks</span></div>';
-        });
-        document.getElementById("fList").innerHTML = h;
-        document.getElementById("pushBtn").disabled = !parsedFiles.length;
-        document.getElementById("dz").className = "upbox" + (parsedFiles.length ? " loaded" : "");
-        document.getElementById("dl").textContent = parsedFiles.length ? "\u2705 " + parsedFiles.length + " file(s) ready" : "\U0001f4c2 Drop FOVOLT CSV files here";
+      if(done===total){
+        parsedFiles.sort(function(a,b){return a.ts-b.ts});
+        document.getElementById("fList").innerHTML=parsedFiles.map(function(f){
+          return'<div class="fl"><span style="color:var(--t1);font-weight:600">📄 '+f.label+'</span><span style="color:var(--acc)">'+f.stocks+' stocks</span></div>';
+        }).join("");
+        document.getElementById("pushBtn").disabled=!parsedFiles.length;
+        document.getElementById("dz").className="upbox"+(parsedFiles.length?" loaded":"");
+        document.getElementById("dl").textContent=parsedFiles.length?"✅ "+parsedFiles.length+" file(s) ready":"📂 Drop FOVOLT CSV files here";
+        if(parsedFiles.length) showValidation(parsedFiles);
       }
     };
     reader.readAsText(file);
   });
 }
 
-// Drag & drop
-var dz = document.getElementById("dz");
-dz.addEventListener("dragover", function(e) { e.preventDefault(); dz.classList.add("over"); });
-dz.addEventListener("dragleave", function() { dz.classList.remove("over"); });
-dz.addEventListener("drop", function(e) { e.preventDefault(); dz.classList.remove("over"); handleFiles(e.dataTransfer.files); });
+var dz=document.getElementById("dz");
+dz.addEventListener("dragover",function(e){e.preventDefault();dz.classList.add("over")});
+dz.addEventListener("dragleave",function(){dz.classList.remove("over")});
+dz.addEventListener("drop",function(e){e.preventDefault();dz.classList.remove("over");handleFiles(e.dataTransfer.files)});
 
-// Push via secure API
-async function doPush() {
-  if (!parsedFiles.length) return;
-  var btn = document.getElementById("pushBtn");
-  btn.disabled = true; btn.textContent = "Pushing...";
-
-  try {
-    var signals = computeSignals(parsedFiles);
-    var fileLabels = parsedFiles.map(function(f) { return f.label; });
-    var latestDate = parsedFiles[parsedFiles.length-1].label;
-
-    var resp = await fetch("/api/upload", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        password: adminPw,
-        signals: signals,
-        files: fileLabels,
-        latestDate: latestDate
-      })
-    });
-
-    //var result = await resp.json();
-    console.log("after admin click qwerty");
-    var rawText = await resp.text();
-console.log("Raw server response:", rawText);
-var result = JSON.parse(rawText);
-    if (resp.ok && result.success) {
-      showSt("pSt", "\u2705 Pushed " + result.stockCount + " stocks (" + result.date + ") — all users will see this!", "ok");
-      checkFresh();
-    } else {
-      showSt("pSt", "\u274c " + (result.error || "Unknown error"), "er");
+async function doPush(){
+  if(!parsedFiles.length)return;
+  var btn=document.getElementById("pushBtn");
+  btn.disabled=true;btn.textContent="⏳ Pushing...";
+  var results=[];
+  for(var i=0;i<parsedFiles.length;i++){
+    var f=parsedFiles[i];
+    showSt("pSt","<span class='spr'></span> Pushing "+f.label+" ("+(i+1)+"/"+parsedFiles.length+")...","warn");
+    try{
+      var filesToCompute=i>0?[parsedFiles[i-1],f]:[f];
+      var signals=computeSignals(filesToCompute);
+      var resp=await fetch("/api/upload",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({password:adminPw,signals:signals,files:[f.label],latestDate:f.label})
+      });
+      var result=await resp.json();
+      if(resp.ok&&result.success) results.push({label:f.label,ok:true,stocks:result.stockCount,weekly:result.weeklySaved});
+      else if(result.duplicate) results.push({label:f.label,ok:false,msg:"Already uploaded (duplicate)"});
+      else results.push({label:f.label,ok:false,msg:result.error||"Unknown error"});
+    }catch(e){
+      results.push({label:f.label,ok:false,msg:e.message});
     }
-  } catch (e) {
-    showSt("pSt", "\u274c " + e.message, "er");
   }
-  btn.disabled = false; btn.textContent = "Push to All Users";
+  var ok=results.filter(function(r){return r.ok});
+  var fail=results.filter(function(r){return!r.ok});
+  var weeklyDone=results.filter(function(r){return r.weekly});
+  var msg="";
+  if(ok.length) msg+="✅ Pushed: "+ok.map(function(r){return r.label+" ("+r.stocks+" stocks)"}).join(", ")+"<br>";
+  if(weeklyDone.length) msg+="📊 Weekly summary auto-generated<br>";
+  if(fail.length) msg+="❌ Failed: "+fail.map(function(r){return r.label+" — "+r.msg}).join(", ");
+  showSt("pSt",msg,ok.length&&!fail.length?"ok":fail.length&&!ok.length?"er":"warn");
+  await loadIndex();
+  btn.disabled=false;btn.textContent="Push to All Users";
 }
 
-async function checkFresh() {
-  try {
-    // Read from the same GitHub raw URL users read from
-    var owner = ""; // Will be filled from API response or we just check /api
-    var resp = await fetch("/api/upload", { method: "OPTIONS" }); // just to check connectivity
-    document.getElementById("fresh").innerHTML = '<span style="color:var(--acc)">API connected</span> · Data check requires page reload after push';
-  } catch (e) {
-    document.getElementById("fresh").textContent = "Could not check";
+function loadCalendar(){
+  var uploaded=(indexData&&indexData.dates)?indexData.dates:[];
+  var today=new Date();
+  var todayISO=today.toISOString().split("T")[0];
+  var days=[];
+  for(var i=34;i>=0;i--){var d=new Date(today);d.setDate(today.getDate()-i);days.push(d);}
+  var h='<div class="cal-hdrs">';
+  ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].forEach(function(d){h+="<span>"+d+"</span>"});
+  h+='</div><div class="cal-grid">';
+  var firstDow=(days[0].getDay()+6)%7;
+  for(var p=0;p<firstDow;p++) h+='<div class="cd empty"></div>';
+  var uploadedCount=0,missingCount=0;
+  days.forEach(function(d){
+    var iso=d.toISOString().split("T")[0];
+    var dd=d.getDate();
+    var dow=d.getDay();
+    var isWeekend=dow===0||dow===6;
+    var isFuture=d>today;
+    var isUploaded=uploaded.indexOf(iso)>=0;
+    var isToday=iso===todayISO;
+    var cls="cd";
+    if(isWeekend)cls+=" weekend";
+    else if(isFuture)cls+=" future";
+    else if(isUploaded){cls+=" uploaded";uploadedCount++;}
+    else{cls+=" missing";missingCount++;}
+    if(isToday)cls+=" today";
+    h+='<div class="'+cls+'" title="'+iso+'">'+dd+'</div>';
+  });
+  h+='</div>';
+  document.getElementById("calGrid").innerHTML=h;
+  document.getElementById("calSummary").innerHTML=
+    '<span style="color:var(--acc)">✅ '+uploadedCount+' uploaded</span> · '+
+    '<span style="color:var(--red)">❌ '+missingCount+' missing</span>'+
+    (missingCount>0?'<br><span style="color:var(--org)">⚠️ Missing days reduce trend accuracy</span>':'');
+}
+
+function loadHistory(){
+  var list=document.getElementById("histList");
+  var ct=document.getElementById("histCount");
+  if(!indexData||!indexData.dates||!indexData.dates.length){
+    list.innerHTML='<div style="font-size:10px;color:var(--t3);padding:8px 0">No history yet. Upload FOVOLT files to begin.</div>';
+    ct.textContent="";
+    return;
+  }
+  var dates=indexData.dates.slice().reverse();
+  ct.textContent=dates.length+" days";
+  list.innerHTML=dates.map(function(d){
+    var isLatest=indexData.latestDate===d;
+    return'<div class="hrow">'+
+      '<span class="hdate">'+d+'</span>'+
+      (isLatest?'<span style="background:var(--accA);color:var(--acc);padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700">LATEST</span>':'')+
+      '<button class="hdel" onclick="prefillDelete(\''+d+'\')">Delete</button>'+
+    '</div>';
+  }).join("");
+}
+
+function prefillDelete(date){
+  document.getElementById("delDate").value=date;
+  document.getElementById("delDate").scrollIntoView({behavior:"smooth"});
+}
+
+async function doDelete(){
+  var date=document.getElementById("delDate").value.trim();
+  if(!date.match(/^\d{4}-\d{2}-\d{2}$/)){showSt("delSt","Enter date as YYYY-MM-DD","er");return;}
+  if(!confirm("Delete data for "+date+"?\n\nThis cannot be undone."))return;
+  showSt("delSt","<span class='spr'></span> Deleting "+date+"...","warn");
+  try{
+    var resp=await fetch("/api/upload",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({password:adminPw,action:"delete",deleteDate:date})
+    });
+    var result=await resp.json();
+    if(resp.ok&&result.success){
+      showSt("delSt","✅ Deleted "+date+" successfully.","ok");
+      document.getElementById("delDate").value="";
+      await loadIndex();
+      loadHistory();
+    } else {
+      showSt("delSt","❌ "+(result.error||"Delete failed"),"er");
+    }
+  }catch(e){showSt("delSt","❌ "+e.message,"er");}
+}
+
+async function loadStatus(){
+  var sc=document.getElementById("statusContent");
+  var st=document.getElementById("statsContent");
+  try{
+    var r=await fetch("/api/config");
+    var cfg=await r.json();
+    var dr=await fetch(cfg.dataUrl+"?t="+Date.now());
+    if(dr.ok){
+      var data=await dr.json();
+      var meta=data.meta||{};
+      var ago=meta.updatedAt?Math.round((Date.now()-new Date(meta.updatedAt).getTime())/3600000):null;
+      sc.innerHTML=
+        '<div style="display:flex;flex-direction:column;gap:6px">'+
+        '<div class="stat-row"><span style="color:var(--t3)">Latest date</span><b style="color:var(--acc)">'+(meta.latestDate||"—")+'</b></div>'+
+        '<div class="stat-row"><span style="color:var(--t3)">Stocks covered</span><b>'+(meta.stockCount||"—")+'</b></div>'+
+        '<div class="stat-row"><span style="color:var(--t3)">Last pushed</span><b>'+(ago!==null?(ago<1?"Just now":ago+"h ago"):"—")+'</b></div>'+
+        '<div class="stat-row"><span style="color:var(--t3)">Raw data</span><a href="'+cfg.dataUrl+'" target="_blank" style="color:var(--blu);font-size:9px">View JSON ↗</a></div>'+
+        '</div>';
+    } else {
+      sc.innerHTML='<div style="color:var(--red);font-size:10px">Could not fetch live data.</div>';
+    }
+  }catch(e){
+    sc.innerHTML='<div style="color:var(--red);font-size:10px">Error: '+e.message+'</div>';
+  }
+  if(indexData){
+    var total=(indexData.dates||[]).length;
+    var oldest=total?indexData.dates[0]:"—";
+    var newest=total?indexData.dates[total-1]:"—";
+    st.innerHTML=
+      '<div style="display:flex;flex-direction:column;gap:4px">'+
+      '<div class="stat-row"><span>Days uploaded</span><b style="color:var(--acc)">'+total+'</b></div>'+
+      '<div class="stat-row"><span>Oldest record</span><b>'+oldest+'</b></div>'+
+      '<div class="stat-row"><span>Latest record</span><b>'+newest+'</b></div>'+
+      '<div class="stat-row"><span>Total uploads</span><b>'+(indexData.totalUploads||total)+'</b></div>'+
+      '<div class="stat-row"><span>Trend accuracy</span><b style="color:'+(total>=20?"var(--acc)":total>=5?"var(--org)":"var(--red)")+'">'+(total>=20?"High (20+ days)":total>=5?"Medium (5+ days)":"Low — need 5+ days")+'</b></div>'+
+      '</div>';
+  } else {
+    st.innerHTML='<div style="color:var(--t3)">No history found. Upload data first.</div>';
   }
 }
 </script></body></html>
