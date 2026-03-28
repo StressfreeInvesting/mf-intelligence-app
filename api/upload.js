@@ -48,6 +48,12 @@ export default async function handler(req, res) {
 
     // Get existing file SHA (needed for GitHub update)
     let sha = null;
+    let sha = null;
+
+    // DEBUG — remove after fixing
+    console.log("OWNER:", GITHUB_OWNER);
+    console.log("REPO:", GITHUB_REPO);
+    console.log("TOKEN prefix:", GITHUB_TOKEN?.substring(0, 10));
     try {
       const existing = await fetch(
         `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${DATA_PATH}`,
