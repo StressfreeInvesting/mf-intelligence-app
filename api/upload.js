@@ -1,21 +1,23 @@
 // /api/upload.js — Vercel Serverless Function
-// Receives parsed F&O data from admin, pushes to GitHub
-// Token is in Vercel Environment Variables (never exposed to browser)
-
 export default async function handler(req, res) {
-  // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
-  // Environment variables (set in Vercel dashboard)
   const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
   const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
   const GITHUB_OWNER = process.env.GITHUB_OWNER;
   const GITHUB_REPO = process.env.GITHUB_REPO || "mf-intelligence-data";
   const DATA_PATH = "data/fno_signals.json";
+
+  // DEBUG LOGS
+  console.log("=== UPLOAD DEBUG ===");
+  console.log("OWNER:", GITHUB_OWNER);
+  console.log("REPO:", GITHUB_REPO);
+  console.log("TOKEN prefix:", GITHUB_TOKEN?.substring(0, 15));
+  console.log("PASSWORD set:", !!ADMIN_PASSWORD);
 
   if (!GITHUB_TOKEN || !GITHUB_OWNER || !ADMIN_PASSWORD) {
     return res.status(500).json({ error: "Server not configured. Set environment variables in Vercel." });
@@ -23,17 +25,13 @@ export default async function handler(req, res) {
 
   try {
     const body = req.body;
-
-    // Verify admin password
     if (body.password !== ADMIN_PASSWORD) {
       return res.status(401).json({ error: "Wrong password" });
     }
-
     if (!body.signals || typeof body.signals !== "object") {
       return res.status(400).json({ error: "No signal data provided" });
     }
 
-    // Prepare payload
     const payload = {
       signals: body.signals,
       meta: {
@@ -43,27 +41,25 @@ export default async function handler(req, res) {
         latestDate: body.latestDate || "Unknown"
       }
     };
-
     const content = Buffer.from(JSON.stringify(payload, null, 2)).toString("base64");
 
-    // Get existing file SHA (needed for GitHub update)
+    // Get existing file SHA
     let sha = null;
-    let sha = null;
-
-    // DEBUG — remove after fixing
-    console.log("OWNER:", GITHUB_OWNER);
-    console.log("REPO:", GITHUB_REPO);
-    console.log("TOKEN prefix:", GITHUB_TOKEN?.substring(0, 10));
     try {
-      const existing = await fetch(
-        `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${DATA_PATH}`,
-        { headers: { Authorization: `Bearer ${GITHUB_TOKEN}`, "User-Agent": "MF-Intelligence" } }
-      );
+      const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${DATA_PATH}`;
+      console.log("GET URL:", url);
+      const existing = await fetch(url, {
+        headers: { Authorization: `Bearer ${GITHUB_TOKEN}`, "User-Agent": "MF-Intelligence" }
+      });
+      console.log("GET status:", existing.status);
       if (existing.ok) {
         const ej = await existing.json();
         sha = ej.sha;
+        console.log("Existing SHA found:", sha?.substring(0, 10));
       }
-    } catch (e) { /* file doesn't exist yet, that's fine */ }
+    } catch (e) {
+      console.log("GET error (ok if first upload):", e.message);
+    }
 
     // Push to GitHub
     const ghBody = {
@@ -72,18 +68,19 @@ export default async function handler(req, res) {
     };
     if (sha) ghBody.sha = sha;
 
-    const ghResp = await fetch(
-      `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${DATA_PATH}`,
-      {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${GITHUB_TOKEN}`,
-          "Content-Type": "application/json",
-          "User-Agent": "MF-Intelligence"
-        },
-        body: JSON.stringify(ghBody)
-      }
-    );
+    const putUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${DATA_PATH}`;
+    console.log("PUT URL:", putUrl);
+    const ghResp = await fetch(putUrl, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${GITHUB_TOKEN}`,
+        "Content-Type": "application/json",
+        "User-Agent": "MF-Intelligence"
+      },
+      body: JSON.stringify(ghBody)
+    });
+
+    console.log("PUT status:", ghResp.status);
 
     if (ghResp.ok) {
       return res.status(200).json({
@@ -93,9 +90,11 @@ export default async function handler(req, res) {
       });
     } else {
       const err = await ghResp.json();
+      console.log("PUT error:", JSON.stringify(err));
       return res.status(500).json({ error: "GitHub error: " + (err.message || ghResp.status) });
     }
   } catch (e) {
+    console.log("CATCH error:", e.message);
     return res.status(500).json({ error: e.message });
   }
 }
