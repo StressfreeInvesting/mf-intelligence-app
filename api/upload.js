@@ -227,6 +227,27 @@ export default async function handler(req, res) {
     if (body.password !== ADMIN_PASSWORD) {
       return res.status(401).json({ error: "Wrong password" });
     }
+
+    // ── DELETE action ──
+    if (body.action === "delete") {
+      const dateToDelete = body.deleteDate;
+      if (!dateToDelete || !dateToDelete.match(/^\d{4}-\d{2}-\d{2}$/)) {
+        return res.status(400).json({ error: "Invalid date format. Use YYYY-MM-DD." });
+      }
+      const histPath = `data/history/${dateToDelete}.json`;
+      const sha = await getSha(GITHUB_OWNER, GITHUB_REPO, histPath, GITHUB_TOKEN);
+      if (!sha) {
+        return res.status(404).json({ error: `No data found for ${dateToDelete}` });
+      }
+      await ghDelete(GITHUB_OWNER, GITHUB_REPO, histPath, GITHUB_TOKEN, sha, `Delete history: ${dateToDelete}`);
+      // Update index
+      let index = await readJson(GITHUB_OWNER, GITHUB_REPO, "data/index.json", GITHUB_TOKEN) || { dates: [] };
+      index.dates = (index.dates || []).filter(d => d !== dateToDelete);
+      index.lastUpdated = new Date().toISOString();
+      await saveJson(GITHUB_OWNER, GITHUB_REPO, "data/index.json", GITHUB_TOKEN, index, `Remove ${dateToDelete} from index`);
+      return res.status(200).json({ success: true, deleted: dateToDelete });
+    }
+
     if (!body.signals || typeof body.signals !== "object") {
       return res.status(400).json({ error: "No signal data provided" });
     }
