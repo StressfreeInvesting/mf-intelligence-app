@@ -177,7 +177,11 @@ async function doPush() {
       })
     });
 
-    var result = await resp.json();
+    //var result = await resp.json();
+    console.log("after admin click qwerty");
+    var rawText = await resp.text();
+console.log("Raw server response:", rawText);
+var result = JSON.parse(rawText);
     if (resp.ok && result.success) {
       showSt("pSt", "\u2705 Pushed " + result.stockCount + " stocks (" + result.date + ") — all users will see this!", "ok");
       checkFresh();
