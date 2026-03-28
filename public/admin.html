@@ -1,0 +1,203 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>MF Intelligence — Admin</title>
+<style>
+:root{--bg:#060A10;--s1:#0C1018;--s2:#141C28;--bdr:#1C2840;--acc:#00E599;--accA:rgba(0,229,153,.12);--red:#FF4D6A;--t1:#EDF2F7;--t2:#8B9AB4;--t3:#4F6180}
+*{box-sizing:border-box;margin:0;padding:0}body{background:var(--bg);font-family:'Segoe UI',system-ui,sans-serif;color:var(--t1);min-height:100vh;display:flex;justify-content:center;padding:16px}
+.wrap{max-width:460px;width:100%}
+h1{font-size:18px;font-weight:800}h1 b{color:var(--acc)}
+.sub{font-size:11px;color:var(--t3);margin-bottom:16px}
+.card{background:var(--s1);border:1px solid var(--bdr);border-radius:10px;padding:14px;margin-bottom:10px}
+label{font-size:10px;color:var(--t2);font-weight:600;display:block;margin-bottom:4px}
+input[type=password]{width:100%;padding:9px 10px;background:var(--s2);border:1px solid var(--bdr);border-radius:7px;color:var(--t1);font-size:12px;outline:none;margin-bottom:10px}input:focus{border-color:var(--acc)}
+.upbox{border:2px dashed var(--bdr);border-radius:10px;padding:18px;text-align:center;cursor:pointer;transition:all .2s;margin-bottom:10px}
+.upbox:hover,.upbox.over{border-color:var(--acc);background:var(--accA)}
+.upbox.loaded{border-color:var(--acc);border-style:solid;background:var(--accA)}
+.upbox h3{font-size:13px;color:var(--t2);margin-bottom:3px}.upbox p{font-size:9px;color:var(--t3)}
+.btn{width:100%;padding:11px;border:none;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer}
+.btn:active{transform:scale(.97)}
+.btn-go{background:var(--acc);color:var(--bg)}.btn-go:disabled{opacity:.35;cursor:not-allowed}
+.st{padding:8px;border-radius:7px;font-size:10px;margin-top:8px;display:none}
+.st.ok{display:block;background:var(--accA);color:var(--acc)}
+.st.er{display:block;background:rgba(255,77,106,.1);color:var(--red)}
+.fl{display:flex;justify-content:space-between;padding:5px 7px;background:var(--s2);border-radius:5px;margin-bottom:3px;font-size:9px}
+#loginView,#adminView{display:none}
+</style></head><body>
+<div class="wrap">
+<h1><b>◇</b> MF Intelligence Admin</h1>
+<div class="sub">Upload FOVOLT → auto-pushed to all users via secure API</div>
+
+<div id="loginView" style="display:block">
+<div class="card">
+<label>Admin Password</label>
+<input type="password" id="pw" placeholder="Enter admin password" onkeydown="if(event.key==='Enter')doLogin()">
+<button class="btn btn-go" onclick="doLogin()">Login</button>
+<div class="st" id="lSt"></div>
+</div>
+</div>
+
+<div id="adminView">
+<div class="card">
+<label>Upload FOVOLT CSV Files (select 1 or more days)</label>
+<div class="upbox" id="dz" onclick="document.getElementById('fi').click()">
+<input type="file" id="fi" accept=".csv" multiple style="display:none" onchange="handleFiles(this.files)">
+<h3 id="dl">📂 Drop FOVOLT CSV files here</h3>
+<p>Or click to browse · Dates auto-detected from filename</p>
+</div>
+<div id="fList"></div>
+<button class="btn btn-go" id="pushBtn" onclick="doPush()" disabled>Push to All Users</button>
+<div class="st" id="pSt"></div>
+</div>
+
+<div class="card">
+<label>Current Data Status</label>
+<div id="fresh" style="font-size:10px;color:var(--t2)">Checking...</div>
+</div>
+
+<div class="card" style="font-size:9px;color:var(--t3);line-height:1.6">
+<b style="color:var(--t2)">How it works:</b><br>
+1. You upload FOVOLT CSV here<br>
+2. Data is parsed in your browser (nothing leaves until you push)<br>
+3. Click "Push" → sends to secure Vercel API → stored on GitHub<br>
+4. Users' app auto-fetches from GitHub on page load<br>
+<br>
+<b style="color:var(--t2)">Security:</b> GitHub token is stored as Vercel environment variable. It never appears in browser code. Admin password is verified server-side.
+</div>
+</div>
+</div>
+
+<script>
+var adminPw = "";
+var parsedFiles = [];
+
+function doLogin() {
+  adminPw = document.getElementById("pw").value;
+  if (!adminPw || adminPw.length < 4) { showSt("lSt","Enter a valid password","er"); return; }
+  // We don't verify locally — the API will reject wrong passwords
+  document.getElementById("loginView").style.display = "none";
+  document.getElementById("adminView").style.display = "block";
+  checkFresh();
+}
+
+function showSt(id, msg, type) {
+  var el = document.getElementById(id);
+  el.textContent = msg; el.className = "st " + type;
+}
+
+// Parse FOVOLT
+function parseFOVOLT(csv) {
+  var lines = csv.trim().split("\n"), r = {};
+  for (var i = 1; i < lines.length; i++) {
+    var c = lines[i].split(","); if (c.length < 16) continue;
+    var sym = c[1].trim(), cl = parseFloat(c[2]), pr = parseFloat(c[3]);
+    var fc = parseFloat(c[8]), fp = parseFloat(c[9]), vol = parseFloat(c[15]) * 100;
+    if (isNaN(cl) || isNaN(pr) || pr === 0) continue;
+    r[sym] = { cl: cl, pr: pr, fc: fc, fp: fp, vol: vol };
+  }
+  return r;
+}
+
+function parseDateFromName(name) {
+  var m = name.match(/(\d{2})(\d{2})(\d{4})/);
+  if (!m) return null;
+  var months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return { ts: new Date(parseInt(m[3]), parseInt(m[2])-1, parseInt(m[1])).getTime(),
+    label: m[1] + "-" + months[parseInt(m[2])-1] + "-" + m[3] };
+}
+
+function computeSignals(files) {
+  files.sort(function(a,b) { return a.ts - b.ts; });
+  var latest = files[files.length-1], prev = files.length >= 2 ? files[files.length-2] : null;
+  var nd = latest.d, n1d = prev ? prev.d : null, signals = {};
+  Object.keys(nd).forEach(function(sym) {
+    var d = nd[sym], d1 = ((d.cl-d.pr)/d.pr)*100;
+    var prem = d.fc ? ((d.fc-d.cl)/d.cl)*100 : 0;
+    var d2 = d1;
+    if (n1d && n1d[sym]) d2 = ((d.cl - n1d[sym].pr) / n1d[sym].pr) * 100;
+    var sc = Math.round((d2*0.30 + d1*0.20 + prem*50 - (d.vol>35?(d.vol-35)*0.02:0))*100)/100;
+    sc = Math.max(-5, Math.min(5, sc));
+    var lb = sc>=2?"Strong Bullish":sc>=1?"Bullish":sc>=0.3?"Mild Bullish":sc<=-2?"Strong Bearish":sc<=-1?"Bearish":sc<=-0.3?"Mild Bearish":"Neutral";
+    signals[sym] = { score:sc, label:lb, cl:d.cl, pr:d.pr, d1:d1.toFixed(2), d2:d2.toFixed(2), prem:prem.toFixed(3), vol:d.vol.toFixed(1) };
+  });
+  return signals;
+}
+
+function handleFiles(fileList) {
+  parsedFiles = [];
+  var total = fileList.length, done = 0;
+  Array.from(fileList).forEach(function(file) {
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      var data = parseFOVOLT(e.target.result);
+      var di = parseDateFromName(file.name);
+      if (Object.keys(data).length > 0) {
+        parsedFiles.push({ d: data, label: di ? di.label : file.name, ts: di ? di.ts : Date.now(), stocks: Object.keys(data).length });
+      }
+      done++;
+      if (done === total) {
+        var h = "";
+        parsedFiles.sort(function(a,b){return a.ts-b.ts}).forEach(function(f) {
+          h += '<div class="fl"><span style="color:var(--t1);font-weight:600">FOVOLT '+f.label+'</span><span style="color:var(--acc)">'+f.stocks+' stocks</span></div>';
+        });
+        document.getElementById("fList").innerHTML = h;
+        document.getElementById("pushBtn").disabled = !parsedFiles.length;
+        document.getElementById("dz").className = "upbox" + (parsedFiles.length ? " loaded" : "");
+        document.getElementById("dl").textContent = parsedFiles.length ? "\u2705 " + parsedFiles.length + " file(s) ready" : "\U0001f4c2 Drop FOVOLT CSV files here";
+      }
+    };
+    reader.readAsText(file);
+  });
+}
+
+// Drag & drop
+var dz = document.getElementById("dz");
+dz.addEventListener("dragover", function(e) { e.preventDefault(); dz.classList.add("over"); });
+dz.addEventListener("dragleave", function() { dz.classList.remove("over"); });
+dz.addEventListener("drop", function(e) { e.preventDefault(); dz.classList.remove("over"); handleFiles(e.dataTransfer.files); });
+
+// Push via secure API
+async function doPush() {
+  if (!parsedFiles.length) return;
+  var btn = document.getElementById("pushBtn");
+  btn.disabled = true; btn.textContent = "Pushing...";
+
+  try {
+    var signals = computeSignals(parsedFiles);
+    var fileLabels = parsedFiles.map(function(f) { return f.label; });
+    var latestDate = parsedFiles[parsedFiles.length-1].label;
+
+    var resp = await fetch("/api/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        password: adminPw,
+        signals: signals,
+        files: fileLabels,
+        latestDate: latestDate
+      })
+    });
+
+    var result = await resp.json();
+    if (resp.ok && result.success) {
+      showSt("pSt", "\u2705 Pushed " + result.stockCount + " stocks (" + result.date + ") — all users will see this!", "ok");
+      checkFresh();
+    } else {
+      showSt("pSt", "\u274c " + (result.error || "Unknown error"), "er");
+    }
+  } catch (e) {
+    showSt("pSt", "\u274c " + e.message, "er");
+  }
+  btn.disabled = false; btn.textContent = "Push to All Users";
+}
+
+async function checkFresh() {
+  try {
+    // Read from the same GitHub raw URL users read from
+    var owner = ""; // Will be filled from API response or we just check /api
+    var resp = await fetch("/api/upload", { method: "OPTIONS" }); // just to check connectivity
+    document.getElementById("fresh").innerHTML = '<span style="color:var(--acc)">API connected</span> · Data check requires page reload after push';
+  } catch (e) {
+    document.getElementById("fresh").textContent = "Could not check";
+  }
+}
+</script></body></html>
