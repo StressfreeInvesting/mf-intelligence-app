@@ -1,5 +1,10 @@
 {
   "outputDirectory": "public",
+  "functions": {
+    "api/*.js": {
+      "runtime": "@vercel/node@3"
+    }
+  },
   "rewrites": [
     {
       "source": "/api/:path*",
