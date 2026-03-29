@@ -49,13 +49,71 @@ button{cursor:pointer;font-family:inherit}
 #app{display:flex;flex-direction:column;min-height:100vh}
 
 /* ── HEADER ── */
-.header{display:flex;align-items:center;gap:0;padding:0 16px;background:var(--header-bg);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100;min-height:46px}
-.logo{font-family:'Syne',sans-serif;font-weight:800;font-size:1.15rem;letter-spacing:-.02em;color:var(--text);white-space:nowrap;padding:10px 0}
+.header{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:0;
+  padding:0 16px;
+  background:var(--header-bg);
+  border-bottom:1px solid var(--border);
+  position:sticky;
+  top:0;
+  z-index:100;
+  min-height:46px;
+}
+.logo{
+  font-family:'Syne',sans-serif;
+  font-weight:800;
+  font-size:1.15rem;
+  letter-spacing:-.02em;
+  color:var(--text);
+  white-space:nowrap;
+  padding:10px 0;
+}
 .logo span{color:var(--accent)}
 .header-divider{width:1px;height:22px;background:var(--border);margin:0 14px;flex-shrink:0}
 .header-controls{display:flex;align-items:center;gap:5px;flex:1;flex-wrap:wrap;row-gap:4px}
 .header-right{display:flex;align-items:center;gap:8px;margin-left:auto;padding-left:10px}
 .ctrl-label{font-size:.6rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.07em;margin-right:2px}
+
+/* ── MOBILE HEADER LAYOUT ── */
+@media(max-width:599px){
+  .header{
+    flex-direction:column;
+    align-items:flex-start;
+    padding:8px 16px;
+    gap:0;
+  }
+  /* Top row: logo + live indicator */
+  .header-top-row{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    width:100%;
+    padding:4px 0;
+  }
+  /* Bottom row: controls */
+  .header-bottom-row{
+    display:flex;
+    align-items:center;
+    flex-wrap:wrap;
+    gap:5px;
+    row-gap:4px;
+    width:100%;
+    padding:6px 0 4px;
+    border-top:1px solid var(--border);
+    margin-top:4px;
+  }
+  .header-divider{display:none}
+  .header-right{margin-left:0;padding-left:0;}
+}
+
+/* Desktop: keep original single-row layout */
+@media(min-width:600px){
+  .header-top-row,.header-bottom-row{display:contents}
+  .header-divider{display:block}
+}
 
 /* ── THEME / FONT BUTTONS ── */
 .theme-btn{padding:3px 9px;border-radius:20px;border:1px solid var(--border);background:transparent;color:var(--text-muted);font-size:.7rem;font-weight:600;transition:all .15s;white-space:nowrap}
@@ -278,23 +336,32 @@ button{cursor:pointer;font-family:inherit}
 
   <!-- HEADER -->
   <header class="header">
-    <div class="logo">MF<span>Intelligence</span></div>
-    <div class="header-divider"></div>
-    <div class="header-controls">
-      <span class="ctrl-label">Theme</span>
-      <button class="theme-btn active" data-theme="void">Void</button>
-      <button class="theme-btn" data-theme="slate">Slate</button>
-      <button class="theme-btn" data-theme="dusk">Dusk</button>
-      <span class="sep">|</span>
-      <button class="fs-btn" data-fs="11">S</button>
-      <button class="fs-btn active" data-fs="13">M</button>
-      <button class="fs-btn" data-fs="15">L</button>
-      <button class="fs-btn" data-fs="17">XL</button>
+    <!-- Top row: logo + live badge (always visible as first row on mobile) -->
+    <div class="header-top-row">
+      <div class="logo">MF<span>Intelligence</span></div>
+      <div class="header-right">
+        <span class="live-dot"></span>
+        <span id="quotesAge" class="quotes-age"></span>
+        <span style="font-size:.65rem;color:var(--text-muted);font-family:'Space Mono',monospace">V8</span>
+      </div>
     </div>
-    <div class="header-right">
-      <span class="live-dot"></span>
-      <span id="quotesAge" class="quotes-age"></span>
-      <span style="font-size:.65rem;color:var(--text-muted);font-family:'Space Mono',monospace">V8</span>
+
+    <!-- Desktop-only divider (hidden on mobile via CSS) -->
+    <div class="header-divider"></div>
+
+    <!-- Bottom row on mobile / inline on desktop: theme + font controls -->
+    <div class="header-bottom-row">
+      <div class="header-controls">
+        <span class="ctrl-label">Theme</span>
+        <button class="theme-btn active" data-theme="void">Void</button>
+        <button class="theme-btn" data-theme="slate">Slate</button>
+        <button class="theme-btn" data-theme="dusk">Dusk</button>
+        <span class="sep">|</span>
+        <button class="fs-btn" data-fs="11">S</button>
+        <button class="fs-btn active" data-fs="13">M</button>
+        <button class="fs-btn" data-fs="15">L</button>
+        <button class="fs-btn" data-fs="17">XL</button>
+      </div>
     </div>
   </header>
 
@@ -555,12 +622,10 @@ function computeMFPicks(mfData){
 ═══════════════════════════════════════════ */
 function computeProbScore(stock,mfPick,foSignal,trend){
   const bd={};let total=0;
-  // Factor 1: Confluence (0-25)
   const hasMF=mfPick&&mfPick.ms>=2.0,hasFO=foSignal&&foSignal.score>=1.5,hasTrend=trend&&trend.positionalStrength==="Strong";
   const sources=(hasMF?1:0)+(hasFO?1:0)+(hasTrend?1:0);
   const f1=sources>=3?25:sources===2?17:8;
   bd.confluence={score:f1,max:25,sources,hasMF,hasFO,hasTrend};total+=f1;
-  // Factor 2: Momentum Quality (0-25)
   let f2=0;
   if(foSignal){
     f2=Math.min(22,Math.max(0,foSignal.score*2.5));
@@ -569,7 +634,6 @@ function computeProbScore(stock,mfPick,foSignal,trend){
     if(foSignal.score>1&&d1<-1)f2=Math.max(0,f2-5);
   }
   f2=Math.round(f2);bd.momentum={score:f2,max:25,foScore:foSignal?.score||0};total+=f2;
-  // Factor 3: Trend Consistency (0-25)
   let f3=0;
   if(trend&&trend.daysTracked>=3){
     const c=trend.consistencyPct;
@@ -578,7 +642,6 @@ function computeProbScore(stock,mfPick,foSignal,trend){
     if(trend.momentum==="declining")f3=Math.max(0,f3-4);
   }else if(trend&&trend.daysTracked>=1)f3=5;
   f3=Math.round(f3);bd.consistency={score:f3,max:25,consistencyPct:trend?.consistencyPct||0,daysTracked:trend?.daysTracked||0,momentum:trend?.momentum||"unknown"};total+=f3;
-  // Factor 4: Entry Timing (0-25)
   let f4=15;
   if(foSignal){
     const d1=parseFloat(foSignal.d1)||0;
@@ -591,7 +654,7 @@ function computeProbScore(stock,mfPick,foSignal,trend){
 }
 
 /* ═══════════════════════════════════════════
-   HELPERS — badges, chips, price
+   HELPERS
 ═══════════════════════════════════════════ */
 function confluenceBadge(sources){
   if(sources>=3)return`<span class="badge badge-green glow">⚡⚡ Triple Lock</span>`;
@@ -618,7 +681,7 @@ function livePriceChip(nameOrSym,compact=false){
 }
 
 /* ═══════════════════════════════════════════
-   HOME — fund cards
+   HOME
 ═══════════════════════════════════════════ */
 function renderHome(){
   const mfData=computeMFData();
@@ -806,7 +869,6 @@ function runAutoPilot(){
   const recentExit=new Set(closedAuto.filter(t=>{const d=Math.round((Date.now()-new Date(t.closeDate||t.date).getTime())/86400000);return d<AUTO_COOL*1.4;}).map(t=>t.sym));
   const secCount={};
   openAuto.forEach(t=>{secCount[t.sector]=(secCount[t.sector]||0)+1;});
-  // Auto-close
   openAuto.forEach(t=>{
     const fo=signals[t.sym],cmp=fo?.cl||null;
     if(!cmp)return;
@@ -1061,7 +1123,6 @@ function updateFreshness(){
   const histCount=STATE.foData.historyCount||STATE.foData.daysAvailable||0;
   const tLabel=document.getElementById('trendsLabel'),tDot=document.getElementById('trendsDot');
   if(tLabel&&tDot){if(histCount>=3){tLabel.textContent=histCount+'d';tDot.className='fresh-dot fresh-green';}else if(histCount>=1){tLabel.textContent=histCount+'d';tDot.className='fresh-dot fresh-amber';}else{tLabel.textContent='No data';tDot.className='fresh-dot fresh-red';}}
-  // Stale banner
   let banner=document.getElementById('staleBanner');
   if(!banner){banner=document.createElement('div');banner.id='staleBanner';banner.style.cssText='padding:6px 16px;font-size:.75rem;font-weight:600;text-align:center;transition:background .3s;';const strip=document.querySelector('.freshness-strip');if(strip)strip.after(banner);}
   const dateLabel=date?new Date(date).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'2-digit'}):'—';
@@ -1088,13 +1149,11 @@ async function fetchNifty(){
 
 async function fetchFOData(){
   try{
-    // First try the config endpoint to get the GitHub raw URL
     const cfg=await fetch('/api/config').then(r=>r.json()).catch(()=>null);
     if(cfg?.dataUrl){
       const r=await fetch(cfg.dataUrl+'?t='+Date.now());
       if(r.ok){STATE.foData=await r.json();updateFreshness();renderSignals();renderHeld();return;}
     }
-    // Fallback: history endpoint
     const r=await fetch('/api/history?type=trends&days=5');
     if(r.ok)STATE.trendsData=await r.json();
     updateFreshness();renderSignals();renderHeld();
