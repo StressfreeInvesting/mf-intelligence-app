@@ -22,7 +22,6 @@ async function readJson(owner, repo, path, token) {
 }
 
 // Compute consistency score for each stock across N days
-// Returns: { SYMBOL: { consistencyPct, avgScore, trend, daysTracked, scores } }
 function computeTrends(dailyDataArr) {
   const stockMap = {};
 
@@ -45,7 +44,6 @@ function computeTrends(dailyDataArr) {
     const bearishDays = scores.filter(s => s < -0.3).length;
     const consistencyPct = Math.round((bullishDays / n) * 100);
 
-    // Momentum direction: is score improving or declining?
     const firstHalf = scores.slice(0, Math.floor(n / 2));
     const secondHalf = scores.slice(Math.floor(n / 2));
     const firstAvg = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length;
@@ -54,7 +52,6 @@ function computeTrends(dailyDataArr) {
       : secondAvg - firstAvg < -0.2 ? "declining"
       : "stable";
 
-    // Positional strength: consistent + improving = strong candidate
     const positionalStrength = consistencyPct >= 70 && momentum === "improving" ? "Strong"
       : consistencyPct >= 60 ? "Moderate"
       : consistencyPct >= 40 ? "Weak"
@@ -96,6 +93,25 @@ export default async function handler(req, res) {
 
   try {
 
+    // ── 0. GET LATEST — returns fno_signals.json + history count ──
+    // Called by V8 index.html as: fetch('/api/history?latest=1')
+    if (req.query.latest === '1' || req.query.latest === 'true') {
+      const [latest, index] = await Promise.all([
+        readJson(GITHUB_OWNER, GITHUB_REPO, "data/fno_signals.json", GITHUB_TOKEN),
+        readJson(GITHUB_OWNER, GITHUB_REPO, "data/index.json", GITHUB_TOKEN)
+      ]);
+      if (!latest) {
+        return res.status(404).json({ error: "No F&O data yet. Upload via admin." });
+      }
+      const historyCount = (index?.dates?.length) || 0;
+      return res.status(200).json({
+        ...latest,
+        historyCount,
+        date: latest.meta?.date || null,
+        uploadDate: latest.meta?.date || null
+      });
+    }
+
     // ── 1. GET INDEX — list of all available dates ──
     if (type === "index" || !type) {
       const index = await readJson(GITHUB_OWNER, GITHUB_REPO, "data/index.json", GITHUB_TOKEN);
@@ -115,7 +131,6 @@ export default async function handler(req, res) {
     if (type === "trends") {
       const nDays = Math.min(30, Math.max(2, parseInt(days) || 5));
 
-      // Load index to get available dates
       const index = await readJson(GITHUB_OWNER, GITHUB_REPO, "data/index.json", GITHUB_TOKEN);
       if (!index || !index.dates || index.dates.length < 2) {
         return res.status(200).json({
@@ -126,10 +141,8 @@ export default async function handler(req, res) {
         });
       }
 
-      // Take last N dates
       const recentDates = index.dates.slice(-nDays);
 
-      // Fetch each day's data in parallel
       const dailyDataArr = await Promise.all(
         recentDates.map(async d => {
           const data = await readJson(GITHUB_OWNER, GITHUB_REPO, `data/history/${d}.json`, GITHUB_TOKEN);
@@ -140,11 +153,9 @@ export default async function handler(req, res) {
       const validDays = dailyDataArr.filter(d => d.signals !== null);
       const trends = computeTrends(validDays);
 
-      // Top 10 bullish by consistency + latest score
       const top10Bullish = Object.entries(trends)
         .filter(([, t]) => t.latestScore > 0.3 && t.daysTracked >= 2)
         .sort(([, a], [, b]) => {
-          // Sort by: consistency first, then latest score
           const aRank = a.consistencyPct * 0.6 + a.latestScore * 8;
           const bRank = b.consistencyPct * 0.6 + b.latestScore * 8;
           return bRank - aRank;
@@ -152,7 +163,6 @@ export default async function handler(req, res) {
         .slice(0, 10)
         .map(([sym, t]) => ({ sym, ...t }));
 
-      // Top 5 bearish
       const top5Bearish = Object.entries(trends)
         .filter(([, t]) => t.latestScore < -0.3 && t.daysTracked >= 2)
         .sort(([, a], [, b]) => a.latestScore - b.latestScore)
@@ -172,7 +182,7 @@ export default async function handler(req, res) {
 
     // ── 4. GET WEEKLY ──
     if (type === "weekly") {
-      const weekLabel = date; // e.g. "2026-W13"
+      const weekLabel = date;
       if (!weekLabel) return res.status(400).json({ error: "date param required (YYYY-WNN)" });
       const data = await readJson(GITHUB_OWNER, GITHUB_REPO, `data/weekly/${weekLabel}.json`, GITHUB_TOKEN);
       if (!data) return res.status(404).json({ error: `No weekly data for ${weekLabel}` });
