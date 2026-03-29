@@ -49,141 +49,312 @@ input:focus{border-color:var(--acc)}
 .stat-row{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--bdr);font-size:10px}
 .stat-row:last-child{border-bottom:none}
 @keyframes spin{to{transform:rotate(360deg)}}
+@keyframes dhPulse{0%,100%{opacity:1}50%{opacity:.3}}
 .spr{display:inline-block;width:9px;height:9px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:4px}
 #loginView,#adminView{display:none}
+
+/* ── DATA HEALTH PANEL ── */
+.dh-panel{background:var(--s1);border:1px solid var(--bdr);border-radius:10px;padding:14px;margin-bottom:10px}
+.dh-title{font-size:11px;font-weight:800;color:var(--t2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;display:flex;align-items:center;gap:6px}
+.dh-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+.dh-cell{background:var(--s2);border-radius:7px;padding:9px 10px;border:1px solid var(--bdr)}
+.dh-label{font-size:7px;color:var(--t3);font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px}
+.dh-val{font-size:15px;font-weight:800;font-family:'Fira Code',monospace;line-height:1}
+.dh-sub{font-size:7px;color:var(--t3);margin-top:3px}
+.dh-strip{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-radius:7px;margin-bottom:8px;font-size:9px;font-weight:600}
+.dh-strip.ok{background:rgba(0,229,153,.08);border:1px solid rgba(0,229,153,.15);color:var(--acc)}
+.dh-strip.warn{background:var(--orgA);border:1px solid rgba(255,159,67,.15);color:var(--org)}
+.dh-strip.err{background:var(--redA);border:1px solid rgba(255,77,106,.15);color:var(--red)}
+.dh-dot{width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:4px}
+.dh-dot.g{background:var(--acc);animation:dhPulse 2s infinite}
+.dh-dot.a{background:var(--org)}
+.dh-dot.r{background:var(--red)}
+.dh-dates{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;max-height:80px;overflow-y:auto}
+.dh-date-chip{font-size:7px;font-family:monospace;font-weight:600;padding:2px 6px;border-radius:4px}
+.dh-date-chip.latest{background:rgba(0,229,153,.15);color:var(--acc);border:1px solid rgba(0,229,153,.2)}
+.dh-date-chip.old{background:var(--s2);color:var(--t3);border:1px solid var(--bdr)}
+.dh-missing-alert{margin-top:6px;padding:7px 10px;border-radius:6px;background:var(--redA);border:1px solid rgba(255,77,106,.15);font-size:8px;color:var(--red);line-height:1.6}
 </style></head><body>
 <div class="wrap">
 <h1><b>◇</b> MF Intelligence</h1>
 <div class="sub">Admin Panel · Upload FOVOLT · Manage History · Monitor Quality</div>
 
+<!-- LOGIN -->
 <div id="loginView" style="display:block">
-<div class="card">
-  <label>Admin Password</label>
-  <input type="password" id="pw" placeholder="Enter admin password" onkeydown="if(event.key==='Enter')doLogin()">
-  <button class="btn btn-go" onclick="doLogin()">Login</button>
-  <div class="st" id="lSt"></div>
-</div>
+  <div class="card">
+    <label>Admin Password</label>
+    <input type="password" id="pw" placeholder="Enter admin password" onkeydown="if(event.key==='Enter')doLogin()">
+    <button class="btn btn-go" onclick="doLogin()">Login</button>
+    <div class="st" id="lSt"></div>
+  </div>
 </div>
 
+<!-- ADMIN VIEW -->
 <div id="adminView">
-<div class="tabs">
-  <button class="tab a" id="tab-upload" onclick="switchTab('upload')">📤 Upload</button>
-  <button class="tab" id="tab-calendar" onclick="switchTab('calendar')">📅 Calendar</button>
-  <button class="tab" id="tab-history" onclick="switchTab('history')">🗂 History</button>
-  <button class="tab" id="tab-status" onclick="switchTab('status')">📊 Status</button>
-</div>
 
-<!-- UPLOAD -->
-<div id="pane-upload">
-  <div class="card">
-    <div class="ctitle">Upload FOVOLT CSV Files</div>
-    <div class="upbox" id="dz" onclick="document.getElementById('fi').click()">
-      <input type="file" id="fi" accept=".csv" multiple style="display:none" onchange="handleFiles(this.files)">
-      <h3 id="dl">📂 Drop FOVOLT CSV files here</h3>
-      <p>Click to browse · Multiple files OK · Dates auto-detected from filename</p>
+  <!-- ── DATA HEALTH PANEL (appears right after login) ── -->
+  <div class="dh-panel" id="dhPanel">
+    <div class="dh-title">
+      <span>📡</span> F&amp;O Data Health
+      <button onclick="refreshDH()" style="margin-left:auto;background:none;border:1px solid var(--bdr);color:var(--t3);font-size:7px;padding:2px 7px;border-radius:4px;cursor:pointer">↻ Refresh</button>
     </div>
-    <div id="fList"></div>
-    <div id="valPanel" style="display:none;margin-top:8px" class="card">
-      <div class="ctitle">✅ Pre-Upload Validation</div>
-      <div id="valChecks"></div>
+    <div class="dh-strip" id="dhStrip">
+      <span><span class="dh-dot a" id="dhDot"></span><span id="dhStatus">Checking…</span></span>
+      <span id="dhAge" style="font-size:8px;font-family:monospace"></span>
     </div>
-    <button class="btn btn-go" id="pushBtn" onclick="doPush()" disabled style="margin-top:8px">Push to All Users</button>
-    <div class="st" id="pSt"></div>
+    <div class="dh-grid">
+      <div class="dh-cell">
+        <div class="dh-label">Latest Upload</div>
+        <div class="dh-val" id="dhLatestDate" style="font-size:11px">—</div>
+        <div class="dh-sub" id="dhLatestTime"></div>
+      </div>
+      <div class="dh-cell">
+        <div class="dh-label">Stocks in Latest</div>
+        <div class="dh-val" id="dhStockCount" style="color:var(--acc)">—</div>
+        <div class="dh-sub">Expected 150–250</div>
+      </div>
+      <div class="dh-cell">
+        <div class="dh-label">History Days</div>
+        <div class="dh-val" id="dhHistCount" style="color:var(--blu)">—</div>
+        <div class="dh-sub" id="dhHistRange"></div>
+      </div>
+      <div class="dh-cell">
+        <div class="dh-label">Upload Streak</div>
+        <div class="dh-val" id="dhStreak" style="color:var(--org)">—</div>
+        <div class="dh-sub">consecutive trading days</div>
+      </div>
+    </div>
+    <div class="dh-missing-alert" id="dhMissingAlert" style="display:none"></div>
+    <div style="font-size:7px;color:var(--t3);font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-top:8px;margin-bottom:4px">Available History</div>
+    <div class="dh-dates" id="dhDates"></div>
   </div>
-  <div class="card" style="font-size:9px;color:var(--t3);line-height:1.7">
-    <b style="color:var(--t2)">How it works:</b><br>
-    1. Drop FOVOLT CSV → parsed in browser<br>
-    2. Validation runs automatically<br>
-    3. Push → Vercel API → saved as latest + daily history on GitHub<br>
-    4. Users see updated data on next app load<br><br>
-    <b style="color:var(--t2)">Security:</b> Token lives in Vercel env vars. Never in browser code.
-  </div>
-</div>
 
-<!-- CALENDAR -->
-<div id="pane-calendar" style="display:none">
-  <div class="card">
-    <div class="ctitle">Upload Calendar — Last 35 Days</div>
-    <div style="display:flex;gap:10px;margin-bottom:8px;font-size:9px">
-      <span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--accA);border:1px solid rgba(0,229,153,.3);vertical-align:middle"></span> Uploaded</span>
-      <span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--redA);vertical-align:middle"></span> Missing</span>
-      <span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--s2);vertical-align:middle"></span> Weekend</span>
-    </div>
-    <div id="calGrid"><div style="color:var(--t3);font-size:10px"><span class="spr"></span>Loading...</div></div>
-    <div id="calSummary" style="margin-top:10px;font-size:9px;color:var(--t3)"></div>
+  <!-- ── TABS ── -->
+  <div class="tabs">
+    <button class="tab a" id="tab-upload" onclick="switchTab('upload')">📤 Upload</button>
+    <button class="tab" id="tab-calendar" onclick="switchTab('calendar')">📅 Calendar</button>
+    <button class="tab" id="tab-history" onclick="switchTab('history')">🗂 History</button>
+    <button class="tab" id="tab-status" onclick="switchTab('status')">📊 Status</button>
   </div>
-</div>
 
-<!-- HISTORY -->
-<div id="pane-history" style="display:none">
-  <div class="card">
-    <div class="ctitle" style="display:flex;justify-content:space-between;align-items:center">
-      <span>Upload History</span>
-      <span id="histCount" style="color:var(--acc);font-size:11px"></span>
+  <!-- UPLOAD -->
+  <div id="pane-upload">
+    <div class="card">
+      <div class="ctitle">Upload FOVOLT CSV Files</div>
+      <div class="upbox" id="dz" onclick="document.getElementById('fi').click()">
+        <input type="file" id="fi" accept=".csv" multiple style="display:none" onchange="handleFiles(this.files)">
+        <h3 id="dl">📂 Drop FOVOLT CSV files here</h3>
+        <p>Click to browse · Multiple files OK · Dates auto-detected from filename</p>
+      </div>
+      <div id="fList"></div>
+      <div id="valPanel" style="display:none;margin-top:8px" class="card">
+        <div class="ctitle">✅ Pre-Upload Validation</div>
+        <div id="valChecks"></div>
+      </div>
+      <button class="btn btn-go" id="pushBtn" onclick="doPush()" disabled style="margin-top:8px">Push to All Users</button>
+      <div class="st" id="pSt"></div>
     </div>
-    <div id="histList"><div style="color:var(--t3);font-size:10px"><span class="spr"></span>Loading...</div></div>
-  </div>
-  <div class="card">
-    <div class="ctitle" style="color:var(--red)">⚠️ Delete Specific Day</div>
-    <div style="font-size:9px;color:var(--t3);margin-bottom:10px">Remove a day's data from history. Cannot be undone. Click Delete next to any date above to pre-fill.</div>
-    <div style="display:flex;gap:6px;align-items:center">
-      <input type="text" id="delDate" placeholder="YYYY-MM-DD" style="flex:1;font-family:monospace">
-      <button onclick="doDelete()" style="padding:9px 14px;background:var(--redA);color:var(--red);border:1px solid rgba(255,77,106,.3);border-radius:7px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap">Delete</button>
+    <div class="card" style="font-size:9px;color:var(--t3);line-height:1.7">
+      <b style="color:var(--t2)">How it works:</b><br>
+      1. Drop FOVOLT CSV → parsed in browser<br>
+      2. Validation runs automatically<br>
+      3. Push → Vercel API → saved as latest + daily history on GitHub<br>
+      4. Users see updated data on next app load<br><br>
+      <b style="color:var(--t2)">Security:</b> Token lives in Vercel env vars. Never in browser code.
     </div>
-    <div class="st" id="delSt"></div>
   </div>
-</div>
 
-<!-- STATUS -->
-<div id="pane-status" style="display:none">
-  <div class="card">
-    <div class="ctitle">Live Data Status</div>
-    <div id="statusContent"><div style="color:var(--t3);font-size:10px"><span class="spr"></span>Checking...</div></div>
+  <!-- CALENDAR -->
+  <div id="pane-calendar" style="display:none">
+    <div class="card">
+      <div class="ctitle">Upload Calendar — Last 35 Days</div>
+      <div style="display:flex;gap:10px;margin-bottom:8px;font-size:9px">
+        <span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--accA);border:1px solid rgba(0,229,153,.3);vertical-align:middle"></span> Uploaded</span>
+        <span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--redA);vertical-align:middle"></span> Missing</span>
+        <span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--s2);vertical-align:middle"></span> Weekend</span>
+      </div>
+      <div id="calGrid"><div style="color:var(--t3);font-size:10px"><span class="spr"></span>Loading...</div></div>
+      <div id="calSummary" style="margin-top:10px;font-size:9px;color:var(--t3)"></div>
+    </div>
   </div>
-  <div class="card">
-    <div class="ctitle">History Stats</div>
-    <div id="statsContent" style="font-size:10px;color:var(--t3)">Loading...</div>
-  </div>
-</div>
 
-</div>
-</div>
+  <!-- HISTORY -->
+  <div id="pane-history" style="display:none">
+    <div class="card">
+      <div class="ctitle" style="display:flex;justify-content:space-between;align-items:center">
+        <span>Upload History</span>
+        <span id="histCount" style="color:var(--acc);font-size:11px"></span>
+      </div>
+      <div id="histList"><div style="color:var(--t3);font-size:10px"><span class="spr"></span>Loading...</div></div>
+    </div>
+    <div class="card">
+      <div class="ctitle" style="color:var(--red)">⚠️ Delete Specific Day</div>
+      <div style="font-size:9px;color:var(--t3);margin-bottom:10px">Remove a day's data from history. Cannot be undone. Click Delete next to any date above to pre-fill.</div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <input type="text" id="delDate" placeholder="YYYY-MM-DD" style="flex:1;font-family:monospace">
+        <button onclick="doDelete()" style="padding:9px 14px;background:var(--redA);color:var(--red);border:1px solid rgba(255,77,106,.3);border-radius:7px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap">Delete</button>
+      </div>
+      <div class="st" id="delSt"></div>
+    </div>
+  </div>
+
+  <!-- STATUS -->
+  <div id="pane-status" style="display:none">
+    <div class="card">
+      <div class="ctitle">Live Data Status</div>
+      <div id="statusContent"><div style="color:var(--t3);font-size:10px"><span class="spr"></span>Checking...</div></div>
+    </div>
+    <div class="card">
+      <div class="ctitle">History Stats</div>
+      <div id="statsContent" style="font-size:10px;color:var(--t3)">Loading...</div>
+    </div>
+  </div>
+
+</div><!-- /adminView -->
+</div><!-- /wrap -->
 
 <script>
-var adminPw = "";
-var parsedFiles = [];
-var indexData = null;
+var adminPw="";
+var parsedFiles=[];
+var indexData=null;
 
-function switchTab(name) {
-  ["upload","calendar","history","status"].forEach(function(t) {
-    document.getElementById("pane-"+t).style.display = t===name?"block":"none";
-    document.getElementById("tab-"+t).classList.toggle("a", t===name);
-  });
-  if(name==="calendar") loadCalendar();
-  if(name==="history") loadHistory();
-  if(name==="status") loadStatus();
-}
-
-function doLogin() {
-  adminPw = document.getElementById("pw").value;
+// ── LOGIN ────────────────────────────────────────────────────────────────────
+function doLogin(){
+  adminPw=document.getElementById("pw").value;
   if(!adminPw||adminPw.length<4){showSt("lSt","Enter a valid password","er");return;}
   document.getElementById("loginView").style.display="none";
   document.getElementById("adminView").style.display="block";
-  loadIndex();
+  loadIndex().then(function(){refreshDH();});
 }
 
-function showSt(id,msg,type){
-  var el=document.getElementById(id);
-  el.innerHTML=msg; el.className="st "+type;
+function showSt(id,msg,type){var el=document.getElementById(id);el.innerHTML=msg;el.className="st "+type;}
+
+// ── TAB SWITCHING ────────────────────────────────────────────────────────────
+function switchTab(name){
+  ["upload","calendar","history","status"].forEach(function(t){
+    document.getElementById("pane-"+t).style.display=t===name?"block":"none";
+    document.getElementById("tab-"+t).classList.toggle("a",t===name);
+  });
+  if(name==="calendar")loadCalendar();
+  if(name==="history")loadHistory();
+  if(name==="status")loadStatus();
 }
 
+// ── INDEX ────────────────────────────────────────────────────────────────────
 async function loadIndex(){
-  try{
-    var r=await fetch("/api/history?type=index");
-    if(r.ok) indexData=await r.json();
-  }catch(e){indexData=null;}
+  try{var r=await fetch("/api/history?type=index");if(r.ok)indexData=await r.json();}
+  catch(e){indexData=null;}
 }
 
+// ── DATA HEALTH PANEL ────────────────────────────────────────────────────────
+function isoToDisplay(iso){
+  var d=new Date(iso+"T00:00:00");
+  return d.toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"2-digit"});
+}
+function isWeekday(date){var d=date.getDay();return d>=1&&d<=5;}
+function computeStreak(dates){
+  if(!dates||!dates.length)return 0;
+  var sorted=[...dates].sort().reverse();
+  var streak=1;
+  for(var i=1;i<sorted.length;i++){
+    var a=new Date(sorted[i-1]+"T00:00:00");
+    var b=new Date(sorted[i]+"T00:00:00");
+    var diff=Math.round((a-b)/86400000);
+    if(diff<=3)streak++;else break;
+  }
+  return streak;
+}
+function findMissingDays(dates){
+  if(!dates||dates.length<2)return[];
+  var sorted=[...dates].sort();
+  var missing=[];
+  var cur=new Date(sorted[0]+"T00:00:00");
+  var end=new Date(sorted[sorted.length-1]+"T00:00:00");
+  var dateSet=new Set(dates);
+  while(cur<=end){
+    if(isWeekday(cur)){
+      var iso=cur.toISOString().split("T")[0];
+      if(!dateSet.has(iso))missing.push(iso);
+    }
+    cur.setDate(cur.getDate()+1);
+  }
+  return missing;
+}
+
+window.refreshDH=function(){
+  document.getElementById("dhStatus").textContent="Checking…";
+  // Build health data from indexData + config
+  fetch("/api/config").then(function(r){return r.json();}).then(function(cfg){
+    return fetch(cfg.dataUrl+"?t="+Date.now()).then(function(r){return r.json();}).then(function(data){
+      var meta=data.meta||{};
+      var ageH=meta.updatedAt?Math.round((Date.now()-new Date(meta.updatedAt).getTime())/3600000):null;
+      var dates=(indexData&&indexData.dates)||[];
+      renderDH({
+        dataAvailable:!!(data.signals&&Object.keys(data.signals).length),
+        date:meta.date||null,
+        meta:meta,
+        stockCount:meta.stockCount||Object.keys(data.signals||{}).length,
+        dataAge:ageH,
+        historyCount:dates.length,
+        availableDates:dates
+      });
+    });
+  }).catch(function(e){
+    var strip=document.getElementById("dhStrip");
+    strip.className="dh-strip err";
+    document.getElementById("dhStatus").textContent="Cannot reach API: "+e.message;
+  });
+};
+
+function renderDH(d){
+  var strip=document.getElementById("dhStrip");
+  var dot=document.getElementById("dhDot");
+  var ageH=d.dataAge;
+  var statusClass="ok",dotClass="g",statusText="";
+  if(!d.dataAvailable||!d.date){statusClass="err";dotClass="r";statusText="No data uploaded yet";}
+  else if(ageH===null){statusClass="warn";dotClass="a";statusText="Data present — age unknown";}
+  else if(ageH<24){statusClass="ok";dotClass="g";statusText="Data is fresh";}
+  else if(ageH<72){statusClass="warn";dotClass="a";statusText="Data is "+Math.round(ageH)+"h old — consider uploading";}
+  else{statusClass="err";dotClass="r";statusText="Data is "+Math.round(ageH/24)+"d old — STALE";}
+  strip.className="dh-strip "+statusClass;
+  dot.className="dh-dot "+dotClass;
+  document.getElementById("dhStatus").textContent=statusText;
+  document.getElementById("dhAge").textContent=ageH!==null?(Math.round(ageH)+"h ago"):"";
+  if(d.date){
+    document.getElementById("dhLatestDate").textContent=isoToDisplay(d.date);
+    var updAt=d.meta&&d.meta.updatedAt?new Date(d.meta.updatedAt).toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"}):"";
+    document.getElementById("dhLatestTime").textContent=updAt?"Uploaded at "+updAt:"";
+  }
+  if(d.stockCount){
+    var sc=document.getElementById("dhStockCount");
+    sc.textContent=d.stockCount;
+    sc.style.color=d.stockCount>=150?"var(--acc)":"var(--org)";
+  }
+  var dates=d.availableDates||[];
+  document.getElementById("dhHistCount").textContent=d.historyCount||dates.length||"0";
+  if(dates.length>=2){
+    document.getElementById("dhHistRange").textContent=isoToDisplay(dates[0])+" → "+isoToDisplay(dates[dates.length-1]);
+  }
+  var streak=computeStreak(dates);
+  var stEl=document.getElementById("dhStreak");
+  stEl.textContent=streak;
+  stEl.style.color=streak>=5?"var(--acc)":streak>=3?"var(--org)":"var(--red)";
+  var missing=findMissingDays(dates);
+  var alertEl=document.getElementById("dhMissingAlert");
+  if(missing.length){
+    alertEl.style.display="block";
+    alertEl.innerHTML="⚠ Missing trading days ("+missing.length+"): "+
+      missing.slice(0,7).map(function(d){return isoToDisplay(d);}).join(", ")+
+      (missing.length>7?" + "+(missing.length-7)+" more":"");
+  } else {alertEl.style.display="none";}
+  var datesEl=document.getElementById("dhDates");
+  var sorted=[...dates].sort().reverse();
+  datesEl.innerHTML=sorted.map(function(dt,i){
+    return'<span class="dh-date-chip '+(i===0?"latest":"old")+'">'+isoToDisplay(dt)+"</span>";
+  }).join("");
+}
+
+// ── CSV PARSING ──────────────────────────────────────────────────────────────
 function parseFOVOLT(csv){
   var lines=csv.trim().split("\n"),r={};
   for(var i=1;i<lines.length;i++){
@@ -224,38 +395,26 @@ function computeSignals(files){
   return signals;
 }
 
+// ── VALIDATION ───────────────────────────────────────────────────────────────
 function runValidation(files){
   var checks=[];
   var avgStocks=Math.round(files.reduce(function(a,f){return a+f.stocks},0)/files.length);
-
-  // Stock count
-  if(avgStocks>=150) checks.push({ok:"ok",msg:"Stock count good ("+avgStocks+" stocks — expected 150+)"});
-  else if(avgStocks>=100) checks.push({ok:"warn",msg:"Stock count low ("+avgStocks+") — check if full F&O file"});
+  if(avgStocks>=150)checks.push({ok:"ok",msg:"Stock count good ("+avgStocks+" stocks — expected 150+)"});
+  else if(avgStocks>=100)checks.push({ok:"warn",msg:"Stock count low ("+avgStocks+") — check if full F&O file"});
   else checks.push({ok:"er",msg:"Very few stocks ("+avgStocks+") — possibly wrong or corrupt file"});
-
-  // Date detection
   var datesOk=files.filter(function(f){return f.label&&f.label.match(/\d{2}-\w{3}-\d{4}/)}).length;
-  if(datesOk===files.length) checks.push({ok:"ok",msg:"Dates detected: "+files.map(function(f){return f.label}).join(", ")});
+  if(datesOk===files.length)checks.push({ok:"ok",msg:"Dates detected: "+files.map(function(f){return f.label}).join(", ")});
   else checks.push({ok:"warn",msg:"Could not detect date from some filenames. Rename as DDMMYYYY.csv"});
-
-  // Duplicate
   if(indexData&&indexData.dates){
     var dupes=files.filter(function(f){return f.iso&&indexData.dates.indexOf(f.iso)>=0});
-    if(dupes.length===0) checks.push({ok:"ok",msg:"No duplicate dates — all files are new"});
+    if(dupes.length===0)checks.push({ok:"ok",msg:"No duplicate dates — all files are new"});
     else checks.push({ok:"er",msg:"Duplicate dates already uploaded: "+dupes.map(function(f){return f.iso}).join(", ")});
-  } else {
-    checks.push({ok:"ok",msg:"First upload — no duplicates possible"});
-  }
-
-  // Weekend
+  } else {checks.push({ok:"ok",msg:"First upload — no duplicates possible"});}
   var wknd=files.filter(function(f){if(!f.ts)return false;var d=new Date(f.ts).getDay();return d===0||d===6});
-  if(wknd.length===0) checks.push({ok:"ok",msg:"All dates are weekdays — valid trading days"});
+  if(wknd.length===0)checks.push({ok:"ok",msg:"All dates are weekdays — valid trading days"});
   else checks.push({ok:"warn",msg:"Weekend date: "+wknd.map(function(f){return f.label}).join(", ")+" (NSE is closed)"});
-
-  // Count
-  if(files.length===1) checks.push({ok:"ok",msg:"Single day upload"});
+  if(files.length===1)checks.push({ok:"ok",msg:"Single day upload"});
   else checks.push({ok:"ok",msg:"Batch upload: "+files.length+" days — each saved as separate daily file"});
-
   return checks;
 }
 
@@ -268,8 +427,8 @@ function showValidation(files){
   }).join("");
   document.getElementById("valPanel").style.display="block";
   document.getElementById("pushBtn").disabled=hasError;
-  if(hasError) showSt("pSt","❌ Fix errors above before pushing.","er");
-  else if(hasWarn) showSt("pSt","⚠️ Warnings found. Review above — you can still push.","warn");
+  if(hasError)showSt("pSt","❌ Fix errors above before pushing.","er");
+  else if(hasWarn)showSt("pSt","⚠️ Warnings found. Review above — you can still push.","warn");
   else document.getElementById("pSt").style.display="none";
 }
 
@@ -291,9 +450,10 @@ function handleFiles(fileList){
           return'<div class="fl"><span style="color:var(--t1);font-weight:600">📄 '+f.label+'</span><span style="color:var(--acc)">'+f.stocks+' stocks</span></div>';
         }).join("");
         document.getElementById("pushBtn").disabled=!parsedFiles.length;
-        document.getElementById("dz").className="upbox"+(parsedFiles.length?" loaded":"");
+        var dz=document.getElementById("dz");
+        dz.className="upbox"+(parsedFiles.length?" loaded":"");
         document.getElementById("dl").textContent=parsedFiles.length?"✅ "+parsedFiles.length+" file(s) ready":"📂 Drop FOVOLT CSV files here";
-        if(parsedFiles.length) showValidation(parsedFiles);
+        if(parsedFiles.length)showValidation(parsedFiles);
       }
     };
     reader.readAsText(file);
@@ -305,6 +465,7 @@ dz.addEventListener("dragover",function(e){e.preventDefault();dz.classList.add("
 dz.addEventListener("dragleave",function(){dz.classList.remove("over")});
 dz.addEventListener("drop",function(e){e.preventDefault();dz.classList.remove("over");handleFiles(e.dataTransfer.files)});
 
+// ── PUSH ─────────────────────────────────────────────────────────────────────
 async function doPush(){
   if(!parsedFiles.length)return;
   var btn=document.getElementById("pushBtn");
@@ -322,25 +483,25 @@ async function doPush(){
         body:JSON.stringify({password:adminPw,signals:signals,files:[f.label],latestDate:f.label})
       });
       var result=await resp.json();
-      if(resp.ok&&result.success) results.push({label:f.label,ok:true,stocks:result.stockCount,weekly:result.weeklySaved});
-      else if(result.duplicate) results.push({label:f.label,ok:false,msg:"Already uploaded (duplicate)"});
+      if(resp.ok&&result.success)results.push({label:f.label,ok:true,stocks:result.stockCount,weekly:result.weeklySaved});
+      else if(result.duplicate)results.push({label:f.label,ok:false,msg:"Already uploaded (duplicate)"});
       else results.push({label:f.label,ok:false,msg:result.error||"Unknown error"});
-    }catch(e){
-      results.push({label:f.label,ok:false,msg:e.message});
-    }
+    }catch(e){results.push({label:f.label,ok:false,msg:e.message});}
   }
   var ok=results.filter(function(r){return r.ok});
   var fail=results.filter(function(r){return!r.ok});
   var weeklyDone=results.filter(function(r){return r.weekly});
   var msg="";
-  if(ok.length) msg+="✅ Pushed: "+ok.map(function(r){return r.label+" ("+r.stocks+" stocks)"}).join(", ")+"<br>";
-  if(weeklyDone.length) msg+="📊 Weekly summary auto-generated<br>";
-  if(fail.length) msg+="❌ Failed: "+fail.map(function(r){return r.label+" — "+r.msg}).join(", ");
+  if(ok.length)msg+="✅ Pushed: "+ok.map(function(r){return r.label+" ("+r.stocks+" stocks)"}).join(", ")+"<br>";
+  if(weeklyDone.length)msg+="📊 Weekly summary auto-generated<br>";
+  if(fail.length)msg+="❌ Failed: "+fail.map(function(r){return r.label+" — "+r.msg}).join(", ");
   showSt("pSt",msg,ok.length&&!fail.length?"ok":fail.length&&!ok.length?"er":"warn");
   await loadIndex();
+  refreshDH();
   btn.disabled=false;btn.textContent="Push to All Users";
 }
 
+// ── CALENDAR ─────────────────────────────────────────────────────────────────
 function loadCalendar(){
   var uploaded=(indexData&&indexData.dates)?indexData.dates:[];
   var today=new Date();
@@ -351,7 +512,7 @@ function loadCalendar(){
   ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].forEach(function(d){h+="<span>"+d+"</span>"});
   h+='</div><div class="cal-grid">';
   var firstDow=(days[0].getDay()+6)%7;
-  for(var p=0;p<firstDow;p++) h+='<div class="cd empty"></div>';
+  for(var p=0;p<firstDow;p++)h+='<div class="cd empty"></div>';
   var uploadedCount=0,missingCount=0;
   days.forEach(function(d){
     var iso=d.toISOString().split("T")[0];
@@ -377,13 +538,13 @@ function loadCalendar(){
     (missingCount>0?'<br><span style="color:var(--org)">⚠️ Missing days reduce trend accuracy</span>':'');
 }
 
+// ── HISTORY ──────────────────────────────────────────────────────────────────
 function loadHistory(){
   var list=document.getElementById("histList");
   var ct=document.getElementById("histCount");
   if(!indexData||!indexData.dates||!indexData.dates.length){
     list.innerHTML='<div style="font-size:10px;color:var(--t3);padding:8px 0">No history yet. Upload FOVOLT files to begin.</div>';
-    ct.textContent="";
-    return;
+    ct.textContent="";return;
   }
   var dates=indexData.dates.slice().reverse();
   ct.textContent=dates.length+" days";
@@ -419,12 +580,12 @@ async function doDelete(){
       document.getElementById("delDate").value="";
       await loadIndex();
       loadHistory();
-    } else {
-      showSt("delSt","❌ "+(result.error||"Delete failed"),"er");
-    }
+      refreshDH();
+    } else {showSt("delSt","❌ "+(result.error||"Delete failed"),"er");}
   }catch(e){showSt("delSt","❌ "+e.message,"er");}
 }
 
+// ── STATUS ───────────────────────────────────────────────────────────────────
 async function loadStatus(){
   var sc=document.getElementById("statusContent");
   var st=document.getElementById("statsContent");
@@ -443,12 +604,8 @@ async function loadStatus(){
         '<div class="stat-row"><span style="color:var(--t3)">Last pushed</span><b>'+(ago!==null?(ago<1?"Just now":ago+"h ago"):"—")+'</b></div>'+
         '<div class="stat-row"><span style="color:var(--t3)">Raw data</span><a href="'+cfg.dataUrl+'" target="_blank" style="color:var(--blu);font-size:9px">View JSON ↗</a></div>'+
         '</div>';
-    } else {
-      sc.innerHTML='<div style="color:var(--red);font-size:10px">Could not fetch live data.</div>';
-    }
-  }catch(e){
-    sc.innerHTML='<div style="color:var(--red);font-size:10px">Error: '+e.message+'</div>';
-  }
+    } else {sc.innerHTML='<div style="color:var(--red);font-size:10px">Could not fetch live data.</div>';}
+  }catch(e){sc.innerHTML='<div style="color:var(--red);font-size:10px">Error: '+e.message+'</div>';}
   if(indexData){
     var total=(indexData.dates||[]).length;
     var oldest=total?indexData.dates[0]:"—";
@@ -461,8 +618,6 @@ async function loadStatus(){
       '<div class="stat-row"><span>Total uploads</span><b>'+(indexData.totalUploads||total)+'</b></div>'+
       '<div class="stat-row"><span>Trend accuracy</span><b style="color:'+(total>=20?"var(--acc)":total>=5?"var(--org)":"var(--red)")+'">'+(total>=20?"High (20+ days)":total>=5?"Medium (5+ days)":"Low — need 5+ days")+'</b></div>'+
       '</div>';
-  } else {
-    st.innerHTML='<div style="color:var(--t3)">No history found. Upload data first.</div>';
-  }
+  } else {st.innerHTML='<div style="color:var(--t3)">No history found. Upload data first.</div>';}
 }
 </script></body></html>
