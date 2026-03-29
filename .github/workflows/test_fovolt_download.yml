@@ -1,0 +1,79 @@
+name: Test FOVOLT Download (27 Mar 2026)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Test NSE FOVOLT download
+        run: |
+          python3 << 'PYEOF'
+          import requests, time, sys
+
+          NSE_BASE = "https://www.nseindia.com"
+          HEADERS = {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+              "Accept-Language": "en-US,en;q=0.9",
+              "Referer": "https://www.nseindia.com/",
+          }
+
+          session = requests.Session()
+          session.headers.update(HEADERS)
+
+          print("Step 1: NSE homepage session...")
+          r = session.get(NSE_BASE, timeout=15)
+          print(f"  HTTP {r.status_code} | cookies: {list(session.cookies.keys())}")
+          time.sleep(1)
+
+          print("Step 2: Derivatives page warmup...")
+          r2 = session.get(NSE_BASE + "/all-reports-derivatives", timeout=15)
+          print(f"  HTTP {r2.status_code}")
+          time.sleep(1)
+
+          print("Step 3: Download FOVOLT_27032026.csv...")
+          urls = [
+              "https://www.nseindia.com/content/fo/FOVOLT_27032026.csv",
+              "https://nsearchives.nseindia.com/content/fo/FOVOLT_27032026.csv",
+          ]
+
+          success = False
+          for url in urls:
+              print(f"  Trying: {url}")
+              try:
+                  r3 = session.get(url, headers={"Referer": NSE_BASE + "/all-reports-derivatives"}, timeout=20)
+                  print(f"  HTTP {r3.status_code} | size: {len(r3.content):,} bytes")
+                  if r3.status_code == 200 and len(r3.content) > 5000:
+                      sample = r3.content[:500].decode("utf-8", errors="ignore")
+                      print(f"\n  First 500 chars of file:\n{sample}\n")
+                      # Count rows
+                      rows = r3.content.decode("utf-8", errors="ignore").strip().split("\n")
+                      print(f"  Total rows (including header): {len(rows)}")
+                      print(f"  ✅ SUCCESS — file downloaded correctly!")
+                      success = True
+                      break
+                  else:
+                      print(f"  Response preview: {r3.content[:200]}")
+              except Exception as e:
+                  print(f"  Error: {e}")
+
+          if not success:
+              print("\n❌ All URLs failed.")
+              print("Possible reasons:")
+              print("  1. NSE hasn't archived 27-Mar-2026 yet")
+              print("  2. URL structure is different")
+              print("  3. Need different cookies/headers")
+              sys.exit(1)
+          PYEOF
