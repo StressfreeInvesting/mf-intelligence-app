@@ -1,281 +1,189 @@
-// api/nifty.js — NSE India proxy
-// Serves:
-//   GET /api/nifty               → Nifty 50 + BankNifty index quotes
-//   GET /api/nifty?symbols=RELIANCE,HDFCBANK,TCS
-//                                → index quotes + per-stock price & OI data
+// /api/nifty.js — Index tiles + per-stock quote proxy
+// Reads from fno_signals.json (already uploaded daily by admin)
+// No external API needed — all data is in your own GitHub repo
 //
-// NSE blocks direct browser calls (CORS). This serverless function does a
-// homepage pre-flight to obtain session cookies, then fans out all data
-// requests in parallel under that single session.
+// GET /api/nifty
+// GET /api/nifty?symbols=RELIANCE,HDFCBANK,TCS   (subset of quotes)
+// Returns: { indices: { nifty, banknifty, sensex }, quotes: { SYM: {...} }, fetchedAt }
 
-const NSE_BASE = "https://www.nseindia.com";
-
-const NSE_HEADERS = (cookies = "") => ({
-  "User-Agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-  Accept: "application/json, text/plain, */*",
-  "Accept-Language": "en-US,en;q=0.9",
-  "Accept-Encoding": "gzip, deflate, br",
-  Referer: `${NSE_BASE}/`,
-  Connection: "keep-alive",
-  ...(cookies ? { Cookie: cookies } : {}),
+const GH_HEADERS = token => ({
+  Authorization: `Bearer ${token}`,
+  "User-Agent": "MF-Intelligence"
 });
 
-const INDEX_NAMES = {
-  nifty: "NIFTY 50",
-  banknifty: "NIFTY BANK",
-};
-
-// ── SESSION ────────────────────────────────────────────────────────────────
-// NSE requires a real browser session cookie. We hit the homepage first,
-// grab set-cookie, then reuse for all subsequent API calls.
-async function getNSESession() {
-  const res = await fetch(NSE_BASE, {
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-      Accept:
-        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.9",
-      "Accept-Encoding": "gzip, deflate, br",
-      Connection: "keep-alive",
-    },
-  });
-  // Collect all Set-Cookie values into a single Cookie header string
-  const raw = res.headers.get("set-cookie") || "";
-  // Parse individual cookie name=value pairs (ignore attributes like path, expires)
-  const cookies = raw
-    .split(/,(?=[^ ])/)
-    .map((c) => c.split(";")[0].trim())
-    .filter(Boolean)
-    .join("; ");
-  return cookies;
-}
-
-// ── INDEX QUOTES ───────────────────────────────────────────────────────────
-let _indicesCache = null; // reuse within a single invocation (parallel calls)
-
-async function fetchAllIndices(cookies) {
-  if (_indicesCache) return _indicesCache;
-  const res = await fetch(`${NSE_BASE}/api/allIndices`, {
-    headers: NSE_HEADERS(cookies),
-  });
-  if (!res.ok) throw new Error(`allIndices: HTTP ${res.status}`);
-  _indicesCache = await res.json();
-  return _indicesCache;
-}
-
-async function fetchIndexQuote(key, cookies) {
-  const name = INDEX_NAMES[key];
-  const data = await fetchAllIndices(cookies);
-  const rec = (data?.data || []).find((d) => d.index === name);
-  if (!rec) throw new Error(`Index "${name}" not found`);
-  return {
-    name: rec.index,
-    last: rec.last,
-    change: rec.variation,
-    changePct: rec.percentChange,
-    open: rec.open,
-    high: rec.high,
-    low: rec.low,
-    previousClose: rec.previousClose,
-    yearHigh: rec["52wHigh"],
-    yearLow: rec["52wLow"],
-    timestamp: new Date().toISOString(),
-  };
-}
-
-// ── PER-STOCK EQUITY QUOTE ─────────────────────────────────────────────────
-// Returns CMP, 1D change%, open/high/low, 52-week range
-async function fetchEquityQuote(symbol, cookies) {
-  const url = `${NSE_BASE}/api/quote-equity?symbol=${encodeURIComponent(symbol)}`;
-  const res = await fetch(url, { headers: NSE_HEADERS(cookies) });
-  if (!res.ok) {
-    console.warn(`[quote-equity] ${symbol}: HTTP ${res.status}`);
+async function readJson(owner, repo, path, token) {
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/contents/${path}`,
+      { headers: GH_HEADERS(token) }
+    );
+    if (!res.ok) return null;
+    const j = await res.json();
+    return JSON.parse(Buffer.from(j.content, "base64").toString("utf8"));
+  } catch (e) {
     return null;
   }
-  let json;
-  try { json = await res.json(); } catch { return null; }
+}
 
-  // NSE response shape: { priceInfo: { lastPrice, change, pChange, open, intraDayHighLow, ... } }
-  const p = json?.priceInfo;
-  if (!p) return null;
+// Classify OI signal from premium + score
+function classifyOI(signal) {
+  const prem  = parseFloat(signal.prem) || 0;
+  const score = signal.score || 0;
+  const d1    = parseFloat(signal.d1)   || 0;
+
+  // Long buildup: futures premium positive + bullish score + price rising
+  if (prem > 0.05 && score > 1 && d1 > 0)  return "Long Buildup";
+  // Short buildup: futures at discount + bearish score + price rising (shorts covering or new shorts)
+  if (prem < -0.05 && score < -1)           return "Short Buildup";
+  // Long unwinding: was long but score falling
+  if (prem > 0.05 && score < -0.5)          return "Long Unwinding";
+  // Short covering: was short, now recovering
+  if (prem < -0.05 && score > 0.5 && d1 > 0) return "Short Covering";
+  return "Neutral";
+}
+
+// Format an index entry (NIFTY, BANKNIFTY, SENSEX) from signal data
+function formatIndex(sym, signal) {
+  if (!signal) return null;
+  const last      = signal.cl   || 0;
+  const prev      = signal.pr   || last;
+  const change    = +(last - prev).toFixed(2);
+  const changePct = prev ? +((change / prev) * 100).toFixed(2) : 0;
 
   return {
-    symbol,
-    price:       p.lastPrice        ?? null,
-    change:      p.change           ?? null,   // absolute ₹ change
-    changePct:   p.pChange          ?? null,   // % change vs prev close
-    open:        p.open             ?? null,
-    high:        p.intraDayHighLow?.max ?? null,
-    low:         p.intraDayHighLow?.min ?? null,
-    prevClose:   p.previousClose    ?? null,
-    yearHigh:    p["52WeekHigh"]    ?? null,
-    yearLow:     p["52WeekLow"]     ?? null,
-    timestamp:   new Date().toISOString(),
+    symbol:    sym,
+    last,
+    prev,
+    change,
+    changePct,
+    // FOVOLT doesn't carry intraday H/L — derive ±vol estimate as placeholder
+    high: +(last * (1 + Math.abs(parseFloat(signal.vol) || 20) / 10000)).toFixed(2),
+    low:  +(last * (1 - Math.abs(parseFloat(signal.vol) || 20) / 10000)).toFixed(2),
+    score:  signal.score,
+    label:  signal.label,
+    prem:   signal.prem,
+    vol:    signal.vol,
   };
 }
 
-// ── PER-STOCK F&O / OI DATA ────────────────────────────────────────────────
-// Returns OI, OI change, PCR from the derivatives quote endpoint
-async function fetchDerivativeQuote(symbol, cookies) {
-  const url = `${NSE_BASE}/api/quote-derivative?symbol=${encodeURIComponent(symbol)}`;
-  const res = await fetch(url, { headers: NSE_HEADERS(cookies) });
-  if (!res.ok) {
-    console.warn(`[quote-derivative] ${symbol}: HTTP ${res.status}`);
-    return null;
-  }
-  let json;
-  try { json = await res.json(); } catch { return null; }
-
-  const stocks = json?.stocks || [];
-
-  // Aggregate OI across all contracts (futures + options)
-  let totalOI = 0, totalOIChange = 0;
-  let nearFutureOI = null, nearFutureOIChg = null;
-
-  for (const s of stocks) {
-    const md = s?.marketDeptOrderBook?.tradeInfo;
-    if (!md) continue;
-    const oi    = Number(md.openInterest       ?? 0);
-    const oiChg = Number(md.changeinOpenInterest ?? 0);
-    totalOI      += oi;
-    totalOIChange += oiChg;
-    // Near-month future for a clean single-contract view
-    if (s?.metadata?.instrumentType === "Stock Futures" && nearFutureOI === null) {
-      nearFutureOI    = oi;
-      nearFutureOIChg = oiChg;
-    }
-  }
-
-  const pcr = json?.putCallRatio?.ratio ?? null;
+// Format a regular stock quote
+function formatQuote(sym, signal) {
+  if (!signal) return null;
+  const price     = signal.cl || 0;
+  const prev      = signal.pr || price;
+  const changePct = prev ? +((price - prev) / prev * 100).toFixed(2) : 0;
+  const oiSignal  = classifyOI(signal);
 
   return {
-    symbol,
-    totalOI,
-    totalOIChange,
-    totalOIChangePct: totalOI
-      ? parseFloat(((totalOIChange / (totalOI - totalOIChange)) * 100).toFixed(2))
-      : null,
-    nearFutureOI,
-    nearFutureOIChg,
-    pcr,
-    oiDirection: totalOIChange > 0 ? "adding" : totalOIChange < 0 ? "unwinding" : "flat",
-    timestamp: new Date().toISOString(),
-  };
-}
-
-// ── MERGE EQUITY + OI → FINAL QUOTE OBJECT ────────────────────────────────
-// OI signal classification:
-//   Long Buildup   — OI ↑ + Price ↑  (bulls accumulating)
-//   Short Buildup  — OI ↑ + Price ↓  (bears accumulating)
-//   Long Unwinding — OI ↓ + Price ↓  (bulls exiting)
-//   Short Covering — OI ↓ + Price ↑  (bears covering)
-function mergeQuote(equity, derivative) {
-  if (!equity) return null;
-
-  const priceUp = equity.changePct !== null ? equity.changePct >= 0 : null;
-  let oiSignal = "Neutral";
-
-  if (derivative && priceUp !== null) {
-    const adding    = derivative.oiDirection === "adding";
-    const unwinding = derivative.oiDirection === "unwinding";
-    if (adding    &&  priceUp)  oiSignal = "Long Buildup";
-    if (adding    && !priceUp)  oiSignal = "Short Buildup";
-    if (unwinding && !priceUp)  oiSignal = "Long Unwinding";
-    if (unwinding &&  priceUp)  oiSignal = "Short Covering";
-  }
-
-  return {
-    symbol:          equity.symbol,
-    // ── Price ──────────────────────────────────────────────
-    price:           equity.price,
-    change:          equity.change,
-    changePct:       equity.changePct,
-    open:            equity.open,
-    high:            equity.high,
-    low:             equity.low,
-    prevClose:       equity.prevClose,
-    yearHigh:        equity.yearHigh,
-    yearLow:         equity.yearLow,
-    // ── OI ─────────────────────────────────────────────────
-    oi:              derivative?.totalOI           ?? null,
-    oiChange:        derivative?.totalOIChange     ?? null,
-    oiChangePct:     derivative?.totalOIChangePct  ?? null,
-    nearFutureOI:    derivative?.nearFutureOI      ?? null,
-    nearFutureOIChg: derivative?.nearFutureOIChg   ?? null,
-    pcr:             derivative?.pcr               ?? null,
+    price,
+    prev,
+    changePct,
+    high:         +(price * (1 + Math.abs(parseFloat(signal.vol) || 25) / 10000)).toFixed(2),
+    low:          +(price * (1 - Math.abs(parseFloat(signal.vol) || 25) / 10000)).toFixed(2),
+    score:        signal.score,
+    label:        signal.label,
+    prem:         parseFloat(signal.prem) || 0,
+    vol:          parseFloat(signal.vol)  || 0,
+    d1:           parseFloat(signal.d1)   || 0,
+    d2:           parseFloat(signal.d2)   || 0,
     oiSignal,
-    timestamp:       equity.timestamp,
+    // OI change % approximated from premium × vol (no raw OI in FOVOLT)
+    oiChangePct:  +(parseFloat(signal.prem) * parseFloat(signal.vol) || 0).toFixed(2),
   };
 }
 
-// ── HANDLER ────────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  // Cache for 60s at CDN level — data only changes once daily
+  res.setHeader("Cache-Control", "public, s-maxage=60, stale-while-revalidate=120");
 
-  if (req.method === "OPTIONS") { res.status(200).end(); return; }
-  if (req.method !== "GET")     { res.status(405).json({ error: "Method not allowed" }); return; }
+  if (req.method === "OPTIONS") return res.status(200).end();
+  if (req.method !== "GET")     return res.status(405).json({ error: "GET only" });
 
-  // Parse ?symbols=RELIANCE,HDFCBANK,... — uppercase, deduplicated, max 20
-  const symbolsParam = req.query?.symbols || "";
-  const symbols = symbolsParam
-    ? [...new Set(symbolsParam.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean))]
-    : [];
-  const safeSymbols = symbols.slice(0, 20);
+  const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+  const GITHUB_OWNER = process.env.GITHUB_OWNER;
+  const GITHUB_REPO  = process.env.GITHUB_REPO || "mf-intelligence-data";
+
+  if (!GITHUB_TOKEN || !GITHUB_OWNER) {
+    return res.status(500).json({ error: "Server not configured" });
+  }
 
   try {
-    // 1. Single session cookie for everything
-    const cookies = await getNSESession();
+    // Load latest signals (already fetched & cached in GitHub by admin upload)
+    const latest = await readJson(GITHUB_OWNER, GITHUB_REPO, "data/fno_signals.json", GITHUB_TOKEN);
 
-    // 2. Small polite delay
-    await new Promise((r) => setTimeout(r, 250));
-
-    // 3. Fetch indices + all stocks in one parallel fan-out
-    const [nifty, banknifty, ...stockResults] = await Promise.all([
-      fetchIndexQuote("nifty",     cookies).catch(() => null),
-      fetchIndexQuote("banknifty", cookies).catch(() => null),
-      ...safeSymbols.map(async (sym) => {
-        const [eq, deriv] = await Promise.all([
-          fetchEquityQuote(sym,     cookies).catch(() => null),
-          fetchDerivativeQuote(sym, cookies).catch(() => null),
-        ]);
-        return { symbol: sym, quote: mergeQuote(eq, deriv) };
-      }),
-    ]);
-
-    // 4. Build quotes map { "SYMBOL": quoteObject }
-    const quotes = {};
-    for (const sr of stockResults) {
-      quotes[sr.symbol] = sr.quote;   // null if both fetches failed
+    if (!latest || !latest.signals) {
+      return res.status(404).json({
+        error: "No F&O data available yet. Admin must upload FOVOLT data first.",
+        dataAvailable: false
+      });
     }
 
-    // 5. Respond — shorter cache when stock quotes present (prices move fast)
-    const cacheTTL = safeSymbols.length > 0 ? 30 : 60;
-    res.setHeader("Cache-Control", `s-maxage=${cacheTTL}, stale-while-revalidate=15`);
+    const signals    = latest.signals;
+    const fetchedAt  = new Date().toISOString();
+    const dataDate   = latest.meta?.date || null;
+    const dataAge    = dataDate
+      ? Math.round((Date.now() - new Date(dataDate).getTime()) / 3600000)
+      : null;
 
-    res.status(200).json({
-      success: true,
-      data: {
-        indices: { nifty, banknifty },
-        quotes,
-        symbolsRequested: safeSymbols,
-        symbolsFetched:   Object.keys(quotes).filter((k) => quotes[k] !== null),
-      },
-      fetchedAt: new Date().toISOString(),
+    // ── Index tiles ─────────────────────────────────────────
+    const indices = {
+      nifty:     formatIndex("NIFTY",     signals["NIFTY"]),
+      banknifty: formatIndex("BANKNIFTY", signals["BANKNIFTY"]),
+      sensex:    formatIndex("SENSEX",    signals["SENSEX"]),
+      finnifty:  formatIndex("FINNIFTY",  signals["FINNIFTY"]),
+    };
+
+    // ── Per-stock quotes ─────────────────────────────────────
+    // If ?symbols= param given, return only those; else return all
+    const requested = req.query.symbols
+      ? req.query.symbols.split(",").map(s => s.trim().toUpperCase())
+      : Object.keys(signals);
+
+    const INDEX_SYMS = new Set(["NIFTY","BANKNIFTY","SENSEX","FINNIFTY","NIFTYNXT50","MIDCPNIFTY","BANKEX","SX40","SENSEX50"]);
+
+    const quotes = {};
+    requested.forEach(sym => {
+      if (INDEX_SYMS.has(sym)) return; // indices handled separately
+      if (!signals[sym]) return;
+      quotes[sym] = formatQuote(sym, signals[sym]);
     });
 
-  } catch (err) {
-    console.error("[nifty.js]", err.message);
-    res.status(502).json({
-      success: false,
-      error: err.message,
-      data: { indices: { nifty: null, banknifty: null }, quotes: {} },
-      fetchedAt: new Date().toISOString(),
+    // ── Bullish / bearish leaderboard ────────────────────────
+    const ranked = Object.entries(signals)
+      .filter(([sym]) => !INDEX_SYMS.has(sym))
+      .map(([sym, s]) => ({ sym, score: s.score, label: s.label, cl: s.cl, d1: parseFloat(s.d1) }))
+      .sort((a, b) => b.score - a.score);
+
+    const top10Bullish = ranked.filter(s => s.score > 0).slice(0, 10);
+    const top10Bearish = ranked.filter(s => s.score < 0).reverse().slice(0, 10);
+
+    // ── Market mood ──────────────────────────────────────────
+    const total   = ranked.length;
+    const bullish = ranked.filter(s => s.score > 0.3).length;
+    const bearish = ranked.filter(s => s.score < -0.3).length;
+    const neutral = total - bullish - bearish;
+    const mood    = bullish / total > 0.6 ? "Bullish"
+                  : bearish / total > 0.6 ? "Bearish"
+                  : "Mixed";
+
+    return res.status(200).json({
+      dataAvailable: true,
+      dataDate,
+      dataAge,        // hours since upload
+      stockCount: latest.meta?.stockCount || total,
+      fetchedAt,
+      indices,
+      quotes,
+      market: { total, bullish, bearish, neutral, mood },
+      top10Bullish,
+      top10Bearish,
     });
+
+  } catch (e) {
+    console.error("NIFTY API ERROR:", e.message);
+    return res.status(500).json({ error: e.message });
   }
 }
