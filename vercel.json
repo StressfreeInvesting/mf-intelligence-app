@@ -15,6 +15,10 @@
       "destination": "/admin.html"
     },
     {
+      "source": "/paper-trading",
+      "destination": "/paper-trading.html"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }
