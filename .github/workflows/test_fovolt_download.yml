@@ -6,7 +6,7 @@ on:
 jobs:
   test-download:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     steps:
       - name: Set up Python
@@ -17,60 +17,143 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Test NSE FOVOLT download
+      - name: Test NSE FOVOLT download via reports API
         run: |
           python3 << 'PYEOF'
-          import requests, time, sys
+          import requests, time, sys, json
 
+          NSE_BASE = "https://www.nseindia.com"
+
+          # Browser-like headers — critical for NSE
           HEADERS = {
               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
               "Accept-Language": "en-US,en;q=0.9",
+              "Accept-Encoding": "gzip, deflate, br",
+              "Connection": "keep-alive",
+              "Upgrade-Insecure-Requests": "1",
           }
-
-          # All known URL patterns for FOVOLT
-          URLS = [
-              "https://www1.nseindia.com/archives/nsccl/volt/FOVOLT_27032026.csv",
-              "https://www1.nseindia.com/archives/nsccl/volt/FOVOLT_27032026.CSV",
-              "https://nsearchives.nseindia.com/archives/nsccl/volt/FOVOLT_27032026.csv",
-              "https://nsearchives.nseindia.com/content/fo/FOVOLT_27032026.csv",
-              "https://nsearchives.nseindia.com/fo/FOVOLT_27032026.csv",
-          ]
 
           session = requests.Session()
           session.headers.update(HEADERS)
 
-          print("Trying all known URL patterns for FOVOLT_27032026.csv...\n")
+          # ── Step 1: Get session cookies ──
+          print("Step 1: Establishing NSE session...")
+          r = session.get(NSE_BASE, timeout=20)
+          print(f"  Homepage: HTTP {r.status_code} | cookies: {list(session.cookies.keys())}")
+          time.sleep(2)
 
-          success = False
-          for url in URLS:
-              print(f"URL: {url}")
+          # ── Step 2: Hit the derivatives reports page ──
+          print("Step 2: Loading derivatives reports page...")
+          session.headers.update({
+              "Referer": NSE_BASE + "/",
+              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+          })
+          r2 = session.get(NSE_BASE + "/all-reports-derivatives", timeout=20)
+          print(f"  Derivatives page: HTTP {r2.status_code}")
+          time.sleep(2)
+
+          # ── Step 3: Use the NSE reports API (same as JavaScript download button) ──
+          print("Step 3: Calling NSE /api/reports endpoint...")
+          session.headers.update({
+              "Referer": NSE_BASE + "/all-reports-derivatives",
+              "Accept": "application/json, text/plain, */*",
+              "X-Requested-With": "XMLHttpRequest",
+          })
+
+          # NSE reports API — this is what the JS button calls
+          # archives param is URL-encoded JSON
+          import urllib.parse
+          archives = json.dumps([{
+              "name": "F&O - Daily Volatility (csv)",
+              "type": "archives",
+              "category": "derivatives",
+              "section": "equity"
+          }])
+
+          params = {
+              "archives": archives,
+              "date": "27-Mar-2026",
+              "type": "equity",
+              "mode": "single"
+          }
+
+          api_url = NSE_BASE + "/api/reports"
+          print(f"  URL: {api_url}")
+          print(f"  Params: {params}")
+
+          r3 = session.get(api_url, params=params, timeout=30)
+          print(f"  HTTP {r3.status_code} | size: {len(r3.content):,} bytes")
+          print(f"  Content-Type: {r3.headers.get('Content-Type','unknown')}")
+
+          if r3.status_code == 200:
+              # Check if it returned JSON (with redirect URL) or direct CSV
+              content_type = r3.headers.get("Content-Type", "")
+              if "json" in content_type:
+                  try:
+                      data = r3.json()
+                      print(f"  JSON response: {json.dumps(data)[:300]}")
+                      # If it returns a download URL, fetch that
+                      if isinstance(data, list) and len(data) > 0:
+                          file_url = data[0].get("link") or data[0].get("url") or data[0].get("fileLink")
+                          if file_url:
+                              print(f"\n  Following file URL: {file_url}")
+                              rf = session.get(file_url, timeout=30)
+                              print(f"  File HTTP {rf.status_code} | size: {len(rf.content):,} bytes")
+                              if rf.status_code == 200 and len(rf.content) > 5000:
+                                  sample = rf.content[:300].decode("utf-8", errors="ignore")
+                                  if "," in sample:
+                                      print(f"\n  ✅ CSV FOUND!\n{sample}\n")
+                                      sys.exit(0)
+                  except Exception as e:
+                      print(f"  JSON parse error: {e}")
+              elif "text/csv" in content_type or "application/octet" in content_type:
+                  # Direct CSV response
+                  sample = r3.content[:300].decode("utf-8", errors="ignore")
+                  if "," in sample:
+                      print(f"\n  ✅ DIRECT CSV RETURNED!\n{sample}\n")
+                      rows = r3.content.decode("utf-8", errors="ignore").strip().split("\n")
+                      print(f"  Total rows: {len(rows)}")
+                      sys.exit(0)
+              else:
+                  # Show raw response
+                  print(f"  Raw response: {r3.content[:500]}")
+          else:
+              print(f"  Response: {r3.content[:300]}")
+
+          # ── Step 4: Try direct archive URLs as fallback ──
+          print("\nStep 4: Trying direct archive URLs...")
+          direct_urls = [
+              "https://archives.nseindia.com/content/fo/FOVOLT_27032026.csv",
+              "https://www1.nseindia.com/archives/nsccl/volt/FOVOLT_27032026.csv",
+              f"{NSE_BASE}/archieves/nsccl/volt/FOVOLT_27032026.csv",
+              f"{NSE_BASE}/archieves/fo/FOVOLT_27032026.csv",
+          ]
+
+          session.headers.update({
+              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+              "X-Requested-With": "",
+          })
+
+          for url in direct_urls:
+              print(f"\n  Trying: {url}")
               try:
                   r = session.get(url, timeout=20, allow_redirects=True)
-                  print(f"  HTTP {r.status_code} | size: {len(r.content):,} bytes")
-
-                  if r.status_code == 200 and len(r.content) > 5000:
+                  print(f"  HTTP {r.status_code} | {len(r.content):,} bytes")
+                  if r.status_code == 200 and len(r.content) > 10000:
                       sample = r.content[:300].decode("utf-8", errors="ignore")
                       if "," in sample:
-                          print(f"\n  ✅ VALID CSV FOUND!")
-                          print(f"  First 300 chars:\n{sample}\n")
-                          rows = r.content.decode("utf-8", errors="ignore").strip().split("\n")
-                          print(f"  Total rows: {len(rows)}")
-                          print(f"\n  ✅ SUCCESS — this URL pattern works!")
-                          success = True
-                          break
-                      else:
-                          print(f"  ⚠️  Got 200 but not CSV: {sample[:100]}")
-                  else:
-                      print(f"  ❌ Not usable")
+                          print(f"  ✅ CSV FOUND!\n{sample}")
+                          sys.exit(0)
+                  if r.history:
+                      print(f"  Redirected to: {r.url}")
               except Exception as e:
-                  print(f"  ❌ Error: {e}")
-              print()
-              time.sleep(0.5)
+                  print(f"  Error: {e}")
 
-          if not success:
-              print("❌ None of the URLs worked.")
-              print("Go to nseindia.com/all-reports-derivatives, right-click the FOVOLT")
-              print("download button, copy link address and share it.")
-              sys.exit(1)
+          print("\n❌ All methods failed.")
+          print("\nThe NSE download uses a complex JS-based session.")
+          print("RECOMMENDATION: Use the FOVOLT file you download manually,")
+          print("upload it to a GitHub release or Cloudinary, then the script")
+          print("can fetch from there instead.")
+          sys.exit(1)
           PYEOF
