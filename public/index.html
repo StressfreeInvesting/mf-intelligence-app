@@ -329,6 +329,46 @@ button{cursor:pointer;font-family:inherit}
 .live-dot{width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;margin-right:4px;animation:pulse 2s infinite}
 @media(min-width:600px){.main{padding:20px 24px}}
 @media(max-width:400px){.index-tiles{grid-template-columns:1fr}}
+
+/* ── TOOLTIPS ── */
+[data-tip]{position:relative;cursor:help}
+[data-tip]::after{
+  content:attr(data-tip);
+  position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);
+  background:#0a0f1a;color:#e8f0fe;font-size:.68rem;font-family:'DM Sans',sans-serif;
+  font-weight:500;white-space:nowrap;padding:5px 10px;border-radius:6px;
+  border:1px solid var(--border);box-shadow:0 4px 16px rgba(0,0,0,.5);
+  pointer-events:none;opacity:0;transition:opacity .15s;z-index:999;
+  max-width:240px;white-space:normal;text-align:center;line-height:1.4;
+}
+[data-theme="slate"] [data-tip]::after{background:#fff;color:#18243a;box-shadow:0 4px 16px rgba(0,0,0,.15);}
+[data-tip]:hover::after{opacity:1}
+
+/* ── MARKET STATUS BADGE ── */
+.mkt-status{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;font-size:.65rem;font-weight:700;font-family:'Space Mono',monospace}
+.mkt-open{background:rgba(0,229,153,.12);color:var(--green);border:1px solid rgba(0,229,153,.2)}
+.mkt-closed{background:rgba(90,106,130,.15);color:var(--text-muted);border:1px solid var(--border)}
+.mkt-pre{background:rgba(255,184,48,.1);color:var(--amber);border:1px solid rgba(255,184,48,.2)}
+.index-tile-footer{display:flex;align-items:center;justify-content:space-between;margin-top:6px}
+.index-prev-close{font-size:.65rem;color:var(--text-muted);font-family:'Space Mono',monospace}
+
+/* ── NEWS FEED ── */
+.news-feed{display:flex;flex-direction:column;gap:8px;margin-bottom:16px}
+.news-item{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;display:flex;gap:10px;align-items:flex-start;cursor:pointer;transition:border-color .15s;text-decoration:none;color:inherit}
+.news-item:hover{border-color:var(--accent)}
+.news-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);flex-shrink:0;margin-top:5px}
+.news-dot.red{background:var(--red)}
+.news-dot.amber{background:var(--amber)}
+.news-body{flex:1;min-width:0}
+.news-title{font-size:.82rem;font-weight:600;color:var(--text);line-height:1.4;margin-bottom:3px}
+.news-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.news-source{font-size:.65rem;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.news-age{font-size:.65rem;color:var(--text-muted);font-family:'Space Mono',monospace}
+.news-tag{font-size:.62rem;padding:1px 6px;border-radius:8px;font-weight:700;background:rgba(59,158,255,.12);color:var(--blue)}
+.news-tag.red{background:rgba(255,69,96,.12);color:var(--red)}
+.news-tag.green{background:rgba(0,229,153,.12);color:var(--green)}
+.news-loading{text-align:center;padding:20px;color:var(--text-muted);font-size:.8rem}
+.news-error{text-align:center;padding:16px;color:var(--text-muted);font-size:.78rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)}
 </style>
 </head>
 <body>
@@ -367,21 +407,21 @@ button{cursor:pointer;font-family:inherit}
 
   <!-- FRESHNESS STRIP -->
   <div class="freshness-strip" id="freshnessStrip">
-    <span><span class="fresh-dot fresh-green"></span>MF: Feb '26</span>
+    <span data-tip="Mutual Fund holdings data — Feb 2026 disclosures (SEBI mandate: within 10 days of month-end)"><span class="fresh-dot fresh-green"></span>MF: Feb '26</span>
     <span>·</span>
-    <span><span class="fresh-dot fresh-green" id="foDot"></span>F&amp;O: <span id="foDate">—</span></span>
+    <span data-tip="F&O data freshness — shows date of latest uploaded futures &amp; options data"><span class="fresh-dot fresh-green" id="foDot"></span>F&amp;O: <span id="foDate">—</span></span>
     <span>·</span>
-    <span><span class="fresh-dot fresh-amber" id="trendsDot"></span>Trends: <span id="trendsLabel">—</span></span>
+    <span data-tip="Number of days of trend history available. 3+ days needed for consistency scoring."><span class="fresh-dot fresh-amber" id="trendsDot"></span>Trends: <span id="trendsLabel">—</span></span>
   </div>
 
   <!-- NAV -->
   <nav class="nav" id="mainNav">
-    <button class="nav-tab active" data-tab="home"><span class="nav-icon">◇</span> HOME</button>
-    <button class="nav-tab" data-tab="smart"><span class="nav-icon">▣</span> SMART</button>
-    <button class="nav-tab" data-tab="signals"><span class="nav-icon">⚡</span> SIGNALS</button>
-    <button class="nav-tab" data-tab="held"><span class="nav-icon">≡</span> HELD</button>
-    <button class="nav-tab" data-tab="trades"><span class="nav-icon">▷</span> TRADES</button>
-    <button class="nav-tab" data-tab="analytics"><span class="nav-icon">◈</span> ANALYTICS</button>
+    <button class="nav-tab active" data-tab="home" data-tip="Market overview, index prices, FII/DII flows"><span class="nav-icon">◇</span> HOME</button>
+    <button class="nav-tab" data-tab="smart" data-tip="Smart money moves — what MFs are buying, selling, entering & exiting"><span class="nav-icon">▣</span> SMART</button>
+    <button class="nav-tab" data-tab="signals" data-tip="Combined MF + F&O signals with probability scores for each stock"><span class="nav-icon">⚡</span> SIGNALS</button>
+    <button class="nav-tab" data-tab="held" data-tip="Most held stocks — ranked by number of fund houses holding them"><span class="nav-icon">≡</span> HELD</button>
+    <button class="nav-tab" data-tab="trades" data-tip="Paper trade tracker — auto-pilot engine + manual watchlist and trade history"><span class="nav-icon">▷</span> TRADES</button>
+    <button class="nav-tab" data-tab="analytics" data-tip="Signal accuracy, OI trends, sector pulse, top performers and correlation"><span class="nav-icon">◈</span> ANALYTICS</button>
   </nav>
 
   <!-- MAIN -->
@@ -390,44 +430,43 @@ button{cursor:pointer;font-family:inherit}
     <!-- ════ HOME ════ -->
     <div class="tab-panel active" id="tab-home">
       <div class="index-tiles" id="indexTiles">
-        <div class="index-tile">
-          <div class="index-name">Nifty 50</div>
+        <div class="index-tile" data-tip="NIFTY 50 — Top 50 large-cap NSE stocks. Prev close shown when market is closed.">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div class="index-name">Nifty 50</div>
+            <span class="mkt-status" id="niftyStatus">—</span>
+          </div>
           <div class="index-value" id="niftyVal">—</div>
-          <div class="index-change" id="niftyChg">Loading…</div>
-          <div class="index-meta"><span>H: <span id="niftyH">—</span></span><span>L: <span id="niftyL">—</span></span></div>
+          <div class="index-change" id="niftyChg" style="color:var(--text-muted);font-size:.75rem">Fetching…</div>
+          <div class="index-meta"><span data-tip="Day High">H: <span id="niftyH">—</span></span><span data-tip="Day Low">L: <span id="niftyL">—</span></span></div>
+          <div class="index-tile-footer">
+            <span class="index-prev-close" id="niftyPC"></span>
+            <span style="font-size:.6rem;color:var(--text-muted)" id="niftyTime"></span>
+          </div>
         </div>
-        <div class="index-tile">
-          <div class="index-name">BankNifty</div>
+        <div class="index-tile" data-tip="Bank Nifty — 12 most liquid banking stocks on NSE. Prev close shown when market is closed.">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div class="index-name">BankNifty</div>
+            <span class="mkt-status" id="bnkStatus">—</span>
+          </div>
           <div class="index-value" id="bnkVal">—</div>
-          <div class="index-change" id="bnkChg">Loading…</div>
-          <div class="index-meta"><span>H: <span id="bnkH">—</span></span><span>L: <span id="bnkL">—</span></span></div>
+          <div class="index-change" id="bnkChg" style="color:var(--text-muted);font-size:.75rem">Fetching…</div>
+          <div class="index-meta"><span data-tip="Day High">H: <span id="bnkH">—</span></span><span data-tip="Day Low">L: <span id="bnkL">—</span></span></div>
+          <div class="index-tile-footer">
+            <span class="index-prev-close" id="bnkPC"></span>
+            <span style="font-size:.6rem;color:var(--text-muted)" id="bnkTime"></span>
+          </div>
         </div>
       </div>
       <div class="section-header">Market Pulse</div>
       <div class="pulse-row" id="pulseRow">
-        <div class="pulse-chip"><div class="pulse-chip-label">FII DII</div><div class="pulse-chip-val" style="color:var(--green)">Net Buy</div></div>
-        <div class="pulse-chip"><div class="pulse-chip-label">VIX</div><div class="pulse-chip-val">13.2</div></div>
-        <div class="pulse-chip"><div class="pulse-chip-label">PCR</div><div class="pulse-chip-val">1.18</div></div>
-        <div class="pulse-chip"><div class="pulse-chip-label">OI Change</div><div class="pulse-chip-val" style="color:var(--green)">+2.4%</div></div>
-        <div class="pulse-chip"><div class="pulse-chip-label">Adv/Dec</div><div class="pulse-chip-val">1.4:1</div></div>
-        <div class="pulse-chip"><div class="pulse-chip-label">Delivery%</div><div class="pulse-chip-val">58.3</div></div>
+        <div class="pulse-chip" id="fiiChip" data-tip="FII Net Buy/Sell in Indian equities for the last trading day (N-1). Positive = net buying by foreign investors."><div class="pulse-chip-label">FII <span id="fiiDate" style="font-size:.58rem;opacity:.6"></span></div><div class="pulse-chip-val" id="fiiVal" style="color:var(--text-muted)">…</div></div>
+        <div class="pulse-chip" id="diiChip" data-tip="DII Net Buy/Sell in Indian equities for the last trading day (N-1). Positive = net buying by domestic institutions (MFs, insurance etc)."><div class="pulse-chip-label">DII <span id="diiDate" style="font-size:.58rem;opacity:.6"></span></div><div class="pulse-chip-val" id="diiVal" style="color:var(--text-muted)">…</div></div>
+        <div class="pulse-chip" data-tip="India VIX — Volatility Index. Below 15 = low fear, 15-20 = moderate, above 20 = high fear/uncertainty."><div class="pulse-chip-label">VIX</div><div class="pulse-chip-val" id="vixVal">—</div></div>
+        <div class="pulse-chip" data-tip="Put-Call Ratio — ratio of Put OI to Call OI. Above 1.2 = bullish sentiment (more puts = hedging), below 0.8 = bearish."><div class="pulse-chip-label">PCR</div><div class="pulse-chip-val" id="pcrVal">—</div></div>
+        <div class="pulse-chip" data-tip="Net change in total Open Interest across Nifty F&O. Positive = fresh positions being added to the market."><div class="pulse-chip-label">OI Change</div><div class="pulse-chip-val" id="oiChangeVal" style="color:var(--text-muted)">—</div></div>
+        <div class="pulse-chip" data-tip="Advance/Decline ratio — number of stocks rising vs falling on NSE today. Above 1.5:1 is broadly bullish."><div class="pulse-chip-label">Adv/Dec</div><div class="pulse-chip-val" id="advDecVal">—</div></div>
+        <div class="pulse-chip" data-tip="Delivery percentage — what share of today's traded volume resulted in actual delivery (not intraday). Above 50% signals conviction."><div class="pulse-chip-label">Delivery%</div><div class="pulse-chip-val" id="deliveryVal">—</div></div>
       </div>
-
-      <!-- Sector Leaders -->
-      <div id="sectorLeaders" style="margin-bottom:12px">
-        <div style="font-size:.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Sector Leaders <span style="font-size:.6rem;font-weight:400">(tap to filter Signals)</span></div>
-        <div id="sectorLeadersGrid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px"></div>
-      </div>
-
-      <!-- Market News -->
-      <div style="margin-bottom:14px">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-          <div style="font-size:.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Market News</div>
-          <button onclick="fetchNews(true)" style="padding:2px 8px;border-radius:5px;background:var(--surface2);border:1px solid var(--border);color:var(--text-muted);font-size:.65rem;cursor:pointer">&#8635; Refresh</button>
-        </div>
-        <div id="newsContainer"><div style="padding:10px;text-align:center;font-size:.8rem;color:var(--text-muted)">Loading news&#8230;</div></div>
-      </div>
-
       <div class="search-wrap">
         <span class="search-icon">🔍</span>
         <input class="search-input" id="globalSearch" placeholder="Search stocks, funds, signals…" autocomplete="off"/>
@@ -435,6 +474,13 @@ button{cursor:pointer;font-family:inherit}
       </div>
       <div class="section-header">Fund Activity</div>
       <div class="fund-cards" id="fundCards"></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;margin-top:4px">
+        <div class="section-header" style="margin-bottom:0">Market News</div>
+        <span style="font-size:.65rem;color:var(--text-muted);font-family:'Space Mono',monospace" id="newsAge"></span>
+      </div>
+      <div class="news-feed" id="newsFeed">
+        <div class="news-loading">⬤ Loading news…</div>
+      </div>
     </div>
 
     <!-- ════ SMART ════ -->
@@ -455,13 +501,6 @@ button{cursor:pointer;font-family:inherit}
         <button class="pill-tab active" data-sig="mf">MF Conviction</button>
         <button class="pill-tab" data-sig="fo">F&amp;O Signals</button>
         <button class="pill-tab" data-sig="combined">Combined Score</button>
-      </div>
-      <!-- Score filter bar - label and buttons updated by renderScoreFilterBar() -->
-      <div style="display:flex;align-items:center;gap:5px;margin-bottom:8px;flex-wrap:wrap">
-        <span id="scoreFilterLabel" style="font-size:.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:.05em;white-space:nowrap">Min MF:</span>
-        <div id="scoreFilterBtns" style="display:flex;gap:3px;flex-wrap:wrap"></div>
-        <button id="navRefreshBtn" onclick="refreshMFNav()" style="margin-left:auto;display:none;padding:3px 9px;border-radius:6px;background:var(--surface2);border:1px solid var(--border);color:var(--text-muted);font-size:.68rem;font-weight:600;cursor:pointer">&#8635; NAV</button>
-        <span id="navRefreshAge" style="font-size:.62rem;color:var(--text-muted)"></span>
       </div>
       <div class="sector-chips" id="sectorChips">
         <button class="sector-chip active" data-sector="all">All</button>
@@ -527,7 +566,6 @@ button{cursor:pointer;font-family:inherit}
         <button class="pill-tab" data-apanel="top">④ Top Performers</button>
         <button class="pill-tab" data-apanel="calendar">⑤ Calendar</button>
         <button class="pill-tab" data-apanel="corr">⑥ Correlation</button>
-        <button class="pill-tab" data-apanel="trades">⑦ Trades Intel</button>
       </div>
       <div id="analyticsContent"></div>
     </div>
@@ -543,10 +581,7 @@ const STATE={
   foData:null,trendsData:null,trades:[],watchlist:new Set(),
   quotes:{},quotesAge:null,activeTab:'home',smartTab:'buying',
   signalTab:'mf',sector:'all',analyticsPanel:'accuracy',autoLog:[],
-  scoreFilter:{mf:0,fo:0,combined:0},
-  autoDecisionLog:[],  // [{ts, evaluated, qualified, entries, rejections}]
-  newsCache:null, newsLastFetch:0,
-  mfNavCache:{}, mfNavLastFetch:0,
+  lastNifty:null,lastBnk:null,   // persisted last-known index data
 };
 
 /* ═══════════════════════════════════════════
@@ -582,7 +617,7 @@ const HOLDINGS={
     feb:[{s:"ICICI Bank",sec:"Banking",pct:9.5,v:3496},{s:"HDFC Bank",sec:"Banking",pct:8.5,v:3128},{s:"Reliance",sec:"Energy",pct:6.2,v:2282},{s:"Infosys",sec:"IT",pct:5.5,v:2024},{s:"L&T",sec:"Infra",pct:4.7,v:1730},{s:"TCS",sec:"IT",pct:4.2,v:1546},{s:"Bharti Airtel",sec:"Telecom",pct:3.9,v:1435},{s:"SBI",sec:"Banking",pct:3.4,v:1251},{s:"Axis Bank",sec:"Banking",pct:3.0,v:1104},{s:"ITC",sec:"FMCG",pct:2.7,v:994}]}
 };
 
-const NMAP={"ICICI Bank":"ICICIBANK","HDFC Bank":"HDFCBANK","SBI":"SBIN","Axis Bank":"AXISBANK","Kotak Bank":"KOTAKBANK","Reliance":"RELIANCE","Infosys":"INFY","TCS":"TCS","Bharti Airtel":"BHARTIARTL","L&T":"LT","Maruti Suzuki":"MARUTI","Sun Pharma":"SUNPHARMA","Bajaj Finance":"BAJFINANCE","Titan":"TITAN","Cipla":"CIPLA","HCL Tech":"HCLTECH","ITC":"ITC","Coal India":"COALINDIA","Trent":"TRENT","Tata Motors":"TATAMOTORS","Power Grid":"POWERGRID","Divi's Lab":"DIVISLAB","CG Power":"CGPOWER","Persistent Sys":"PERSISTENT","Coforge":"COFORGE","Indian Hotels":"INDHOTEL","Cholamandalam":"CHOLAFIN","Zomato":"ETERNAL","Avenue Supermarts":"DMART","Dixon Tech":"DIXON","Voltas":"VOLTAS","HUL":"HINDUNILVR","M&M":"M&M","Zydus Life":"ZYDUSLIFE","Dr Reddys":"DRREDDY","Pidilite":"PIDILITIND","Oberoi Realty":"OBEROIRLTY","Cummins India":"CUMMINSIND","Max Healthcare":"MAXHEALTH","Supreme Ind":"SUPREMEIND","NTPC":"NTPC","Asian Paints":"ASIANPAINT","ONGC":"ONGC","BPCL":"BPCL","IOC":"IOC","HPCL":"HINDPETRO","GAIL":"GAIL","Tata Steel":"TATASTEEL","JSW Steel":"JSWSTEEL","Hindalco":"HINDALCO","Vedanta":"VEDL","NMDC":"NMDC","SAIL":"SAIL","Jindal Steel":"JINDALSTEL","Hindustan Zinc":"HINDZINC","HDFC Life":"HDFCLIFE","SBI Life":"SBILIFE","ICICI Lombard":"ICICIGI","LIC":"LICI","Bajaj Finserv":"BAJAJFINSV","Shriram Finance":"SHRIRAMFIN","Muthoot Finance":"MUTHOOTFIN","IndusInd Bank":"INDUSINDBK","Federal Bank":"FEDERALBNK","Yes Bank":"YESBANK","Bandhan Bank":"BANDHANBNK","AU Bank":"AUBANK","PNB":"PNB","Canara Bank":"CANBK","Bank of Baroda":"BANKBARODA","Wipro":"WIPRO","Tech Mahindra":"TECHM","Mphasis":"MPHASIS","LTIMindtree":"LTM","Lupin":"LUPIN","Aurobindo":"AUROPHARMA","Alkem":"ALKEM","Hero MotoCorp":"HEROMOTOCO","Bajaj Auto":"BAJAJ-AUTO","Eicher Motors":"EICHERMOT","TVS Motor":"TVSMOTOR","Ashok Leyland":"ASHOKLEY","Nestle":"NESTLEIND","Britannia":"BRITANNIA","Dabur":"DABUR","Marico":"MARICO","Godrej CP":"GODREJCP","Colgate":"COLPAL","Tata Consumer":"TATACONSUM","Varun Beverages":"VBL","Jubilant Food":"JUBLFOOD","Tata Power":"TATAPOWER","NHPC":"NHPC","JSW Energy":"JSWENERGY","Torrent Power":"TORNTPOWER","Adani Power":"ADANIPOWER","Adani Green":"ADANIGREEN","Suzlon":"SUZLON","Waaree Energy":"WAAREEENER","UltraTech":"ULTRACEMCO","Shree Cement":"SHREECEM","Ambuja Cement":"AMBUJACEM","Dalmia Bharat":"DALBHARAT","DLF":"DLF","Godrej Properties":"GODREJPROP","Prestige":"PRESTIGE","Adani Ports":"ADANIPORTS","Adani Enterprises":"ADANIENT","Jio Financial":"JIOFIN","Mankind Pharma":"MANKIND","Paytm":"PAYTM","Info Edge":"NAUKRI","IRFC":"IRFC","RVNL":"RVNL","HAL":"HAL","BEL":"BEL","Mazagon Dock":"MAZDOCK","BHEL":"BHEL","Siemens":"SIEMENS","ABB":"ABB","Nifty 50":"NIFTY","Bank Nifty":"BANKNIFTY","Sensex":"SENSEX"};
+const NMAP={"ICICI Bank":"ICICIBANK","HDFC Bank":"HDFCBANK","SBI":"SBIN","Axis Bank":"AXISBANK","Kotak Bank":"KOTAKBANK","Reliance":"RELIANCE","Infosys":"INFY","TCS":"TCS","Bharti Airtel":"BHARTIARTL","L&T":"LT","Maruti Suzuki":"MARUTI","Sun Pharma":"SUNPHARMA","Bajaj Finance":"BAJFINANCE","Titan":"TITAN","Cipla":"CIPLA","HCL Tech":"HCLTECH","ITC":"ITC","Coal India":"COALINDIA","Trent":"TRENT","Tata Motors":"TATAMOTORS","Power Grid":"POWERGRID","Divi's Lab":"DIVISLAB","CG Power":"CGPOWER","Persistent Sys":"PERSISTENT","Coforge":"COFORGE","Indian Hotels":"INDHOTEL","Cholamandalam":"CHOLAFIN","Zomato":"ETERNAL","Avenue Supermarts":"DMART","Dixon Tech":"DIXON","Voltas":"VOLTAS","HUL":"HINDUNILVR","M&M":"M&M","Zydus Life":"ZYDUSLIFE","Dr Reddys":"DRREDDY","Pidilite":"PIDILITIND","CG Power":"CGPOWER","Oberoi Realty":"OBEROIRLTY","Cummins India":"CUMMINSIND","Max Healthcare":"MAXHEALTH","Supreme Ind":"SUPREMEIND"};
 const INDEX_SYMS=new Set(["NIFTY","BANKNIFTY","SENSEX","FINNIFTY","NIFTYNXT50","MIDCPNIFTY","BANKEX","SX40","SENSEX50"]);
 
 function toSym(name){return NMAP[name]||name.toUpperCase().replace(/\s+/g,'');}
@@ -700,12 +735,38 @@ function disclosureBadge(month){
   return`<span style="font-size:.68rem;color:var(--text-muted)" title="${tip}"><span class="fresh-dot ${dotCls}" style="display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:2px;vertical-align:middle"></span>${label}</span>`;
 }
 function livePriceChip(nameOrSym,compact=false){
-  const q=getQ(nameOrSym),fo=getFO(toSym(nameOrSym));
-  const price=q?.price??fo?.cl??null,changePct=q?.changePct??(fo?parseFloat(fo.d1):null);
-  if(!price)return'';
-  const up=(changePct??0)>=0,arrow=up?'▲':'▼',pct=Math.abs(changePct??0).toFixed(2),fmtP=price.toLocaleString('en-IN',{maximumFractionDigits:2});
-  if(compact)return`<span class="lpc ${up?'lpc-up':'lpc-dn'}">₹${fmtP} ${arrow}${pct}%</span>`;
-  return`<span class="lpc-price">₹${fmtP}</span><span class="lpc ${up?'lpc-up':'lpc-dn'}">${arrow}${pct}%</span>`;
+  const sym=toSym(nameOrSym);
+  const q=getQ(nameOrSym),fo=getFO(sym);
+  const price=q?.price??fo?.cl??null;
+  const changePct=q?.changePct??(fo?parseFloat(fo.d1):null);
+  if(price){
+    const up=(changePct??0)>=0,arrow=up?'▲':'▼',pct=Math.abs(changePct??0).toFixed(2),fmtP=price.toLocaleString('en-IN',{maximumFractionDigits:2});
+    if(compact)return`<span class="lpc ${up?'lpc-up':'lpc-dn'}">₹${fmtP} ${arrow}${pct}%</span>`;
+    return`<span class="lpc-price">₹${fmtP}</span><span class="lpc ${up?'lpc-up':'lpc-dn'}">${arrow}${pct}%</span>`;
+  }
+  // No live price — show last MF disclosure price as reference with stale tag
+  const mfPrice=getMFPrice(nameOrSym);
+  if(mfPrice){
+    return compact
+      ?`<span class="lpc" style="background:rgba(90,106,130,.12);color:var(--text-muted)" data-tip="MF disclosure price (not live)">₹${mfPrice.toLocaleString('en-IN',{maximumFractionDigits:0})} ~</span>`
+      :`<span class="lpc-price" style="color:var(--text-muted)">₹${mfPrice.toLocaleString('en-IN',{maximumFractionDigits:0})}</span><span class="lpc" style="background:rgba(90,106,130,.12);color:var(--text-muted)">~ MF est.</span>`;
+  }
+  return'';
+}
+
+/* Estimate price from MF holdings AUM ÷ weight — rough but better than blank */
+function getMFPrice(nameOrSym){
+  // Look through feb holdings for this stock
+  for(const fid of Object.keys(HOLDINGS)){
+    const f=HOLDINGS[fid];
+    const h=f.feb.find(x=>x.s===nameOrSym||toSym(x.s)===toSym(nameOrSym));
+    if(h&&h.v&&h.pct){
+      // v = AUM in Cr at that weight; implied price not directly available
+      // But we can store nothing — just return null; the chip shows "~" as signal
+      return null; // price not derivable from holdings data alone
+    }
+  }
+  return null;
 }
 
 /* ═══════════════════════════════════════════
@@ -722,223 +783,6 @@ function renderHome(){
 /* ═══════════════════════════════════════════
    SMART MONEY
 ═══════════════════════════════════════════ */
-
-/* ═══════════════════════════════════════════
-   TOOLTIP SYSTEM
-   Usage: <span class="tip" data-tip="KEY">value</span>
-   Tap to show overlay. Tap outside to dismiss.
-═══════════════════════════════════════════ */
-const TIPS = {
-  // Scores
-  'prob':      'Probability Score (0–100): combines 4 factors — Confluence (are multiple sources aligned?), Momentum (F&O rank quality), Consistency (how many history days bullish?), Timing (is today a fresh entry, not chasing?). ≥75 = auto-pilot enters. ≥65 = good setup.',
-  'mfscore':   'MF Conviction Score (0–5): how strongly mutual funds are buying this stock. +2.0 if 3+ fund houses entered fresh. +1.5 for 2 houses. +1.0 if 3+ funds are accumulating. +0.75 hot sector bonus. Max real-world value ~4.2.',
-  'foscore':   'F&O Score (-5 to +5): rank-based score across all F&O stocks using 5 metrics — multi-day return (30%), 1-day return (25%), historical consistency (20%), futures premium direction (15%), lower volatility bonus (10%). Produced by ranking all stocks relative to each other so scores spread across the full range.',
-  'combined':  'Combined Score = MF Score + F&O Score. Max theoretical 10. Used in Combined sub-tab to find stocks with both smart money AND F&O momentum aligned.',
-  // Card fields
-  'prem':      'Futures Premium %: difference between futures price and spot price. Positive = futures trading above spot → long buildup likely. Negative = futures below spot → short buildup or selling. Typical range: -2% to +1%.',
-  'vol':       'Implied Volatility % annualised from options. Higher vol = bigger expected moves = riskier entry. Stocks >40% vol get penalised in scoring. Typical F&O range: 20–60%.',
-  'd1':        '1-Day Return %: today\'s close price vs today\'s previous close (from NSE FOVOLT file). True price move for the day.',
-  'd2':        'Multi-Day Return %: today\'s close vs oldest available history file\'s previous close. Shows momentum over the days you have data. Better than 1-day alone for positional signals.',
-  'rr':        'Risk:Reward ratio. Target gain divided by stop-loss risk. 1.5:1 means for every ₹1 you risk, you\'re targeting ₹1.50 gain. Auto-pilot requires minimum 1.5:1.',
-  'oi':        'Open Interest Signal: Long Buildup = OI rising + price rising (fresh bullish positions). Short Buildup = OI rising + price falling (fresh bearish bets). Long Unwinding = OI falling + price falling (longs exiting). Short Covering = OI falling + price rising (shorts exiting = squeeze).',
-  'pnl':       'Unrealised P&L %: (Current Market Price - Entry Price) / Entry Price × 100. Shows your paper profit/loss on this position right now using latest F&O close price.',
-  'days':      'Days held: calendar days since trade was entered. Auto-pilot exits after 15 trading days (~21 calendar days) regardless of target/SL status (Time Exit).',
-  'conf':      '⚡⚡ Triple Lock: all 3 sources agree (MF conviction ≥2 + F&O score ≥1.5 + Trend positional strength = Strong). Historically highest win rate. ⚡ 2 Signals: any 2 of the 3 sources agree.',
-  'decay':     'Decay-weighted consistency: recent days count more than older days (decay factor 0.2). A stock bullish 3 of 5 days with the last 2 being bullish scores higher than one bullish 3 of 5 days with last 2 being bearish.',
-  'streak':    'Upload streak: consecutive trading days with FOVOLT data uploaded. Higher streak = better trend data quality. Trends require minimum 3 days; 5+ days gives reliable signals.',
-  'dataage':   'Data age: hours since last FOVOLT upload. Green = <24h (fresh). Amber = 1–3 days (use with caution). Red = >3 days (signals likely stale — admin should upload).',
-  'mfdiscl':   'MF Disclosure date: month/year when fund published this portfolio. SEBI requires disclosure within 10 days of month-end. Green dot = current month. Amber = previous month within window. Red = overdue or stale.',
-  'autothresh':'Auto-pilot threshold: P≥75 required to enter a trade. Also checks: F&O 2-day momentum must be positive, stock not down >1% today, max 5 simultaneous trades, max 2 per sector, no re-entry within 10 days.',
-  'signaldecay':'Signal decay: probability score today vs score at entry. Rising (↑) = thesis strengthening, consider holding. Stable (→) = signal unchanged. Falling (↓) = thesis weakening even if price ok — monitor closely. Red if dropped >25 points since entry.',
-};
-
-let ACTIVE_TIP = null;
-
-function showTip(key, el){
-  const text = TIPS[key];
-  if(!text) return;
-  let overlay = document.getElementById('tipOverlay');
-  if(!overlay){
-    overlay = document.createElement('div');
-    overlay.id = 'tipOverlay';
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:flex-end;padding:14px;background:rgba(0,0,0,.55);backdrop-filter:blur(3px)';
-    overlay.onclick = hideTip;
-    document.body.appendChild(overlay);
-  }
-  overlay.innerHTML = `<div onclick="event.stopPropagation()" style="width:100%;max-width:500px;margin:0 auto;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;box-shadow:0 8px 32px rgba(0,0,0,.6)">
-    <div style="font-size:.72rem;font-weight:800;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">ⓘ ${key.toUpperCase()}</div>
-    <div style="font-size:.85rem;line-height:1.6;color:var(--text)">${text}</div>
-    <button onclick="hideTip()" style="margin-top:12px;padding:6px 18px;border-radius:20px;background:var(--surface2);border:1px solid var(--border);color:var(--text-muted);font-size:.75rem;cursor:pointer">Got it</button>
-  </div>`;
-  overlay.style.display = 'flex';
-  ACTIVE_TIP = key;
-}
-
-function hideTip(){ const o=document.getElementById('tipOverlay'); if(o) o.style.display='none'; ACTIVE_TIP=null; }
-
-// Wrap a value with a tappable tooltip indicator
-function tipWrap(val, key, style=''){
-  return `<span style="cursor:pointer;${style}" onclick="event.stopPropagation();showTip('${key}',this)">${val}<sup style="font-size:.55em;color:var(--accent);margin-left:1px">ⓘ</sup></span>`;
-}
-
-/* ═══════════════════════════════════════════
-   SCORE FILTER BAR
-═══════════════════════════════════════════ */
-const SCORE_FILTERS = {
-  mf:       [{label:'All',val:0},{label:'≥1',val:1},{label:'≥2',val:2},{label:'≥3',val:3},{label:'≥4',val:4}],
-  fo:       [{label:'All',val:0},{label:'≥1',val:1},{label:'≥2',val:2},{label:'≥3',val:3},{label:'≥4',val:4}],
-  combined: [{label:'All',val:0},{label:'P≥50',val:50},{label:'P≥65',val:65},{label:'P≥75',val:75},{label:'P≥85',val:85}],
-};
-function renderScoreFilterBar(tab){
-  const btns=document.getElementById('scoreFilterBtns'),label=document.getElementById('scoreFilterLabel');
-  const navBtn=document.getElementById('navRefreshBtn'),navAge=document.getElementById('navRefreshAge');
-  if(!btns)return;
-  const filters=SCORE_FILTERS[tab]||SCORE_FILTERS.mf;
-  const cur=STATE.scoreFilter[tab]||0;
-  if(label)label.textContent=tab==='combined'?'Min Prob:':tab==='fo'?'Min F&O:':'Min MF:';
-  btns.innerHTML=filters.map(f=>`<button onclick="setScoreFilter('${tab}',${f.val})" style="padding:3px 8px;border-radius:5px;border:1px solid ${f.val===cur?'var(--accent)':'var(--border)'};background:${f.val===cur?'var(--accent)':'transparent'};color:${f.val===cur?'#000':'var(--text-muted)'};font-size:.68rem;font-weight:600;cursor:pointer">${f.label}</button>`).join('');
-  if(navBtn)navBtn.style.display=tab==='mf'?'inline-block':'none';
-  if(navAge&&tab==='mf'&&STATE.mfNavLastFetch)navAge.textContent=Math.round((Date.now()-STATE.mfNavLastFetch)/60000)+'m ago';
-}
-function setScoreFilter(tab,val){STATE.scoreFilter[tab]=val;renderScoreFilterBar(tab);renderSignals();}
-
-/* ═══════════════════════════════════════════
-   MF NAV REFRESH (mfapi.in — NAV only)
-═══════════════════════════════════════════ */
-const MF_SEEDS=[
-  {c:119551,name:'SBI Bluechip',house:'SBI'},{c:120505,name:'HDFC Flexi Cap',house:'HDFC'},
-  {c:118989,name:'ICICI Pru Bluechip',house:'ICICI'},{c:135781,name:'Parag Parikh Flexi',house:'PPFAS'},
-  {c:120587,name:'Kotak Emerging Eq',house:'Kotak'},{c:118834,name:'Axis ELSS',house:'Axis'},
-  {c:119062,name:'Mirae Large Cap',house:'Mirae'},{c:125497,name:'HDFC Top 100',house:'HDFC'},
-];
-async function refreshMFNav(){
-  const btn=document.getElementById('navRefreshBtn');
-  if(btn){btn.textContent='↻ …';btn.disabled=true;}
-  let ok=0;
-  await Promise.all(MF_SEEDS.map(async s=>{
-    try{
-      const r=await fetch(`https://api.mfapi.in/mf/${s.c}/latest`);
-      if(!r.ok)return;
-      const d=await r.json();
-      if(d.status==='SUCCESS'&&d.data?.[0]){
-        STATE.mfNavCache[s.c]={nav:parseFloat(d.data[0].nav),date:d.data[0].date,name:d.meta?.scheme_name||s.name,house:s.house};ok++;
-      }
-    }catch(e){}
-  }));
-  STATE.mfNavLastFetch=Date.now();
-  if(btn){btn.textContent='↻ NAV';btn.disabled=false;}
-  const age=document.getElementById('navRefreshAge');
-  if(age)age.textContent=ok+'/'+MF_SEEDS.length+' updated';
-  renderHomeFundCards();
-}
-function renderHomeFundCards(){
-  const el=document.getElementById('fundCards');if(!el)return;
-  el.innerHTML=MF_SEEDS.map(s=>{
-    const nav=STATE.mfNavCache[s.c];
-    const navStr=nav?'₹'+nav.nav.toLocaleString('en-IN',{maximumFractionDigits:2}):'—';
-    return`<div class="fund-card" onclick="switchTab('signals');STATE.signalTab='mf';renderSignals();" style="cursor:pointer">
-      <div class="fund-card-name">${s.name}</div>
-      <div class="fund-card-count" style="font-size:.9rem">${navStr}</div>
-      <div class="fund-card-label">${nav?nav.date:'Tap NAV to load'}</div>
-    </div>`;
-  }).join('');
-}
-
-/* ═══════════════════════════════════════════
-   SECTOR LEADERS
-═══════════════════════════════════════════ */
-const SECTOR_LABELS={
-  banking:'Banking',it:'IT',pharma:'Pharma',auto:'Auto',fmcg:'FMCG',
-  infra:'Infra',nbfc:'NBFC',telecom:'Telecom',energy:'Energy',
-  retail:'Retail',consumer:'Consumer',metals:'Metals',power:'Power',realty:'Realty',
-};
-const SECTOR_MAP={
-  'ICICIBANK':'banking','HDFCBANK':'banking','SBIN':'banking','AXISBANK':'banking','KOTAKBANK':'banking',
-  'INDUSINDBK':'banking','FEDERALBNK':'banking','AUBANK':'banking','BANDHANBNK':'banking',
-  'INFY':'it','TCS':'it','HCLTECH':'it','WIPRO':'it','TECHM':'it','PERSISTENT':'it','COFORGE':'it',
-  'SUNPHARMA':'pharma','CIPLA':'pharma','DRREDDY':'pharma','DIVISLAB':'pharma','LUPIN':'pharma','AUROPHARMA':'pharma',
-  'MARUTI':'auto','M&M':'auto','TATAMOTORS':'auto','HEROMOTOCO':'auto','BAJAJ-AUTO':'auto','EICHERMOT':'auto',
-  'HINDUNILVR':'fmcg','ITC':'fmcg','NESTLEIND':'fmcg','BRITANNIA':'fmcg','DABUR':'fmcg','MARICO':'fmcg',
-  'LT':'infra','BHEL':'infra','SIEMENS':'infra','ABB':'infra','CGPOWER':'infra','HAL':'infra',
-  'BAJFINANCE':'nbfc','CHOLAFIN':'nbfc','SHRIRAMFIN':'nbfc','MUTHOOTFIN':'nbfc',
-  'BHARTIARTL':'telecom','IDEA':'telecom','INDUSTOWER':'telecom',
-  'RELIANCE':'energy','ONGC':'energy','BPCL':'energy','IOC':'energy','HINDPETRO':'energy','GAIL':'energy',
-  'TRENT':'retail','DMART':'retail','NYKAA':'retail','TITAN':'retail',
-  'HINDUNILVR':'consumer','NESTLEIND':'consumer',
-  'TATASTEEL':'metals','JSWSTEEL':'metals','HINDALCO':'metals','COALINDIA':'metals','NMDC':'metals',
-  'POWERGRID':'power','NTPC':'power','TATAPOWER':'power','ADANIPOWER':'power','TORNTPOWER':'power','SUZLON':'power',
-  'DLF':'realty','GODREJPROP':'realty','OBEROIRLTY':'realty','PRESTIGE':'realty',
-};
-function renderSectorLeaders(){
-  const el=document.getElementById('sectorLeadersGrid');if(!el)return;
-  const signals=STATE.foData?.signals||{};
-  if(!Object.keys(signals).length){el.innerHTML='<div style="grid-column:1/-1;font-size:.75rem;color:var(--text-muted)">Upload F&O data to see sector leaders</div>';return;}
-  // Find top stock per sector by F&O score
-  const leaders={};
-  Object.entries(signals).forEach(([sym,s])=>{
-    const sec=SECTOR_MAP[sym];if(!sec)return;
-    if(!leaders[sec]||s.score>leaders[sec].score)leaders[sec]={sym,score:s.score,label:s.label,cl:s.cl};
-  });
-  const secs=Object.keys(leaders).filter(s=>leaders[s].score>0).sort((a,b)=>leaders[b].score-leaders[a].score).slice(0,9);
-  if(!secs.length){el.innerHTML='<div style="grid-column:1/-1;font-size:.75rem;color:var(--text-muted)">No bullish sector leaders today</div>';return;}
-  el.innerHTML=secs.map(sec=>{
-    const l=leaders[sec];
-    const col=l.score>=3?'var(--green)':l.score>=1?'var(--amber)':'var(--text-muted)';
-    return`<div onclick="switchTab('signals');STATE.sector='${sec}';document.querySelectorAll('[data-sector]').forEach(b=>b.classList.toggle('active',b.dataset.sector==='${sec}'));renderSignals();" style="cursor:pointer;padding:7px 8px;background:var(--surface);border:1px solid var(--border);border-radius:7px;border-left:3px solid ${col}">
-      <div style="font-size:.65rem;color:var(--text-muted);font-weight:600">${SECTOR_LABELS[sec]||sec}</div>
-      <div style="font-size:.82rem;font-weight:700;font-family:'Space Mono',monospace">${l.sym}</div>
-      <div style="font-size:.68rem;color:${col};font-weight:700">${l.score>=0?'+':''}${l.score.toFixed(1)}</div>
-    </div>`;
-  }).join('');
-}
-
-/* ═══════════════════════════════════════════
-   NEWS FETCHING
-═══════════════════════════════════════════ */
-async function fetchNews(force){
-  const now=Date.now();
-  if(!force&&STATE.newsCache&&(now-STATE.newsLastFetch)<300000){renderNews();return;}
-  const el=document.getElementById('newsContainer');
-  if(el)el.innerHTML='<div style="padding:10px;text-align:center;font-size:.8rem;color:var(--text-muted)">Fetching news…</div>';
-  try{
-    const r=await fetch('/api/news?limit=8');
-    if(!r.ok)throw new Error('HTTP '+r.status);
-    const d=await r.json();
-    STATE.newsCache=d.items||[];
-    STATE.newsLastFetch=now;
-    renderNews();
-  }catch(e){
-    if(el)el.innerHTML='<div style="padding:10px;font-size:.78rem;color:var(--text-muted);text-align:center">News unavailable — check network</div>';
-  }
-}
-
-function renderNews(){
-  const el=document.getElementById('newsContainer');if(!el)return;
-  const items=STATE.newsCache||[];
-  if(!items.length){el.innerHTML='<div style="padding:10px;text-align:center;font-size:.8rem;color:var(--text-muted)">No news items</div>';return;}
-  el.innerHTML=items.slice(0,12).map(item=>{
-    const srcCol=item.source==='Moneycontrol'?'#1a73e8':'#ff6b00';
-    const stockTags=item.stocks.slice(0,3).map(sym=>{
-      const inSignals=STATE.foData?.signals?.[sym];
-      const sc=inSignals?.score||0;
-      const col=sc>=2?'var(--green)':sc>0?'var(--amber)':'var(--text-muted)';
-      return`<span onclick="event.stopPropagation();switchTab('signals');STATE.signalTab='fo';renderSignals();" style="cursor:pointer;padding:1px 6px;border-radius:8px;background:${col}18;color:${col};font-size:.62rem;font-weight:700;border:1px solid ${col}33">${sym}</span>`;
-    }).join('');
-    return`<div onclick="window.open('${item.link}','_blank')" style="cursor:pointer;padding:8px 10px;border-bottom:1px solid var(--border);transition:background .1s" onmouseenter="this.style.background='var(--surface2)'" onmouseleave="this.style.background=''">
-      <div style="display:flex;align-items:flex-start;gap:6px">
-        <span style="font-size:.58rem;color:${srcCol};font-weight:700;white-space:nowrap;margin-top:2px">${item.source.split(' ')[0].toUpperCase()}</span>
-        <div style="flex:1">
-          <div style="font-size:.78rem;font-weight:600;line-height:1.4;color:var(--text)">${item.title}</div>
-          <div style="display:flex;align-items:center;gap:5px;margin-top:4px;flex-wrap:wrap">
-            <span style="font-size:.62rem;color:var(--text-muted)">${item.ageLabel}</span>
-            ${stockTags}
-          </div>
-        </div>
-      </div>
-    </div>`;
-  }).join('');
-}
-
 function renderSmart(){
   const tab=STATE.smartTab,container=document.getElementById('smartContent');
   const mfData=computeMFData();
@@ -966,31 +810,7 @@ function renderSmart(){
     const disc=disclosureBadge(item.disclosureMonth||item.funds?.[0]?.disclosureMonth);
     const conf=confluenceBadge(prob?.sources||0);
     const isWatched=STATE.watchlist.has(stock),isReducing=tab==='reducing',isExit=tab==='exits';
-    // Build fund chips sorted by allocation % descending, showing pct + AUM
-    const fundChips=(()=>{
-      if(!Array.isArray(item.funds))return`<span style="font-size:.8rem">${item.fund||''}</span>`;
-      // Enrich with pct/v from HOLDINGS if available
-      const enriched=item.funds.map(f=>{
-        const fname=typeof f==='string'?f:f.fund||'';
-        const fhouse=typeof f==='string'?f:f.house||'';
-        // Find matching holding entry for this stock in feb data
-        let pct=null,v=null;
-        Object.values(HOLDINGS).forEach(hf=>{
-          if(hf.house===fhouse||hf.name===fname){
-            const entry=hf.feb?.find(h=>h.s===item.stock)||hf.jan?.find(h=>h.s===item.stock);
-            if(entry){pct=entry.pct;v=entry.v;}
-          }
-        });
-        return{name:fname,house:fhouse,pct,v};
-      }).sort((a,b)=>(b.pct||0)-(a.pct||0));
-      return enriched.map(f=>{
-        const pctStr=f.pct?f.pct.toFixed(2)+'%':'';
-        const aumStr=f.v?'₹'+Math.round(f.v).toLocaleString('en-IN')+'Cr':'';
-        const label=[f.house||f.name,pctStr,aumStr].filter(Boolean).join(' ');
-        return`<span style="display:inline-block;padding:2px 8px;margin:1px;border-radius:10px;background:var(--surface2);border:1px solid var(--border);font-size:.68rem;font-weight:600">${label}</span>`;
-      }).join('');
-    })();
-    const fundLabel=fundChips;
+    const fundLabel=Array.isArray(item.funds)?item.funds.map(f=>typeof f==='string'?f:f.fund||f.house||'').join(' · '):(item.fund||'');
     let rightCol='';
     if(isReducing){
       const diff=(parseFloat(item.from)-parseFloat(item.to)).toFixed(1);
@@ -1023,12 +843,10 @@ function renderSmart(){
    SIGNALS
 ═══════════════════════════════════════════ */
 function renderSignals(){
-  renderScoreFilterBar(STATE.signalTab);
   const container=document.getElementById('signalsContent');
   const mfData=computeMFData(),mfPicks=computeMFPicks(mfData);
   const signals=STATE.foData?.signals||{},trends=STATE.trendsData?.trends||{};
   const tab=STATE.signalTab,sector=STATE.sector;
-  const minScore=STATE.scoreFilter[tab]||0;
   const allSyms=new Set([...mfPicks.map(p=>toSym(p.stock)),...Object.keys(signals).filter(s=>signals[s].score>0.5)]);
   let items=[];
   allSyms.forEach(sym=>{
@@ -1043,12 +861,7 @@ function renderSignals(){
   });
   if(sector!=='all')items=items.filter(i=>i.sec.toLowerCase().includes(sector));
   items.sort((a,b)=>tab==='mf'?b.mfScore-a.mfScore:tab==='fo'?b.foScore-a.foScore:b.prob.total-a.prob.total);
-  // Apply score filter threshold
-  items=items.filter(i=>{
-    if(tab==='mf') return minScore>0?i.mfScore>=minScore:i.mfScore>0;
-    if(tab==='fo') return minScore>0?i.foScore>=minScore:i.foScore>0.3;
-    return minScore>0?i.prob.total>=minScore:i.prob.total>30;
-  }).slice(0,40);
+  items=items.filter(i=>tab==='mf'?i.mfScore>0:tab==='fo'?i.foScore>0.3:i.prob.total>30).slice(0,40);
   if(!items.length){container.innerHTML=`<div class="empty"><div class="empty-icon">⚡</div>No signals match this filter${!STATE.foData?'<br><small>F&O data not loaded yet</small>':''}</div>`;return;}
   container.innerHTML=items.map((item,idx)=>{
     const{sym,fo,mfPick,trend,prob,d1,oiSig,prem}=item,expandId=`sig-exp-${idx}`;
@@ -1063,7 +876,7 @@ function renderSignals(){
       <div class="card-header">
         <div class="card-title">${sym} ${livePriceChip(sym,true)}</div>
         ${mfPick?`<span class="badge badge-sector">${item.sec}</span>`:''}${conf}
-        ${tipWrap("P:"+prob.total,"prob","font-size:.72rem;font-family:'Space Mono',monospace;font-weight:800;color:"+probColor)}
+        <span style="font-size:.72rem;font-family:'Space Mono',monospace;font-weight:800;color:${probColor}">P:${prob.total}</span>
         <div class="card-header-actions">
           <button class="hbtn-link" onclick="window.open('https://www.nseindia.com/get-quotes/derivatives?symbol=${sym}','_blank')">↗ NSE</button>
           <button class="hbtn hbtn-ghost" onclick="toggleWatch('${sym}',this)">${isWatched?'★':'☆'} Watch</button>
@@ -1132,6 +945,10 @@ function renderHeld(){
    AUTO-PILOT ENGINE
 ═══════════════════════════════════════════ */
 const AUTO_THRESHOLD=75,AUTO_MAX=5,AUTO_MAX_SEC=2,AUTO_HOLD=15,AUTO_COOL=10;
+const AUTO_PORTFOLIO_RISK=0.02;   // 2% portfolio risk per trade
+const AUTO_PORTFOLIO_SIZE=1000000; // ₹10L notional portfolio for sizing
+const AUTO_TRAIL_TRIGGER=0.04;    // activate trailing SL at +4% gain
+const AUTO_TRAIL_DIST=0.025;      // trail SL 2.5% below peak
 
 function runAutoPilot(){
   if(!STATE.foData?.signals)return;
@@ -1148,8 +965,19 @@ function runAutoPilot(){
   openAuto.forEach(t=>{
     const fo=signals[t.sym],cmp=fo?.cl||null;
     if(!cmp)return;
+    // Update peak price for trailing SL
+    if(cmp>t.peakCmp){
+      t.peakCmp=cmp;
+      // Activate trailing SL once +4% above entry
+      const gain=(cmp-t.entry)/t.entry;
+      if(gain>=AUTO_TRAIL_TRIGGER){
+        const newTrail=+(cmp*(1-AUTO_TRAIL_DIST)).toFixed(2);
+        if(newTrail>t.trailSl){t.trailSl=newTrail;}
+      }
+    }
+    const effectiveSl=Math.max(t.sl,t.trailSl||t.sl);
     if(cmp>=t.target)closeAutoTrade(t.id,'auto_target',cmp);
-    else if(cmp<=t.sl)closeAutoTrade(t.id,'auto_sl',cmp);
+    else if(cmp<=effectiveSl)closeAutoTrade(t.id,effectiveSl>t.sl?'auto_trail':'auto_sl',cmp);
     else{const el=Math.round((Date.now()-new Date(t.date).getTime())/86400000);if(el>=AUTO_HOLD*1.4)closeAutoTrade(t.id,'auto_time',cmp);}
   });
   const openNow=STATE.autoLog.filter(t=>t.status==='open');
@@ -1164,31 +992,25 @@ function runAutoPilot(){
     if(recentExit.has(sym)||openNow.find(t=>t.sym===sym))return;
     const sec=mfPick?.sec||'Unknown';
     if((secCount[sec]||0)>=AUTO_MAX_SEC)return;
-    const vol=parseFloat(fo.vol)/100||0.25,entry=fo.cl,target=+(entry*(1+vol*0.35)).toFixed(2),sl=+(entry*(1-vol*0.18)).toFixed(2),rr=(target-entry)/(entry-sl);
+    const vol=parseFloat(fo.vol)/100||0.25,entry=fo.cl;
+    if(!entry||entry<=0)return;
+    const target=+(entry*(1+vol*0.35)).toFixed(2),sl=+(entry*(1-vol*0.18)).toFixed(2);
+    const rr=(target-entry)/(entry-sl);
     if(rr<1.5)return;
-    scored.push({sym,sec,entry,target,sl,rr:+rr.toFixed(1),prob,fo,mfPick,trend});
+    // Position sizing: risk ₹ / (entry - SL) = quantity
+    const riskRs=AUTO_PORTFOLIO_SIZE*AUTO_PORTFOLIO_RISK;
+    const slDist=entry-sl;
+    const qty=slDist>0?Math.max(1,Math.floor(riskRs/slDist)):1;
+    const notional=+(entry*qty).toFixed(0);
+    scored.push({sym,sec,entry,target,sl,rr:+rr.toFixed(1),prob,fo,mfPick,trend,qty,notional,peakCmp:entry});
   });
   scored.sort((a,b)=>b.prob.total-a.prob.total);
   const slots=AUTO_MAX-openNow.length;
   scored.slice(0,slots).forEach(c=>{
     secCount[c.sec]=(secCount[c.sec]||0)+1;
     if(secCount[c.sec]>AUTO_MAX_SEC)return;
-    STATE.autoLog.push({id:`AP-${Date.now()}-${c.sym}`,sym:c.sym,sector:c.sec,entry:c.entry,target:c.target,sl:c.sl,rr:c.rr,prob:c.prob,status:'open',type:'auto',date:new Date().toISOString(),daysLeft:AUTO_HOLD});
+    STATE.autoLog.push({id:`AP-${Date.now()}-${c.sym}`,sym:c.sym,sector:c.sec,entry:c.entry,target:c.target,sl:c.sl,trailSl:c.sl,rr:c.rr,qty:c.qty||1,notional:c.notional||c.entry,peakCmp:c.entry,prob:c.prob,status:'open',type:'auto',date:new Date().toISOString(),daysLeft:AUTO_HOLD});
   });
-  // Log decision record
-  const _rejected=scored.filter(c=>c.prob.total<AUTO_THRESHOLD||recentExit.has(c.sym)).slice(0,6).map(c=>({
-    sym:c.sym,prob:c.prob.total,
-    reason:c.prob.total<AUTO_THRESHOLD?'P:'+c.prob.total+' < threshold '+AUTO_THRESHOLD:
-      recentExit.has(c.sym)?'Cooldown':'Sector limit'
-  }));
-  STATE.autoDecisionLog.unshift({
-    ts:Date.now(),evaluated:scored.length,
-    qualified:scored.filter(c=>c.prob.total>=AUTO_THRESHOLD).length,
-    openCount:STATE.autoLog.filter(t=>t.status==='open').length,
-    rejections:_rejected,foDataDate:STATE.foData?.date||'unknown'
-  });
-  if(STATE.autoDecisionLog.length>10)STATE.autoDecisionLog.splice(10);
-  try{localStorage.setItem('mfi_adlog',JSON.stringify(STATE.autoDecisionLog));}catch(e){}
   localStorage.setItem('mfi_auto',JSON.stringify(STATE.autoLog));
   renderAutoTrades();
 }
@@ -1211,33 +1033,33 @@ function renderAutoTrades(){
     const fo=STATE.foData.signals[t.sym],cmp=fo?.cl??t.entry,uPnl=+((cmp-t.entry)/t.entry*100).toFixed(2),up=uPnl>=0;
     const prog=Math.min(98,Math.max(2,((cmp-t.sl)/(t.target-t.sl))*100)).toFixed(0);
     const toTgt=(((t.target-cmp)/cmp)*100).toFixed(1),prob=t.prob||{total:0,breakdown:{confluence:{score:0},momentum:{score:0},consistency:{score:0},timing:{score:0}}};
-    return`<div class="card"><div class="card-accent"></div>
+    const trailing=t.trailSl&&t.trailSl>t.sl;
+    const effectiveSl=Math.max(t.sl,t.trailSl||0);
+    const daysIn=Math.round((Date.now()-new Date(t.date).getTime())/86400000);
+    const pnlRs=t.qty?+((cmp-t.entry)*t.qty).toFixed(0):null;
+    return`<div class="card"><div class="card-accent${up?'':' red'}"></div>
       <div class="card-header">
         <div class="card-title">${t.sym} ${livePriceChip(t.sym,true)} <span class="badge badge-auto">🤖 AUTO</span></div>
-        <span class="days-badge">${AUTO_HOLD}d max</span>
-        <span style="font-family:'Space Mono',monospace;font-weight:800;font-size:.8rem;color:var(--green)">P:${prob.total}</span>
+        <span class="days-badge" data-tip="Days in trade / max hold period">${daysIn}d / ${AUTO_HOLD}d</span>
+        <span style="font-family:'Space Mono',monospace;font-weight:800;font-size:.8rem;color:${prob.total>=75?'var(--green)':'var(--amber)'}">P:${prob.total}</span>
       </div>
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:3px;margin:6px 0;padding:6px;background:var(--surface2);border-radius:6px;border:1px solid var(--border)">
-        <div style="text-align:center"><div style="font-size:.6rem;color:var(--text-muted)">Conf</div><div style="font-size:.78rem;font-weight:700;color:var(--accent)">${prob.breakdown.confluence?.score||0}</div></div>
-        <div style="text-align:center"><div style="font-size:.6rem;color:var(--text-muted)">Mom</div><div style="font-size:.78rem;font-weight:700;color:var(--blue)">${prob.breakdown.momentum?.score||0}</div></div>
-        <div style="text-align:center"><div style="font-size:.6rem;color:var(--text-muted)">Trend</div><div style="font-size:.78rem;font-weight:700;color:var(--purple)">${prob.breakdown.consistency?.score||0}</div></div>
-        <div style="text-align:center"><div style="font-size:.6rem;color:var(--text-muted)">Timing</div><div style="font-size:.78rem;font-weight:700;color:var(--amber)">${prob.breakdown.timing?.score||0}</div></div>
+        <div style="text-align:center" data-tip="Confluence score — how many signal sources agree"><div style="font-size:.6rem;color:var(--text-muted)">Conf</div><div style="font-size:.78rem;font-weight:700;color:var(--accent)">${prob.breakdown.confluence?.score||0}</div></div>
+        <div style="text-align:center" data-tip="Momentum quality from F&O data"><div style="font-size:.6rem;color:var(--text-muted)">Mom</div><div style="font-size:.78rem;font-weight:700;color:var(--blue)">${prob.breakdown.momentum?.score||0}</div></div>
+        <div style="text-align:center" data-tip="Trend consistency over tracked days"><div style="font-size:.6rem;color:var(--text-muted)">Trend</div><div style="font-size:.78rem;font-weight:700;color:var(--purple)">${prob.breakdown.consistency?.score||0}</div></div>
+        <div style="text-align:center" data-tip="Entry timing quality — lower 1D move = better entry"><div style="font-size:.6rem;color:var(--text-muted)">Timing</div><div style="font-size:.78rem;font-weight:700;color:var(--amber)">${prob.breakdown.timing?.score||0}</div></div>
       </div>
-      <div class="card-grid">
-        <div><div class="card-col-label">Entry · SL</div><div class="card-col-val">₹${fmt(t.entry)}</div><div style="font-size:.7rem;color:var(--red)">SL ₹${fmt(t.sl)}</div></div>
-        <div><div class="card-col-label">Target · ${toTgt}% away · R:R ${t.rr}:1</div><div class="card-col-val" style="color:var(--green)">₹${fmt(t.target)}</div><div style="margin-top:3px"><span class="lpc ${up?'lpc-up':'lpc-dn'}">${up?'+':''}${uPnl.toFixed(2)}% P&L</span></div></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin:4px 0">
+        <div><div class="card-col-label">Entry</div><div class="card-col-val">₹${fmt(t.entry)}</div></div>
+        <div><div class="card-col-label">${trailing?'Trail SL 🔺':'Stop Loss'}</div><div class="card-col-val" style="color:${trailing?'var(--amber)':'var(--red)'}">₹${fmt(effectiveSl)}</div></div>
+        <div><div class="card-col-label">Target · R:R ${t.rr}:1</div><div class="card-col-val" style="color:var(--green)">₹${fmt(t.target)}</div></div>
       </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin:4px 0 2px">
+        <span style="font-size:.72rem;color:var(--text-muted)">Qty: ${t.qty||1} · Notional ₹${t.notional?Math.round(t.notional).toLocaleString('en-IN'):'—'}</span>
+        <span class="lpc ${up?'lpc-up':'lpc-dn'}" style="font-size:.78rem">${up?'+':''}${uPnl.toFixed(2)}% ${pnlRs!=null?'(₹'+pnlRs.toLocaleString('en-IN')+')':''}</span>
+      </div>
+      <div style="font-size:.68rem;color:var(--text-muted);margin-bottom:4px">${toTgt}% to target</div>
       <div class="progress-bar"><div class="progress-fill" style="width:${prog}%;background:${up?'var(--green)':'var(--red)'}"></div></div>
-      <button class="card-expand-toggle" onclick="toggleExpand('aexp-${t.id}',this)"><span>▸</span> Why selected · signal status</button>
-      <div class="card-expand-body" id="aexp-${t.id}">
-        <div class="expand-section-title">Entry Score Breakdown (P:${prob.total}/100)</div>
-        <div class="expand-line"><span class="expand-label">Confluence (${prob.breakdown.confluence?.sources||0} sources)</span><span class="expand-val" style="color:var(--accent)">${prob.breakdown.confluence?.score||0}/25</span></div>
-        <div class="expand-line"><span class="expand-label">Momentum Quality</span><span class="expand-val" style="color:var(--blue)">${prob.breakdown.momentum?.score||0}/25</span></div>
-        <div class="expand-line"><span class="expand-label">Trend Consistency (${prob.breakdown.consistency?.daysTracked||0}d)</span><span class="expand-val" style="color:var(--purple)">${prob.breakdown.consistency?.score||0}/25</span></div>
-        <div class="expand-line"><span class="expand-label">Entry Timing</span><span class="expand-val" style="color:var(--amber)">${prob.breakdown.timing?.score||0}/25</span></div>
-        <div class="expand-section-title">Current Signal — live recheck</div>
-        ${(()=>{const mD=computeMFData(),mP=computeMFPicks(mD).find(p=>toSym(p.stock)===t.sym)||null,tr=STATE.trendsData?.trends?.[t.sym]||null,foN=STATE.foData?.signals?.[t.sym]||null,cP=foN?computeProbScore(t.sym,mP,foN,tr):{total:0};const delta=cP.total-(prob.total||0);const col=delta>=0?'var(--green)':delta>=-10?'var(--amber)':delta>=-25?'var(--orange, #FF9F43)':'var(--red)';const warn=delta<-25?'<div style="margin-top:5px;padding:5px 8px;background:rgba(255,69,96,.1);border-radius:5px;font-size:.72rem;color:var(--red)">⚠ Thesis materially weakened. Review position.</div>':delta<-10?'<div style="margin-top:5px;padding:5px 8px;background:rgba(255,159,67,.1);border-radius:5px;font-size:.72rem;color:var(--amber)">↓ Signal declining — monitor closely.</div>':'';return`<div class="expand-line"><span class="expand-label">Score today</span><span class="expand-val" style="color:${col}">P:${cP.total} (${delta>=0?'+':''}${delta} vs entry)</span></div>${warn}`;})()}
-      </div>
     </div>`;
   }).join('');
 }
@@ -1318,8 +1140,8 @@ function renderHistoryTrades(){
   const allClosed=[...STATE.trades.filter(t=>t.status==='closed'),...STATE.autoLog.filter(t=>t.status!=='open')].sort((a,b)=>new Date(b.closeDate||b.date)-new Date(a.closeDate||a.date));
   hc.textContent=allClosed.length;
   if(!allClosed.length){container.innerHTML=`<div class="empty"><div class="empty-icon">✓</div>No closed trades yet</div>`;return;}
-  const oc={target:'outcome-hit',sl:'outcome-sl',time:'outcome-time',manual:'outcome-manual',auto_target:'outcome-hit',auto_sl:'outcome-sl',auto_time:'outcome-time'};
-  const ol={target:'Target Hit ✅',sl:'SL Hit ❌',time:'Time Exit ⏱',manual:'Manual 🖐',auto_target:'Target Hit ✅',auto_sl:'SL Hit ❌',auto_time:'Time Exit ⏱'};
+  const oc={target:'outcome-hit',sl:'outcome-sl',time:'outcome-time',manual:'outcome-manual',auto_target:'outcome-hit',auto_sl:'outcome-sl',auto_time:'outcome-time',auto_trail:'outcome-sl'};
+  const ol={target:'Target Hit ✅',sl:'SL Hit ❌',time:'Time Exit ⏱',manual:'Manual 🖐',auto_target:'Target Hit ✅',auto_sl:'SL Hit ❌',auto_time:'Time Exit ⏱',auto_trail:'Trail SL 🔺'};
   container.innerHTML=allClosed.slice(0,20).map(t=>`<div class="card">
     <div class="card-header">
       <div class="card-title">${t.stock||t.sym} ${t.type==='auto'?'<span class="badge badge-auto">AUTO</span>':''}</div>
@@ -1336,15 +1158,59 @@ function renderHistoryTrades(){
 ═══════════════════════════════════════════ */
 function renderAnalytics(){
   const panel=STATE.analyticsPanel,container=document.getElementById('analyticsContent');
-  ({accuracy:renderAccuracy,oi:renderOI,sector:renderSectorPulse,top:renderTopPerformers,calendar:renderCalendar,corr:renderCorrelation,trades:renderTradesIntel}[panel]||
+  ({accuracy:renderAccuracy,oi:renderOI,sector:renderSectorPulse,top:renderTopPerformers,calendar:renderCalendar,corr:renderCorrelation}[panel]||
   (()=>{container.innerHTML='<div class="empty">Coming soon</div>';}))();
+}
+function computeAccuracyStats(){
+  const closed=[...STATE.trades.filter(t=>t.status==='closed'),...STATE.autoLog.filter(t=>t.status!=='open'&&t.status!=='cancelled')];
+  if(!closed.length)return null;
+  const band=(p)=>p>=75?'high':p>=60?'mid':'low';
+  const groups={high:{win:0,total:0},mid:{win:0,total:0},low:{win:0,total:0},all:{win:0,total:0}};
+  let totalPnl=0,winners=0,losers=0,avgWin=0,avgLoss=0,winPnls=[],lossPnls=[];
+  closed.forEach(t=>{
+    const p=t.prob?.total||0;
+    const isWin=['target','auto_target'].includes(t.outcome);
+    const b=band(p);
+    groups[b].total++;groups.all.total++;
+    if(isWin){groups[b].win++;groups.all.win++;winners++;}
+    else losers++;
+    if(t.pnlPct!=null){
+      totalPnl+=t.pnlPct;
+      if(t.pnlPct>0)winPnls.push(t.pnlPct);
+      else lossPnls.push(Math.abs(t.pnlPct));
+    }
+  });
+  avgWin=winPnls.length?+(winPnls.reduce((a,b)=>a+b,0)/winPnls.length).toFixed(1):0;
+  avgLoss=lossPnls.length?+(lossPnls.reduce((a,b)=>a+b,0)/lossPnls.length).toFixed(1):0;
+  const expectancy=winPnls.length&&lossPnls.length?+((groups.all.win/groups.all.total*avgWin)-((1-groups.all.win/groups.all.total)*avgLoss)).toFixed(2):null;
+  return{groups,totalPnl:+totalPnl.toFixed(1),winners,losers,avgWin,avgLoss,expectancy,total:closed.length};
 }
 function renderAccuracy(){
   const c=document.getElementById('analyticsContent');
-  const bands=[{label:'P ≥75',win:84},{label:'P ≥60',win:71},{label:'All',win:62}];
-  c.innerHTML=`<div class="analytics-card"><div class="analytics-title">📊 Signal Accuracy by Probability Band</div>
-  ${bands.map(b=>`<div class="accuracy-row"><div class="accuracy-label">${b.label}</div><div class="accuracy-track"><div class="accuracy-fill" style="width:${b.win}%"></div></div><div class="accuracy-pct">${b.win}%</div></div>`).join('')}
-  <div style="margin-top:12px;font-size:.75rem;color:var(--text-muted)">${Object.keys(STATE.trendsData?.trends||{}).length} stocks tracked · ${STATE.trendsData?.daysAvailable||0} days of history</div></div>`;
+  const stats=computeAccuracyStats();
+  const bands=[
+    {label:'P ≥75',key:'high',fallback:84},
+    {label:'P 60-74',key:'mid',fallback:71},
+    {label:'All trades',key:'all',fallback:62}
+  ];
+  const hasReal=stats&&stats.total>=3;
+  const winRate=(g)=>hasReal&&stats.groups[g].total>0?Math.round(stats.groups[g].win/stats.groups[g].total*100):null;
+  c.innerHTML=`<div class="analytics-card">
+    <div class="analytics-title">📊 Signal Accuracy${hasReal?` — ${stats.total} trades`:' — Simulated (need 3+ trades)'}</div>
+    ${bands.map(b=>{
+      const wr=winRate(b.key)??b.fallback;
+      const cnt=hasReal?` <span style="color:var(--text-muted);font-size:.65rem">(${stats.groups[b.key].win}/${stats.groups[b.key].total})</span>`:'';
+      return`<div class="accuracy-row"><div class="accuracy-label" style="width:70px">${b.label}</div><div class="accuracy-track"><div class="accuracy-fill" style="width:${wr}%;background:${wr>=70?'var(--green)':wr>=55?'var(--amber)':'var(--red)'}"></div></div><div class="accuracy-pct">${wr}%${cnt}</div></div>`;
+    }).join('')}
+    ${hasReal?`
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
+      <div style="text-align:center"><div style="font-size:.62rem;color:var(--text-muted)">Avg Win</div><div style="font-size:.88rem;font-weight:700;color:var(--green)">+${stats.avgWin}%</div></div>
+      <div style="text-align:center"><div style="font-size:.62rem;color:var(--text-muted)">Avg Loss</div><div style="font-size:.88rem;font-weight:700;color:var(--red)">-${stats.avgLoss}%</div></div>
+      <div style="text-align:center"><div style="font-size:.62rem;color:var(--text-muted)">Expectancy</div><div style="font-size:.88rem;font-weight:700;color:${(stats.expectancy??0)>=0?'var(--green)':'var(--red)'}">${stats.expectancy!=null?(stats.expectancy>=0?'+':'')+stats.expectancy+'%':'—'}</div></div>
+      <div style="text-align:center"><div style="font-size:.62rem;color:var(--text-muted)">Total P&L</div><div style="font-size:.88rem;font-weight:700;color:${stats.totalPnl>=0?'var(--green)':'var(--red)'}">${stats.totalPnl>=0?'+':''}${stats.totalPnl}%</div></div>
+    </div>`:''}
+    <div style="margin-top:10px;font-size:.72rem;color:var(--text-muted)">${Object.keys(STATE.trendsData?.trends||{}).length} stocks tracked · ${STATE.trendsData?.daysAvailable||0} days of F&O history${!hasReal?' · Accuracy % are illustrative until you have 3+ closed trades':''}</div>
+  </div>`;
 }
 function renderOI(){
   const c=document.getElementById('analyticsContent');
@@ -1400,155 +1266,6 @@ function renderCorrelation(){
 }
 
 /* ═══════════════════════════════════════════
-   ANALYTICS — TRADES INTELLIGENCE
-═══════════════════════════════════════════ */
-function renderTradesIntel(){
-  const c=document.getElementById('analyticsContent');
-  const allClosed=[...STATE.trades.filter(t=>t.status==='closed'),...STATE.autoLog.filter(t=>t.status!=='open')];
-  const allOpen=[...STATE.trades.filter(t=>t.status==='open'),...STATE.autoLog.filter(t=>t.status==='open')];
-  const signals=STATE.foData?.signals||{};
-  let h='';
-
-  // ── A: Live P&L with signal recheck ────────────────────────────────────────
-  h+=`<div class="analytics-card" style="margin-bottom:12px">
-    <div class="analytics-title">📊 Live P&L · Signal Recheck</div>`;
-  if(!allOpen.length){
-    h+=`<div style="font-size:.8rem;color:var(--text-muted);text-align:center;padding:10px">No open positions</div>`;
-  } else {
-    allOpen.forEach(t=>{
-      const sym=t.sym||toSym(t.stock||'');
-      const fo=signals[sym];
-      const cmp=fo?.cl??t.entry;
-      const uPnl=+((cmp-t.entry)/t.entry*100).toFixed(2);
-      const up=uPnl>=0;
-      const days=Math.round((Date.now()-new Date(t.date).getTime())/86400000);
-      // Recheck current prob
-      const mfD=computeMFData(),mfP=computeMFPicks(mfD).find(p=>toSym(p.stock)===sym)||null;
-      const tr=STATE.trendsData?.trends?.[sym]||null;
-      const curP=fo?computeProbScore(sym,mfP,fo,tr):{total:0};
-      const entryP=t.prob?.total||0;
-      const delta=curP.total-entryP;
-      const deltaCol=delta>=0?'var(--green)':delta>=-10?'var(--amber)':'var(--red)';
-      const warn=delta<-25?'🔴':delta<-10?'🟡':'🟢';
-      h+=`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--border)">
-        <div style="flex:1">
-          <div style="font-weight:700;font-size:.85rem">${sym} ${t.type==='auto'?'<span class="badge badge-auto" style="font-size:.6rem">AUTO</span>':''}</div>
-          <div style="font-size:.68rem;color:var(--text-muted)">${days}d held · Entry ₹${fmt(t.entry)}</div>
-        </div>
-        <div style="text-align:right;min-width:80px">
-          <div style="font-family:'Space Mono',monospace;font-weight:700;font-size:.85rem;color:${up?'var(--green)':'var(--red)'}">${up?'+':''}${uPnl.toFixed(2)}%</div>
-          <div style="font-size:.65rem;color:${deltaCol}">${warn} P:${curP.total} (${delta>=0?'+':''}${delta})</div>
-        </div>
-      </div>`;
-    });
-  }
-  h+=`</div>`;
-
-  // ── B: Decision Log ────────────────────────────────────────────────────────
-  try{ STATE.autoDecisionLog=JSON.parse(localStorage.getItem('mfi_adlog')||'[]'); }catch(e){}
-  h+=`<div class="analytics-card" style="margin-bottom:12px">
-    <div class="analytics-title">🤖 Auto-Pilot Decision Log</div>`;
-  if(!STATE.autoDecisionLog.length){
-    h+=`<div style="font-size:.8rem;color:var(--text-muted);text-align:center;padding:10px">No runs yet — engine runs when F&O data loads</div>`;
-  } else {
-    STATE.autoDecisionLog.slice(0,5).forEach(run=>{
-      const d=new Date(run.ts);
-      const timeStr=d.toLocaleDateString('en-IN',{day:'numeric',month:'short'})+' '+d.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});
-      h+=`<div style="padding:8px 0;border-bottom:1px solid var(--border)">
-        <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-          <span style="font-size:.75rem;font-weight:700">${timeStr}</span>
-          <span style="font-size:.7rem;color:var(--text-muted)">Data: ${run.foDataDate}</span>
-        </div>
-        <div style="display:flex;gap:8px;font-size:.72rem;margin-bottom:4px">
-          <span style="color:var(--text-muted)">Evaluated: <b style="color:var(--text)">${run.evaluated}</b></span>
-          <span style="color:var(--text-muted)">Qualified: <b style="color:var(--green)">${run.qualified}</b></span>
-          <span style="color:var(--text-muted)">Open: <b style="color:var(--accent)">${run.openCount}</b></span>
-        </div>
-        ${run.rejections?.length?`<div style="font-size:.68rem;color:var(--text-muted)">Rejected: ${run.rejections.slice(0,4).map(r=>`<span style="margin-right:6px"><b>${r.sym}</b> P:${r.prob} — ${r.reason}</span>`).join('')}</div>`:''}
-      </div>`;
-    });
-  }
-  h+=`</div>`;
-
-  // ── C: Win/Loss by factor ──────────────────────────────────────────────────
-  h+=`<div class="analytics-card" style="margin-bottom:12px">
-    <div class="analytics-title">🏆 Win Rate by Signal Source</div>`;
-  if(allClosed.length<3){
-    h+=`<div style="font-size:.8rem;color:var(--text-muted);text-align:center;padding:10px">Need 3+ closed trades for analysis</div>`;
-  } else {
-    // Group by confluence level
-    const groups={triple:[],two:[],single:[]};
-    allClosed.forEach(t=>{
-      const src=t.prob?.breakdown?.confluence?.sources||0;
-      const won=(t.exitPrice||t.entry)>t.entry;
-      if(src>=3)groups.triple.push(won);
-      else if(src>=2)groups.two.push(won);
-      else groups.single.push(won);
-    });
-    const wr=arr=>arr.length?Math.round(arr.filter(Boolean).length/arr.length*100):null;
-    [
-      {label:'⚡⚡ Triple Lock',arr:groups.triple},
-      {label:'⚡ 2 Signals',arr:groups.two},
-      {label:'Single source',arr:groups.single},
-    ].forEach(g=>{
-      const w=wr(g.arr);if(w===null)return;
-      const col=w>=70?'var(--green)':w>=50?'var(--amber)':'var(--red)';
-      h+=`<div class="accuracy-row">
-        <div style="width:90px;font-size:.72rem;color:var(--text-muted)">${g.label}</div>
-        <div class="accuracy-track" style="flex:1"><div class="accuracy-fill" style="width:${w}%;background:${col}"></div></div>
-        <div class="accuracy-pct" style="color:${col}">${w}%</div>
-        <div style="font-size:.65rem;color:var(--text-muted);margin-left:4px">${g.arr.length}t</div>
-      </div>`;
-    });
-    // By auto vs manual
-    const autoTrades=allClosed.filter(t=>t.type==='auto');
-    const manTrades=allClosed.filter(t=>t.type!=='auto');
-    if(autoTrades.length){const w=wr(autoTrades.map(t=>(t.exitPrice||t.entry)>t.entry));const col=w>=70?'var(--green)':w>=50?'var(--amber)':'var(--red)';h+=`<div class="accuracy-row" style="margin-top:4px"><div style="width:90px;font-size:.72rem;color:var(--text-muted)">🤖 Auto trades</div><div class="accuracy-track" style="flex:1"><div class="accuracy-fill" style="width:${w}%;background:${col}"></div></div><div class="accuracy-pct" style="color:${col}">${w}%</div><div style="font-size:.65rem;color:var(--text-muted);margin-left:4px">${autoTrades.length}t</div></div>`;}
-    if(manTrades.length){const w=wr(manTrades.map(t=>(t.exitPrice||t.entry)>t.entry));const col=w>=70?'var(--green)':w>=50?'var(--amber)':'var(--red)';h+=`<div class="accuracy-row"><div style="width:90px;font-size:.72rem;color:var(--text-muted)">🖐 Manual</div><div class="accuracy-track" style="flex:1"><div class="accuracy-fill" style="width:${w}%;background:${col}"></div></div><div class="accuracy-pct" style="color:${col}">${w}%</div><div style="font-size:.65rem;color:var(--text-muted);margin-left:4px">${manTrades.length}t</div></div>`;}
-  }
-  h+=`</div>`;
-
-  // ── D: Signal Decay Tracker ────────────────────────────────────────────────
-  h+=`<div class="analytics-card">
-    <div class="analytics-title">📉 Signal Decay — Open Positions</div>`;
-  const openWithProb=allOpen.filter(t=>t.prob?.total);
-  if(!openWithProb.length){
-    h+=`<div style="font-size:.8rem;color:var(--text-muted);text-align:center;padding:10px">No open trades with score history</div>`;
-  } else {
-    openWithProb.forEach(t=>{
-      const sym=t.sym||toSym(t.stock||'');
-      const fo=signals[sym];
-      const mfD=computeMFData(),mfP=computeMFPicks(mfD).find(p=>toSym(p.stock)===sym)||null;
-      const tr=STATE.trendsData?.trends?.[sym]||null;
-      const curP=fo?computeProbScore(sym,mfP,fo,tr):{total:t.prob.total};
-      const entryP=t.prob.total;
-      const delta=curP.total-entryP;
-      const pct=Math.max(0,Math.min(100,curP.total));
-      const entryPct=Math.max(0,Math.min(100,entryP));
-      const decayDir=delta>=5?'↑ Strengthening':delta>=-5?'→ Stable':delta>=-15?'↓ Declining':delta>=-25?'↓↓ Weakening':'↓↓↓ Critical';
-      const dcol=delta>=0?'var(--green)':delta>=-5?'var(--text-muted)':delta>=-15?'var(--amber)':delta>=-25?'var(--orange, #FF9F43)':'var(--red)';
-      h+=`<div style="padding:8px 0;border-bottom:1px solid var(--border)">
-        <div style="display:flex;justify-content:space-between;margin-bottom:6px">
-          <span style="font-weight:700;font-size:.82rem">${sym}</span>
-          <span style="font-size:.72rem;color:${dcol};font-weight:700">${decayDir}</span>
-        </div>
-        <div style="position:relative;height:8px;background:var(--border);border-radius:4px;margin-bottom:4px">
-          <div style="position:absolute;height:100%;width:${entryPct}%;background:var(--border);border-radius:4px;border:1px dashed var(--text-muted)"></div>
-          <div style="position:absolute;height:100%;width:${pct}%;background:${dcol};border-radius:4px;opacity:.8"></div>
-        </div>
-        <div style="display:flex;justify-content:space-between;font-size:.65rem;color:var(--text-muted)">
-          <span>Entry P:${entryP}</span><span style="color:${dcol}">Now P:${curP.total} (${delta>=0?'+':''}${delta})</span>
-        </div>
-      </div>`;
-    });
-  }
-  h+=`</div>`;
-
-  c.innerHTML=h;
-}
-
-
-/* ═══════════════════════════════════════════
    EXPAND TOGGLE
 ═══════════════════════════════════════════ */
 function toggleExpand(id,btn){
@@ -1585,15 +1302,51 @@ function updateFreshness(){
    DATA FETCHING
 ═══════════════════════════════════════════ */
 async function fetchNifty(){
+  // Try internal API first
   try{
-    const r=await fetch('/api/nifty');if(!r.ok)return;
-    const d=await r.json();if(!d.dataAvailable)return;
-    if(d.indices?.nifty)renderNiftyTile('nifty',d.indices.nifty);
-    if(d.indices?.banknifty)renderNiftyTile('bnk',d.indices.banknifty);
-    if(d.quotes)Object.assign(STATE.quotes,d.quotes);
-    STATE.quotesAge=d.fetchedAt;
+    const r=await fetch('/api/nifty');
+    if(r.ok){
+      const d=await r.json();
+      if(d.dataAvailable){
+        if(d.indices?.nifty)renderNiftyTile('nifty',d.indices.nifty);
+        if(d.indices?.banknifty)renderNiftyTile('bnk',d.indices.banknifty);
+        if(d.quotes)Object.assign(STATE.quotes,d.quotes);
+        STATE.quotesAge=d.fetchedAt;
+        refreshCurrentTab();
+        return;
+      }
+    }
+  }catch(e){}
+  // Fallback: NSE via CORS proxy (direct fetch is CORS-blocked in browsers)
+  try{
+    const nseUrl=encodeURIComponent('https://www.nseindia.com/api/allIndices');
+    const r=await fetchWithTimeout(`https://api.allorigins.win/get?url=${nseUrl}`,{},10000);
+    if(!r.ok)throw new Error('proxy '+r.status);
+    const wrapper=await r.json();
+    const d=JSON.parse(wrapper.contents);
+    const rows=d.data||[];
+    const nifty=rows.find(x=>x.index==='NIFTY 50'||x.indexSymbol==='NIFTY 50');
+    const bnk=rows.find(x=>x.index==='NIFTY BANK'||x.indexSymbol==='NIFTY BANK');
+    const toTile=(row)=>row?{last:row.last??row.previousClose,close:row.last,previousClose:row.previousClose,changePct:row.percentChange,change:row.variation,high:row.high,low:row.low,fetchedAt:new Date().toISOString()}:null;
+    const nt=toTile(nifty),bt=toTile(bnk);
+    if(nt)renderNiftyTile('nifty',nt);
+    if(bt)renderNiftyTile('bnk',bt);
+    STATE.quotesAge=new Date().toISOString();
     refreshCurrentTab();
-  }catch(e){console.warn('Nifty fetch:',e);}
+    return;
+  }catch(e){console.warn('Nifty proxy failed:',e.message);}
+  // Final fallback: persisted data already shown by loadPersistedIndexData()
+  // Just update status badge quietly if tiles were never populated
+  ['nifty','bnk'].forEach(prefix=>{
+    const valEl=document.getElementById(prefix+'Val');
+    if(valEl&&valEl.textContent==='—'){
+      // No persisted data either — show minimal placeholder
+      const chg=document.getElementById(prefix+'Chg');
+      if(chg){chg.textContent='No data — market closed';chg.style.color='var(--text-muted)';}
+    }
+    const st=document.getElementById(prefix+'Status');
+    if(st&&st.textContent==='—'){st.textContent='○ CLOSED';st.className='mkt-status mkt-closed';}
+  });
 }
 
 async function fetchFOData(){
@@ -1618,21 +1371,285 @@ async function fetchTrends(){
   }catch(e){console.warn('Trends fetch:',e);}
 }
 
-function renderNiftyTile(prefix,d){
+/* ═══════════════════════════════════════════
+   FII / DII — last trading day (N-1)
+═══════════════════════════════════════════ */
+function lastTradingDate(){
+  // Returns the most recent weekday (Mon-Fri) before today
+  const d=new Date();
+  d.setHours(0,0,0,0);
+  // If today is before market close (~3:45pm IST) treat yesterday as N-1
+  const now=new Date();
+  const istH=now.getUTCHours()+5,istM=now.getUTCMinutes()+30;
+  const mktClosed=istH>10||(istH===10&&istM>=15); // data usually available after ~10:15am IST next day
+  if(!mktClosed)d.setDate(d.getDate()-1); // still yesterday even if today's not ready
+  // Walk back to nearest weekday
+  while(d.getDay()===0||d.getDay()===6)d.setDate(d.getDate()-1);
+  return d;
+}
+
+function fmtCr(val){
+  // val in crores, format with sign + commas
+  if(val==null||isNaN(val))return'—';
+  const n=Math.round(val);
+  const sign=n>=0?'+':'-';
+  return sign+'₹'+Math.abs(n).toLocaleString('en-IN')+' Cr';
+}
+
+function renderFIIDII(fiiNet,diiNet,dateStr){
+  const fiiEl=document.getElementById('fiiVal'),diiEl=document.getElementById('diiVal');
+  const fiiDt=document.getElementById('fiiDate'),diiDt=document.getElementById('diiDate');
+  if(!fiiEl||!diiEl)return;
+  const dateLabel=dateStr||'';
+  if(fiiDt)fiiDt.textContent=dateLabel;
+  if(diiDt)diiDt.textContent=dateLabel;
+  fiiEl.textContent=fmtCr(fiiNet);
+  fiiEl.style.color=fiiNet>=0?'var(--green)':'var(--red)';
+  diiEl.textContent=fmtCr(diiNet);
+  diiEl.style.color=diiNet>=0?'var(--green)':'var(--red)';
+}
+
+/* timeout-safe fetch wrapper — AbortSignal.timeout() can't be cloned in some envs */
+function fetchWithTimeout(url,opts={},ms=8000){
+  const ctrl=new AbortController();
+  const tid=setTimeout(()=>ctrl.abort(),ms);
+  return fetch(url,{...opts,signal:ctrl.signal}).finally(()=>clearTimeout(tid));
+}
+
+async function fetchFIIDII(){
+  // 1. Try your own backend proxy (best path — add /api/fiidii to your server)
+  try{
+    const r=await fetchWithTimeout('/api/fiidii',{},4000);
+    if(r.ok){
+      const d=await r.json();
+      if(d.fii!=null){renderFIIDII(d.fii,d.dii,d.date);return;}
+    }
+  }catch(e){}
+
+  // 2. CORS proxy wrapping NSE endpoint (avoids direct browser CORS block)
+  //    allorigins.win is a reliable free CORS proxy — no keys needed
+  try{
+    const target=lastTradingDate();
+    const label=target.toLocaleDateString('en-IN',{day:'numeric',month:'short'});
+    const nseUrl=encodeURIComponent('https://www.nseindia.com/api/fiidiiTradeReact');
+    const proxyUrl=`https://api.allorigins.win/get?url=${nseUrl}`;
+    const r=await fetchWithTimeout(proxyUrl,{},8000);
+    if(!r.ok)throw new Error('proxy '+r.status);
+    const wrapper=await r.json();
+    const data=JSON.parse(wrapper.contents);
+    if(!Array.isArray(data)||!data.length)throw new Error('empty');
+    const fmt2=s=>{const[dd,mm,yyyy]=s.split('-');return new Date(`${mm} ${dd} ${yyyy}`);};
+    const sorted=[...data].sort((a,b)=>fmt2(b.date)-fmt2(a.date));
+    const row=sorted[0];
+    // NSE field names vary by endpoint version — try both known schemas
+    const fiiNet=(parseFloat(row.fiiBuyValue||row.fiiBuy||row.fii_buy_value||0))
+                -(parseFloat(row.fiiSellValue||row.fiiSell||row.fii_sell_value||0));
+    const diiNet=(parseFloat(row.diiBuyValue||row.diiBuy||row.dii_buy_value||0))
+                -(parseFloat(row.diiSellValue||row.diiSell||row.dii_sell_value||0));
+    const rowDate=row.date?fmt2(row.date):target;
+    const rowLabel=rowDate.toLocaleDateString('en-IN',{day:'numeric',month:'short'});
+    renderFIIDII(fiiNet,diiNet,rowLabel);
+    return;
+  }catch(e){console.warn('FII/DII proxy failed:',e.message);}
+
+  // 3. Silent fallback — show date + N/A, no noisy console error
+  const target=lastTradingDate();
+  const label=target.toLocaleDateString('en-IN',{day:'numeric',month:'short'});
+  const fiiEl=document.getElementById('fiiVal'),diiEl=document.getElementById('diiVal');
+  const fiiDt=document.getElementById('fiiDate'),diiDt=document.getElementById('diiDate');
+  if(fiiDt)fiiDt.textContent=label;if(diiDt)diiDt.textContent=label;
+  if(fiiEl){fiiEl.textContent='N/A';fiiEl.style.color='var(--text-muted)';}
+  if(diiEl){diiEl.textContent='N/A';diiEl.style.color='var(--text-muted)';}
+}
+
+
+/* ═══════════════════════════════════════════
+   MARKET NEWS — RSS via CORS proxy
+   Sources: Economic Times Markets, Moneycontrol, LiveMint
+═══════════════════════════════════════════ */
+const NEWS_FEEDS=[
+  {url:'https://economictimes.indiatimes.com/markets/rss.cms',source:'ET Markets'},
+  {url:'https://www.moneycontrol.com/rss/MCtopnews.xml',source:'Moneycontrol'},
+  {url:'https://www.livemint.com/rss/markets',source:'LiveMint'},
+];
+
+// Keywords to colour-code news dots
+const NEWS_BULL=['buy','bullish','rally','surge','rise','gain','up','growth','record','high','positive','invest'];
+const NEWS_BEAR=['sell','bearish','fall','drop','crash','down','loss','decline','risk','concern','weak','cut'];
+
+function newssentiment(title){
+  const t=title.toLowerCase();
+  if(NEWS_BULL.some(w=>t.includes(w)))return'green';
+  if(NEWS_BEAR.some(w=>t.includes(w)))return'red';
+  return'';
+}
+
+function timeAgo(dateStr){
+  const d=new Date(dateStr);if(isNaN(d))return'';
+  const diff=Math.round((Date.now()-d)/60000);
+  if(diff<1)return'just now';
+  if(diff<60)return diff+'m ago';
+  if(diff<1440)return Math.round(diff/60)+'h ago';
+  return Math.round(diff/1440)+'d ago';
+}
+
+function extractNewsItems(xmlText,sourceName){
+  const parser=new DOMParser();
+  const doc=parser.parseFromString(xmlText,'text/xml');
+  const items=[...doc.querySelectorAll('item')].slice(0,5);
+  return items.map(item=>{
+    const title=item.querySelector('title')?.textContent?.replace(/<[^>]+>/g,'').trim()||'';
+    const link=item.querySelector('link')?.textContent?.trim()||
+                item.querySelector('guid')?.textContent?.trim()||'#';
+    const pubDate=item.querySelector('pubDate')?.textContent||'';
+    const desc=item.querySelector('description')?.textContent?.replace(/<[^>]+>/g,'').trim().slice(0,120)||'';
+    return{title,link,pubDate,desc,source:sourceName};
+  }).filter(i=>i.title);
+}
+
+async function fetchNews(){
+  const container=document.getElementById('newsFeed');
+  if(!container)return;
+  const ageEl=document.getElementById('newsAge');
+
+  const allItems=[];
+  // Fetch all feeds concurrently through allorigins proxy
+  const results=await Promise.allSettled(
+    NEWS_FEEDS.map(async feed=>{
+      const proxyUrl=`https://api.allorigins.win/get?url=${encodeURIComponent(feed.url)}`;
+      const r=await fetchWithTimeout(proxyUrl,{},8000);
+      if(!r.ok)throw new Error(feed.source+' '+r.status);
+      const wrapper=await r.json();
+      return extractNewsItems(wrapper.contents,feed.source);
+    })
+  );
+
+  results.forEach(r=>{if(r.status==='fulfilled')allItems.push(...r.value);});
+
+  // Sort by pubDate descending
+  allItems.sort((a,b)=>new Date(b.pubDate)-new Date(a.pubDate));
+
+  if(!allItems.length){
+    container.innerHTML=`<div class="news-error">📰 Could not load news — check your connection or backend proxy</div>`;
+    return;
+  }
+
+  // Deduplicate by title similarity (first 40 chars)
+  const seen=new Set();
+  const deduped=allItems.filter(item=>{
+    const key=item.title.slice(0,40).toLowerCase();
+    if(seen.has(key))return false;
+    seen.add(key);return true;
+  }).slice(0,12);
+
+  if(ageEl)ageEl.textContent='Updated '+timeAgo(deduped[0]?.pubDate||new Date());
+
+  container.innerHTML=deduped.map(item=>{
+    const sentiment=newssentiment(item.title);
+    const dotClass='news-dot'+(sentiment?' '+sentiment:'');
+    const tag=sentiment==='green'?'<span class="news-tag green">Bullish</span>':
+               sentiment==='red'?'<span class="news-tag red">Bearish</span>':'';
+    const age=timeAgo(item.pubDate);
+    return`<a class="news-item" href="${item.link}" target="_blank" rel="noopener">
+      <div class="${dotClass}"></div>
+      <div class="news-body">
+        <div class="news-title">${item.title}</div>
+        <div class="news-meta">
+          <span class="news-source">${item.source}</span>
+          ${age?`<span class="news-age">${age}</span>`:''}
+          ${tag}
+        </div>
+      </div>
+    </a>`;
+  }).join('');
+}
+
+function getISTMinutes(){
+  const now=new Date();
+  return((now.getUTCHours()*60+now.getUTCMinutes())+330)%1440;
+}
+function isMarketOpen(){
+  const dow=new Date().getUTCDay(),m=getISTMinutes();
+  return dow>=1&&dow<=5&&m>=555&&m<=930;
+}
+function isPreOpen(){
+  const dow=new Date().getUTCDay(),m=getISTMinutes();
+  return dow>=1&&dow<=5&&m>=540&&m<555;
+}
+function isWeekday(){
+  const dow=new Date().getUTCDay();return dow>=1&&dow<=5;
+}
+
+function renderNiftyTile(prefix,d,isStale=false){
   if(!d)return;
-  const up=d.changePct>=0;
-  document.getElementById(prefix+'Val').textContent=d.last.toLocaleString('en-IN',{maximumFractionDigits:2});
+  // Persist to state + localStorage so we can restore on reload
+  if(!isStale){
+    STATE['last'+prefix.charAt(0).toUpperCase()+prefix.slice(1)]=d;
+    try{localStorage.setItem('mfi_idx_'+prefix,JSON.stringify({...d,savedAt:new Date().toISOString()}));}catch(e){}
+  }
+  const val=d.last??d.close??d.previousClose??0;
+  const up=(d.changePct??0)>=0;
+  document.getElementById(prefix+'Val').textContent=val.toLocaleString('en-IN',{maximumFractionDigits:2});
+  // Change line
   const chgEl=document.getElementById(prefix+'Chg');
-  chgEl.textContent=`${up?'▲':'▼'} ${Math.abs(d.changePct).toFixed(2)}% (${up?'+':''}${d.change.toLocaleString('en-IN',{maximumFractionDigits:2})})`;
-  chgEl.className='index-change '+(up?'up':'down');
+  if(d.changePct!=null){
+    chgEl.textContent=`${up?'▲':'▼'} ${Math.abs(d.changePct).toFixed(2)}% (${up?'+':''}${(d.change??0).toLocaleString('en-IN',{maximumFractionDigits:2})})`;
+    chgEl.className='index-change '+(up?'up':'down');
+    chgEl.style.color='';
+  }else{
+    chgEl.textContent='—';chgEl.className='index-change';chgEl.style.color='var(--text-muted)';
+  }
+  // H/L
   const hEl=document.getElementById(prefix+'H'),lEl=document.getElementById(prefix+'L');
-  if(hEl)hEl.textContent=d.high?.toLocaleString('en-IN',{maximumFractionDigits:2})||'—';
-  if(lEl)lEl.textContent=d.low?.toLocaleString('en-IN',{maximumFractionDigits:2})||'—';
+  if(hEl)hEl.textContent=d.high!=null?d.high.toLocaleString('en-IN',{maximumFractionDigits:2}):'—';
+  if(lEl)lEl.textContent=d.low!=null?d.low.toLocaleString('en-IN',{maximumFractionDigits:2}):'—';
+  // Status badge
+  const open=isMarketOpen(),pre=isPreOpen(),statusEl=document.getElementById(prefix+'Status');
+  if(statusEl){
+    if(isStale){statusEl.textContent='○ CLOSED';statusEl.className='mkt-status mkt-closed';}
+    else if(open){statusEl.textContent='● LIVE';statusEl.className='mkt-status mkt-open';}
+    else if(pre){statusEl.textContent='◐ PRE';statusEl.className='mkt-status mkt-pre';}
+    else{statusEl.textContent='○ CLOSED';statusEl.className='mkt-status mkt-closed';}
+  }
+  // Prev close
+  const pcEl=document.getElementById(prefix+'PC');
+  if(pcEl){
+    if(d.previousClose)pcEl.textContent='Prev: ₹'+d.previousClose.toLocaleString('en-IN',{maximumFractionDigits:2});
+    else pcEl.textContent='';
+  }
+  // Timestamp / stale label
+  const timeEl=document.getElementById(prefix+'Time');
+  if(timeEl){
+    if(isStale&&d.savedAt){
+      const saved=new Date(d.savedAt);
+      const diffH=Math.round((Date.now()-saved)/3600000);
+      timeEl.textContent=diffH<24?`Last: ${saved.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:true})}`:`Last: ${saved.toLocaleDateString('en-IN',{day:'numeric',month:'short'})}`;
+      timeEl.style.color='var(--amber)';
+    }else if(d.fetchedAt){
+      const t=new Date(d.fetchedAt);
+      timeEl.textContent=t.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:true});
+      timeEl.style.color='';
+    }else if(!open){
+      timeEl.textContent='Last close';timeEl.style.color='var(--text-muted)';
+    }
+  }
+}
+
+/* Load persisted index data immediately on boot — tiles filled before any fetch */
+function loadPersistedIndexData(){
+  ['nifty','bnk'].forEach(prefix=>{
+    try{
+      const raw=localStorage.getItem('mfi_idx_'+prefix);
+      if(!raw)return;
+      const d=JSON.parse(raw);
+      renderNiftyTile(prefix,d,true); // isStale=true shows amber timestamp
+    }catch(e){}
+  });
 }
 
 function refreshCurrentTab(){
   const t=STATE.activeTab;
-  if(t==='signals')renderSignals();renderSectorLeaders();else if(t==='smart')renderSmart();else if(t==='trades')renderTrades();else if(t==='held')renderHeld();
+  if(t==='signals')renderSignals();else if(t==='smart')renderSmart();else if(t==='trades')renderTrades();else if(t==='held')renderHeld();
   const ageEl=document.getElementById('quotesAge');
   if(ageEl&&STATE.quotesAge){const secs=Math.round((Date.now()-new Date(STATE.quotesAge))/1000),label=secs<60?secs+'s ago':Math.round(secs/60)+'m ago';ageEl.textContent='⬤ '+label;ageEl.style.color=secs>120?'var(--amber)':'var(--green)';}
 }
@@ -1681,11 +1698,11 @@ function switchTab(tab){
   STATE.activeTab=tab;
   document.querySelectorAll('.nav-tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
   document.querySelectorAll('.tab-panel').forEach(p=>p.classList.toggle('active',p.id===`tab-${tab}`));
-  if(tab==='smart')renderSmart();if(tab==='signals'){renderScoreFilterBar(STATE.signalTab);renderSignals();}if(tab==='held')renderHeld();if(tab==='trades')renderTrades();if(tab==='analytics')renderAnalytics();
+  if(tab==='smart')renderSmart();if(tab==='signals')renderSignals();if(tab==='held')renderHeld();if(tab==='trades')renderTrades();if(tab==='analytics')renderAnalytics();
 }
 function initPillTabs(){
   document.querySelectorAll('[data-stab]').forEach(b=>b.addEventListener('click',()=>{STATE.smartTab=b.dataset.stab;document.querySelectorAll('[data-stab]').forEach(x=>x.classList.toggle('active',x.dataset.stab===b.dataset.stab));renderSmart();}));
-  document.querySelectorAll('[data-sig]').forEach(b=>b.addEventListener('click',()=>{STATE.signalTab=b.dataset.sig;document.querySelectorAll('[data-sig]').forEach(x=>x.classList.toggle('active',x.dataset.sig===b.dataset.sig));renderScoreFilterBar(STATE.signalTab);renderSignals();}));
+  document.querySelectorAll('[data-sig]').forEach(b=>b.addEventListener('click',()=>{STATE.signalTab=b.dataset.sig;document.querySelectorAll('[data-sig]').forEach(x=>x.classList.toggle('active',x.dataset.sig===b.dataset.sig));renderSignals();}));
   document.querySelectorAll('[data-sector]').forEach(b=>b.addEventListener('click',()=>{STATE.sector=b.dataset.sector;document.querySelectorAll('[data-sector]').forEach(x=>x.classList.toggle('active',x.dataset.sector===b.dataset.sector));renderSignals();}));
   document.querySelectorAll('[data-apanel]').forEach(b=>b.addEventListener('click',()=>{STATE.analyticsPanel=b.dataset.apanel;document.querySelectorAll('[data-apanel]').forEach(x=>x.classList.toggle('active',x.dataset.apanel===b.dataset.apanel));renderAnalytics();}));
 }
@@ -1695,22 +1712,18 @@ function initPillTabs(){
 ═══════════════════════════════════════════ */
 function init(){
   loadPrefs();
+  loadPersistedIndexData(); // show last-known index prices instantly
   document.querySelectorAll('.theme-btn').forEach(b=>b.addEventListener('click',()=>applyTheme(b.dataset.theme)));
   document.querySelectorAll('.fs-btn').forEach(b=>b.addEventListener('click',()=>applyFs(parseInt(b.dataset.fs))));
   document.querySelectorAll('.nav-tab').forEach(b=>b.addEventListener('click',()=>switchTab(b.dataset.tab)));
   initPillTabs();initSearch();
   renderHome();renderHeld();renderTrades();
-  try{ STATE.autoDecisionLog=JSON.parse(localStorage.getItem('mfi_adlog')||'[]'); }catch(e){}
-  renderSectorLeaders();renderHomeFundCards();
-  fetchFOData().then(()=>{
-    fetchTrends();
-    fetchNifty();
-    fetchNews(false);
-    renderSectorLeaders();
-    renderHomeFundCards();
-  });
+  fetchFOData().then(()=>{fetchTrends();fetchNifty();});
+  fetchFIIDII();
+  fetchNews();
   setInterval(fetchNifty,60000);
-  setInterval(()=>fetchNews(false),300000); // refresh news every 5min
+  setInterval(fetchFIIDII,300000);
+  setInterval(fetchNews,600000); // refresh news every 10 min
 }
 document.addEventListener('DOMContentLoaded',init);
 </script>
