@@ -379,18 +379,65 @@ function parseDateFromName(name){
 }
 
 function computeSignals(files){
+  // Sort oldest → newest
   files.sort(function(a,b){return a.ts-b.ts;});
-  var latest=files[files.length-1],prev=files.length>=2?files[files.length-2]:null;
-  var nd=latest.d,n1d=prev?prev.d:null,signals={};
-  Object.keys(nd).forEach(function(sym){
-    var d=nd[sym],d1=((d.cl-d.pr)/d.pr)*100;
+  var latest=files[files.length-1];
+  var nd=latest.d;
+  var syms=Object.keys(nd);
+
+  // ── Per-stock metrics using ALL history files ─────────────────────────────
+  // Fixes: (1) d1===d2 bug — true multi-day return uses oldest file
+  //        (2) prem*50 saturation — premium kept as directional signal only
+  var metrics={};
+  syms.forEach(function(sym){
+    var d=nd[sym];
+    var cl=d.cl,pr=d.pr;
+    // True 1D: today close vs today's prev close
+    var true1d=pr?(cl-pr)/pr*100:0;
+    // True multi-day: today close vs oldest available file's prev close
+    var trueNd=true1d;
+    for(var i=files.length-2;i>=0;i--){
+      var h=files[i].d&&files[i].d[sym];
+      if(h&&h.pr){trueNd=(cl-h.pr)/h.pr*100;break;}
+    }
+    // Consistency: fraction of history days where close > prev close
+    var bull=0,total=0;
+    for(var j=0;j<files.length-1;j++){
+      var hs=files[j].d&&files[j].d[sym];
+      if(!hs)continue;
+      total++;
+      if(hs.cl>hs.pr)bull++;
+    }
+    var consistency=total>0?bull/total:0.5;
+    // Futures premium (%) — directional signal
     var prem=d.fc?((d.fc-d.cl)/d.cl)*100:0;
-    var d2=d1;
-    if(n1d&&n1d[sym])d2=((d.cl-n1d[sym].pr)/n1d[sym].pr)*100;
-    var sc=Math.round((d2*0.30+d1*0.20+prem*50-(d.vol>35?(d.vol-35)*0.02:0))*100)/100;
-    sc=Math.max(-5,Math.min(5,sc));
+    // Volatility
+    var vol=d.vol||25;
+    metrics[sym]={true1d:true1d,trueNd:trueNd,consistency:consistency,prem:prem,vol:vol};
+  });
+
+  // ── Rank-based scoring → 178+ unique scores, no saturation ───────────────
+  function rankVals(vals){
+    var sorted=vals.slice().sort(function(a,b){return a-b;});
+    var n=sorted.length-1||1;
+    return vals.map(function(v){return sorted.indexOf(v)/n;});
+  }
+  var r1d  =rankVals(syms.map(function(s){return metrics[s].true1d;}));
+  var rNd  =rankVals(syms.map(function(s){return metrics[s].trueNd;}));
+  var rCons=rankVals(syms.map(function(s){return metrics[s].consistency;}));
+  var rPrem=rankVals(syms.map(function(s){return metrics[s].prem;}));
+  var rVol =rankVals(syms.map(function(s){return -metrics[s].vol;}));
+
+  var signals={};
+  syms.forEach(function(sym,i){
+    // Weighted rank → map 0–1 to -5→+5
+    var rankScore=rNd[i]*0.30+r1d[i]*0.25+rCons[i]*0.20+rPrem[i]*0.15+rVol[i]*0.10;
+    var sc=Math.round((rankScore*10-5)*100)/100;
+    var m=metrics[sym];
+    var d=nd[sym];
+    var premDisp=d.fc?((d.fc-d.cl)/d.cl)*100:0;
     var lb=sc>=2?"Strong Bullish":sc>=1?"Bullish":sc>=0.3?"Mild Bullish":sc<=-2?"Strong Bearish":sc<=-1?"Bearish":sc<=-0.3?"Mild Bearish":"Neutral";
-    signals[sym]={score:sc,label:lb,cl:d.cl,pr:d.pr,d1:d1.toFixed(2),d2:d2.toFixed(2),prem:prem.toFixed(3),vol:d.vol.toFixed(1)};
+    signals[sym]={score:sc,label:lb,cl:d.cl,pr:d.pr,d1:m.true1d.toFixed(2),d2:m.trueNd.toFixed(2),prem:premDisp.toFixed(3),vol:d.vol.toFixed(1)};
   });
   return signals;
 }
