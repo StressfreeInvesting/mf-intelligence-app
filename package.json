@@ -1,5 +1,6 @@
 {
   "name": "mf-intelligence",
-  "version": "7.0.0",
-  "private": true
+  "version": "9.0.0",
+  "private": true,
+  "type": "module"
 }
