@@ -1,0 +1,536 @@
+name: Smart Money Daily Fetch V10
+
+# Runs at 7:00 PM IST (13:30 UTC) Mon–Fri after market close.
+# Also manually triggerable — useful if you upload your own CSV instead.
+#
+# REQUIRED SECRETS (set in app repo → Settings → Secrets → Actions):
+#   DATA_REPO_PAT       — GitHub PAT with contents:write on the data repo
+#
+# OPTIONAL SECRETS (for new V10 features):
+#   SENDGRID_API_KEY    — SendGrid API key for weekly digest email (#12)
+#   DIGEST_EMAIL_TO     — recipient email address for weekly digest
+#   DIGEST_EMAIL_FROM   — sender email address (must be verified in SendGrid)
+#
+# REQUIRED VARS:
+#   GITHUB_OWNER    — your GitHub username
+#   GITHUB_REPO     — data repo name (default: mf-intelligence-data)
+
+on:
+  schedule:
+    - cron: '30 13 * * 1-5'   # 7:00 PM IST Mon–Fri (after market close)
+  workflow_dispatch:
+    inputs:
+      date_override:
+        description: 'Date to fetch (DD-Mon-YYYY e.g. 10-Apr-2026). Leave blank for today.'
+        required: false
+        default: ''
+      skip_nse_fetch:
+        description: 'Skip NSE fetch — just recompute from existing CSV if uploaded manually'
+        required: false
+        default: 'false'
+      force_weekly_digest:
+        description: 'Force send weekly digest email even if not Friday'
+        required: false
+        default: 'false'
+
+jobs:
+  fetch-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout data repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/mf-intelligence-data
+          token: ${{ secrets.DATA_REPO_PAT }}
+          path: data-repo
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests pandas
+
+      - name: Fetch NSE data + compute signals (V10)
+        env:
+          DATE_OVERRIDE: ${{ github.event.inputs.date_override }}
+          SKIP_NSE: ${{ github.event.inputs.skip_nse_fetch }}
+        run: |
+          python3 << 'PYEOF'
+          import requests, time, json, csv, io, os, glob
+          from datetime import datetime, date, timedelta
+
+          # ── Resolve target date ───────────────────────────────────
+          override = os.environ.get('DATE_OVERRIDE','').strip()
+          if override:
+              fetch_date_str = override
+              fetch_date_iso = datetime.strptime(override,'%d-%b-%Y').strftime('%Y-%m-%d')
+          else:
+              today = date.today()
+              if today.weekday() == 5: today -= timedelta(days=1)
+              if today.weekday() == 6: today -= timedelta(days=2)
+              fetch_date_str = today.strftime('%d-%b-%Y')
+              fetch_date_iso = today.strftime('%Y-%m-%d')
+          print(f"Target date: {fetch_date_str} ({fetch_date_iso})")
+
+          NSE = "https://www.nseindia.com"
+          HEADERS = {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+              "Accept-Language": "en-US,en;q=0.9",
+              "Accept-Encoding": "gzip, deflate, br",
+              "Connection": "keep-alive",
+          }
+
+          signals = {}
+          fii_dii = {}
+          bulk_deals = []
+          block_deals = []
+          insider_data = []
+          pcr_data = {}
+          delivery_data = {}
+          stock_count = 0
+
+          if os.environ.get('SKIP_NSE','false').lower() != 'true':
+              session = requests.Session()
+              session.headers.update(HEADERS)
+
+              # ── Establish NSE session (cookie handshake) ──────────
+              print("Establishing NSE session...")
+              try:
+                  session.get(NSE, timeout=20)
+                  time.sleep(2)
+                  session.get(NSE + "/all-reports-derivatives", timeout=20)
+                  time.sleep(2)
+                  session.headers.update({
+                      "Referer": NSE + "/all-reports-derivatives",
+                      "Accept": "application/json, text/plain, */*",
+                  })
+              except Exception as e:
+                  print(f"Session error: {e}")
+
+              def nse_report(name, category, section, date_str):
+                  try:
+                      archives = json.dumps([{"name": name,"type":"archives","category": category,"section": section}])
+                      params = {"archives": archives,"date": date_str,"type": section,"mode": "single"}
+                      r = session.get(NSE + "/api/reports", params=params, timeout=30)
+                      print(f"  {name[:30]}: HTTP {r.status_code}")
+                      if r.status_code != 200: return None
+                      links = r.json()
+                      if isinstance(links, list) and links:
+                          url = links[0].get('link','')
+                          if url:
+                              time.sleep(1)
+                              dr = session.get(url, timeout=30)
+                              return dr.text
+                  except Exception as e:
+                      print(f"  Report error: {e}")
+                  return None
+
+              # ── F&O Daily Volatility CSV ──────────────────────────
+              print("Fetching F&O Volatility...")
+              fovolt = nse_report("F&O - Daily Volatility (csv)", "derivatives", "equity", fetch_date_str)
+              time.sleep(2)
+
+              if fovolt:
+                  INDEX_SYMS = {'NIFTY','BANKNIFTY','SENSEX','FINNIFTY','NIFTYNXT50','MIDCPNIFTY','BANKEX'}
+                  reader = csv.DictReader(io.StringIO(fovolt))
+                  for row in reader:
+                      try:
+                          sym = str(row.get('Symbol', row.get('SYMBOL','')).strip().upper())
+                          if not sym or sym in INDEX_SYMS: continue
+                          cl   = float(row.get('Closing Price', row.get('CLOSE', 0)) or 0)
+                          pr   = float(row.get('Prev Close',   row.get('PREVCLOSE', cl)) or cl)
+                          vol  = float(row.get('Daily Volatility', row.get('DAILYVOL', 0)) or 0)
+                          d1   = round(((cl-pr)/pr*100),2) if pr else 0
+                          prem = round(d1/100*0.3,4)
+                          raw  = (d1/3.0) + (vol/50.0)
+                          score = round(max(-5.0, min(5.0, raw)), 2)
+                          label = ('Strong Bullish' if score>=3 else 'Bullish' if score>=1.5 else
+                                   'Mild Bullish' if score>=0.5 else 'Strong Bearish' if score<=-3 else
+                                   'Bearish' if score<=-1.5 else 'Mild Bearish' if score<=-0.5 else 'Neutral')
+                          signals[sym] = {'score':score,'label':label,'cl':cl,'pr':pr,
+                                          'd1':str(d1),'d2':str(d1),'prem':str(prem),'vol':str(round(vol,1))}
+                          stock_count += 1
+                      except: continue
+                  print(f"  Parsed {stock_count} stocks")
+
+              # ── FII/DII flow ──────────────────────────────────────
+              print("Fetching FII/DII flow...")
+              try:
+                  session.headers.update({"Referer": NSE + "/market-data/live-equity-market"})
+                  fii_r = session.get(NSE + "/api/fiidiiTradeReact", timeout=20)
+                  if fii_r.status_code == 200:
+                      fii_data = fii_r.json()
+                      if isinstance(fii_data, list) and fii_data:
+                          latest = fii_data[0]
+                          fii_buy  = float(str(latest.get('fiiBuy','0')).replace(',','') or 0)
+                          fii_sell = float(str(latest.get('fiiSell','0')).replace(',','') or 0)
+                          dii_buy  = float(str(latest.get('diiBuy','0')).replace(',','') or 0)
+                          dii_sell = float(str(latest.get('diiSell','0')).replace(',','') or 0)
+                          fii_dii = {
+                              'fii': round(fii_buy - fii_sell, 2),
+                              'dii': round(dii_buy - dii_sell, 2),
+                              'fiiBuy': fii_buy, 'fiiSell': fii_sell,
+                              'diiBuy': dii_buy, 'diiSell': dii_sell,
+                              'date': fetch_date_iso
+                          }
+                          print(f"  FII net: {fii_dii['fii']} Cr, DII net: {fii_dii['dii']} Cr")
+              except Exception as e:
+                  print(f"  FII/DII error: {e}")
+              time.sleep(1)
+
+              # ── Bulk + Block deals ────────────────────────────────
+              print("Fetching Bulk/Block deals...")
+              try:
+                  session.headers.update({"Referer": NSE + "/companies-listing/corporate-filings-bulk-deals"})
+                  bulk_r = session.get(NSE + f"/api/historical/bulk-deals?from={fetch_date_iso}&to={fetch_date_iso}", timeout=20)
+                  if bulk_r.status_code == 200:
+                      for d in (bulk_r.json().get('data') or []):
+                          try:
+                              qty = float(str(d.get('quantityTraded','0')).replace(',','') or 0)
+                              price = float(str(d.get('tradePrice','0')).replace(',','') or 0)
+                              value = round((qty * price) / 1e7, 2)  # in Crores
+                              bulk_deals.append({
+                                  'stock': str(d.get('symbol','')).upper().strip(),
+                                  'client': str(d.get('clientName','')).strip(),
+                                  'type': 'BUY' if str(d.get('buySell','')).upper().startswith('B') else 'SELL',
+                                  'qty': int(qty), 'price': price, 'value': value,
+                                  'date': fetch_date_str
+                              })
+                          except: continue
+                  block_r = session.get(NSE + f"/api/historical/block-deals?from={fetch_date_iso}&to={fetch_date_iso}", timeout=20)
+                  if block_r.status_code == 200:
+                      for d in (block_r.json().get('data') or []):
+                          try:
+                              qty = float(str(d.get('quantityTraded','0')).replace(',','') or 0)
+                              price = float(str(d.get('tradePrice','0')).replace(',','') or 0)
+                              value = round((qty * price) / 1e7, 2)
+                              block_deals.append({
+                                  'stock': str(d.get('symbol','')).upper().strip(),
+                                  'client': str(d.get('clientName','')).strip(),
+                                  'type': 'BUY' if str(d.get('buySell','')).upper().startswith('B') else 'SELL',
+                                  'qty': int(qty), 'price': price, 'value': value,
+                                  'date': fetch_date_str
+                              })
+                          except: continue
+                  print(f"  Bulk: {len(bulk_deals)}, Block: {len(block_deals)}")
+              except Exception as e:
+                  print(f"  Deals error: {e}")
+              time.sleep(1)
+
+              # ── #2 INSIDER TRADING — NSE SAST/Form-C ─────────────
+              # NSE publishes insider trading disclosures as JSON via corporate filings API
+              print("Fetching Insider Trading disclosures...")
+              try:
+                  session.headers.update({"Referer": NSE + "/companies-listing/corporate-filings-insider-trading"})
+                  # Fetch last 7 days of insider trading
+                  from_date = (datetime.strptime(fetch_date_iso,'%Y-%m-%d') - timedelta(days=7)).strftime('%Y-%m-%d')
+                  ins_r = session.get(
+                      NSE + f"/api/corporates-pit?index=equities&from_date={from_date}&to_date={fetch_date_iso}&category=insider-trading-initial",
+                      timeout=25
+                  )
+                  if ins_r.status_code == 200:
+                      ins_data = ins_r.json()
+                      for d in (ins_data.get('data') or [])[:50]:
+                          try:
+                              qty = float(str(d.get('noOfShareAcqOrDisp','0')).replace(',','') or 0)
+                              price = float(str(d.get('acqFromDt_price','0')).replace(',','') or 0)
+                              value = round((qty * price) / 1e7, 2)
+                              trans_type = str(d.get('typeOfSecuritiesPostTrans',''))
+                              buy_sell = 'BUY' if 'acq' in str(d.get('typeOfTrans','')).lower() or value > 0 else 'SELL'
+                              insider_data.append({
+                                  'stock': str(d.get('symbol','')).upper().strip(),
+                                  'person': str(d.get('personName','')).strip(),
+                                  'role': str(d.get('personCategory','')).strip(),
+                                  'type': buy_sell,
+                                  'qty': int(qty),
+                                  'price': price,
+                                  'value': value,
+                                  'date': str(d.get('intimDt',fetch_date_str))[:10],
+                                  'mode': str(d.get('acqDisp','')).strip()
+                              })
+                          except: continue
+                  # Also try the SAST endpoint (promoter acquisitions)
+                  sast_r = session.get(
+                      NSE + f"/api/corporates-pit?index=equities&from_date={from_date}&to_date={fetch_date_iso}&category=insider-trading-continual",
+                      timeout=25
+                  )
+                  if sast_r.status_code == 200:
+                      for d in (sast_r.json().get('data') or [])[:20]:
+                          try:
+                              qty = float(str(d.get('noOfShareAcqOrDisp','0')).replace(',','') or 0)
+                              price = float(str(d.get('acqFromDt_price','0')).replace(',','') or 0)
+                              value = round((qty * price) / 1e7, 2)
+                              insider_data.append({
+                                  'stock': str(d.get('symbol','')).upper().strip(),
+                                  'person': str(d.get('personName','')).strip(),
+                                  'role': 'Promoter',
+                                  'type': 'BUY' if 'acq' in str(d.get('typeOfTrans','')).lower() else 'SELL',
+                                  'qty': int(qty), 'price': price, 'value': value,
+                                  'date': str(d.get('intimDt',fetch_date_str))[:10],
+                                  'mode': 'Market Purchase'
+                              })
+                          except: continue
+                  print(f"  Insider disclosures: {len(insider_data)}")
+              except Exception as e:
+                  print(f"  Insider error: {e}")
+              time.sleep(1)
+
+              # ── #10 DELIVERY VOLUME from NSE Bhavcopy ─────────────
+              print("Fetching delivery volume data...")
+              try:
+                  # NSE CM bhavcopy (equity delivery data) 
+                  del_r = nse_report("CM - Bhavcopy with delivery position", "equities", "equity", fetch_date_str)
+                  if del_r:
+                      reader2 = csv.DictReader(io.StringIO(del_r))
+                      for row in reader2:
+                          try:
+                              sym = str(row.get('SYMBOL','').strip().upper())
+                              if not sym: continue
+                              tot_traded = float(str(row.get('TOTTRDQTY','0')).replace(',','') or 0)
+                              del_qty = float(str(row.get('DELIV_QTY','0')).replace(',','') or 0)
+                              if tot_traded > 0:
+                                  del_pct = round(del_qty / tot_traded * 100, 1)
+                                  delivery_data[sym] = del_pct
+                          except: continue
+                      # Inject delivery% into signals
+                      for sym in signals:
+                          if sym in delivery_data:
+                              signals[sym]['delPct'] = delivery_data[sym]
+                      print(f"  Delivery data for {len(delivery_data)} stocks")
+              except Exception as e:
+                  print(f"  Delivery error: {e}")
+              time.sleep(1)
+
+              # ── #11 PCR (Put-Call Ratio) per stock ────────────────
+              print("Fetching PCR per stock...")
+              try:
+                  session.headers.update({"Referer": NSE + "/option-chain"})
+                  # Nifty PCR from OI data
+                  nifty_oc = session.get(NSE + "/api/option-chain-indices?symbol=NIFTY", timeout=20)
+                  if nifty_oc.status_code == 200:
+                      oc_data = nifty_oc.json()
+                      total_put_oi = sum(r.get('PE',{}).get('openInterest',0) for r in (oc_data.get('records',{}).get('data') or []) if r.get('PE'))
+                      total_call_oi = sum(r.get('CE',{}).get('openInterest',0) for r in (oc_data.get('records',{}).get('data') or []) if r.get('CE'))
+                      if total_call_oi > 0:
+                          pcr_data['NIFTY'] = round(total_put_oi / total_call_oi, 2)
+                          print(f"  NIFTY PCR: {pcr_data['NIFTY']}")
+                  time.sleep(1)
+                  # BankNifty PCR
+                  bnk_oc = session.get(NSE + "/api/option-chain-indices?symbol=BANKNIFTY", timeout=20)
+                  if bnk_oc.status_code == 200:
+                      oc_data2 = bnk_oc.json()
+                      tpo = sum(r.get('PE',{}).get('openInterest',0) for r in (oc_data2.get('records',{}).get('data') or []) if r.get('PE'))
+                      tco = sum(r.get('CE',{}).get('openInterest',0) for r in (oc_data2.get('records',{}).get('data') or []) if r.get('CE'))
+                      if tco > 0: pcr_data['BANKNIFTY'] = round(tpo / tco, 2)
+                  time.sleep(1)
+                  # Top 10 individual stocks PCR
+                  top_stocks = ['ICICIBANK','HDFCBANK','RELIANCE','INFY','TCS','BAJFINANCE','AXISBANK','SBIN','BHARTIARTL','LT','TATAMOTORS','SUNPHARMA']
+                  for sym in top_stocks:
+                      try:
+                          r = session.get(NSE + f"/api/option-chain-equities?symbol={sym}", timeout=15)
+                          if r.status_code == 200:
+                              d = r.json()
+                              tpo = sum(x.get('PE',{}).get('openInterest',0) for x in (d.get('records',{}).get('data') or []) if x.get('PE'))
+                              tco = sum(x.get('CE',{}).get('openInterest',0) for x in (d.get('records',{}).get('data') or []) if x.get('CE'))
+                              if tco > 0: pcr_data[sym] = round(tpo / tco, 2)
+                          time.sleep(0.5)
+                      except: continue
+                  print(f"  PCR data for {len(pcr_data)} symbols")
+              except Exception as e:
+                  print(f"  PCR error: {e}")
+
+          # ── Build 5-day FII/DII chart data ────────────────────────
+          hist_files = sorted(glob.glob('data-repo/data/history/*.json'))[-5:]
+          five_day = []
+          for hf in hist_files:
+              try:
+                  with open(hf) as f: hd = json.load(f)
+                  d = hd.get('fiiDii',{})
+                  if d:
+                      day_label = os.path.basename(hf).replace('.json','')
+                      from datetime import datetime as dt2
+                      dl = dt2.strptime(day_label,'%Y-%m-%d').strftime('%a')
+                      five_day.append({'d':dl,'fii':d.get('fii',0),'dii':d.get('dii',0)})
+              except: continue
+          if fii_dii:
+              from datetime import datetime as dt2
+              five_day.append({'d':dt2.strptime(fetch_date_iso,'%Y-%m-%d').strftime('%a'),
+                               'fii':fii_dii.get('fii',0),'dii':fii_dii.get('dii',0)})
+
+          # ── Assemble and write JSON ───────────────────────────────
+          from datetime import datetime as dt
+          output = {
+              'signals': signals,
+              'fiiDii': fii_dii,
+              'fiiDiiHistory': five_day[-5:],
+              'bulkDeals': bulk_deals,
+              'blockDeals': block_deals,
+              'insiderData': insider_data,        # NEW #2
+              'pcr': pcr_data,                    # NEW #11
+              'meta': {
+                  'date': fetch_date_iso,
+                  'latestDate': fetch_date_str,
+                  'updatedAt': dt.utcnow().isoformat() + 'Z',
+                  'stockCount': stock_count,
+                  'files': [fetch_date_str],
+                  'version': 'V10'
+              }
+          }
+
+          os.makedirs('data-repo/data/history', exist_ok=True)
+          with open('data-repo/data/fno_signals.json','w') as f:
+              json.dump(output, f, separators=(',',':'))
+          print(f"Written fno_signals.json ({stock_count} stocks, {len(insider_data)} insider, {len(pcr_data)} PCR)")
+
+          hist_path = f'data-repo/data/history/{fetch_date_iso}.json'
+          with open(hist_path,'w') as f:
+              json.dump(output, f, separators=(',',':'))
+          print(f"Written {hist_path}")
+
+          # Update index.json
+          all_hist = sorted([os.path.basename(f).replace('.json','')
+                             for f in glob.glob('data-repo/data/history/*.json')
+                             if '.gitkeep' not in f])
+          with open('data-repo/data/index.json','w') as f:
+              json.dump({'dates':all_hist[-30:],'lastUpdated':dt.utcnow().isoformat()+'Z',
+                         'totalUploads':len(all_hist),'latestDate':fetch_date_iso,
+                         'latestStockCount':stock_count,'version':'V10'}, f, indent=2)
+          print(f"Updated index.json ({len(all_hist)} dates)")
+          PYEOF
+
+      - name: Commit and push to data repo
+        working-directory: data-repo
+        run: |
+          git config user.name  "smart-money-bot"
+          git config user.email "bot@mf-intelligence"
+          git add -A
+          git diff --cached --quiet && echo "Nothing changed" || \
+            (git commit -m "data: smart money V10 $(date -u +'%Y-%m-%d %H:%M UTC')" && git push)
+
+      # ── #12 WEEKLY DIGEST EMAIL (every Friday at 7PM IST) ──────────
+      - name: Send Weekly Digest Email
+        if: |
+          env.SENDGRID_API_KEY != '' &&
+          (github.event.inputs.force_weekly_digest == 'true' ||
+           format('{0}', github.run_id) != '' && '5' == steps.check_day.outputs.day_of_week)
+        env:
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          DIGEST_EMAIL_TO: ${{ secrets.DIGEST_EMAIL_TO }}
+          DIGEST_EMAIL_FROM: ${{ secrets.DIGEST_EMAIL_FROM }}
+        run: |
+          python3 << 'PYEOF'
+          import os, json, glob, requests
+          from datetime import datetime
+
+          # Only run on Fridays or if forced
+          today = datetime.utcnow()
+          is_friday = today.weekday() == 4  # 0=Mon, 4=Fri
+          force = os.environ.get('INPUT_FORCE_WEEKLY_DIGEST','false').lower()=='true'
+          if not is_friday and not force:
+              print(f"Not Friday ({today.strftime('%A')}) and not forced — skipping digest")
+              exit(0)
+
+          api_key = os.environ.get('SENDGRID_API_KEY','')
+          to_email = os.environ.get('DIGEST_EMAIL_TO','')
+          from_email = os.environ.get('DIGEST_EMAIL_FROM','')
+          if not api_key or not to_email:
+              print("SENDGRID_API_KEY or DIGEST_EMAIL_TO not set — skipping email")
+              exit(0)
+
+          # Load latest data
+          try:
+              with open('data-repo/data/fno_signals.json') as f:
+                  data = json.load(f)
+          except:
+              print("Could not load fno_signals.json")
+              exit(0)
+
+          signals = data.get('signals', {})
+          bulk = data.get('bulkDeals', [])[:5]
+          insider = data.get('insiderData', [])[:5]
+          fii = data.get('fiiDii', {})
+          date_str = data.get('meta',{}).get('latestDate','this week')
+
+          # Build email body
+          top_bulls = sorted([(s,v) for s,v in signals.items() if v.get('score',0)>=2],
+                             key=lambda x:-x[1]['score'])[:5]
+          top_bears = sorted([(s,v) for s,v in signals.items() if v.get('score',0)<=-2],
+                             key=lambda x:x[1]['score'])[:3]
+
+          html_body = f"""
+          <html><body style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#1a2a3a">
+          <div style="background:#05080F;padding:20px;border-radius:8px;margin-bottom:20px">
+            <h1 style="color:#00E599;margin:0;font-size:1.4rem">📊 MF Intelligence Weekly Digest</h1>
+            <p style="color:#5A6A82;margin:5px 0 0;font-size:.85rem">Week ending {date_str}</p>
+          </div>
+
+          <h2 style="color:#18243A;font-size:1rem;border-bottom:2px solid #00E599;padding-bottom:6px">⚡ Top Bullish Signals</h2>
+          <table style="width:100%;border-collapse:collapse">
+          {''.join(f'<tr><td style="padding:8px;font-weight:bold">{s}</td><td style="padding:8px;color:#0A7C59;font-family:monospace">Score: +{v["score"]}</td><td style="padding:8px;color:#666;font-size:.85rem">₹{v.get("cl",0):,.2f}</td></tr>' for s,v in top_bulls)}
+          </table>
+
+          {f'<h2 style="color:#18243A;font-size:1rem;border-bottom:2px solid #D93025;padding-bottom:6px">⚠ Bearish Signals to Watch</h2><table style="width:100%;border-collapse:collapse">{"".join(f"<tr><td style=padding:8px;font-weight:bold>{s}</td><td style=padding:8px;color:#D93025;font-family:monospace>Score: {v[score]}</td></tr>" for s,v in top_bears)}</table>' if top_bears else ''}
+
+          <h2 style="color:#18243A;font-size:1rem;border-bottom:2px solid #4DA6FF;padding-bottom:6px">🏦 Bulk Deals This Week</h2>
+          {''.join(f'<p style="margin:4px 0"><strong>{d.get("stock","")}</strong> — {d.get("client","")} {d.get("type","")} ₹{d.get("value",0):.1f} Cr</p>' for d in bulk) or '<p style="color:#666">No significant bulk deals</p>'}
+
+          {f'<h2 style="color:#18243A;font-size:1rem;border-bottom:2px solid #FFB830;padding-bottom:6px">🔍 Insider Activity</h2>{"".join(f"<p style=margin:4px 0><strong>{d.get(stock,)}</strong> — {d.get(person,)} ({d.get(role,)}) {d.get(type,)} ₹{d.get(value,0):.1f} Cr</p>" for d in insider) or "<p style=color:#666>No insider disclosures</p>"}'  if insider else ''}
+
+          <h2 style="color:#18243A;font-size:1rem;border-bottom:2px solid #5A6A82;padding-bottom:6px">📡 FII / DII Flow</h2>
+          <p>FII: <strong style="color:{'#0A7C59' if fii.get('fii',0)>=0 else '#D93025'}">₹{abs(fii.get('fii',0)):,.0f} Cr {'Net Buy' if fii.get('fii',0)>=0 else 'Net Sell'}</strong> &nbsp;|&nbsp;
+             DII: <strong style="color:#1558D6">₹{abs(fii.get('dii',0)):,.0f} Cr {'Net Buy' if fii.get('dii',0)>=0 else 'Net Sell'}</strong></p>
+
+          <div style="background:#EEF2F7;padding:14px;border-radius:8px;margin-top:20px;font-size:.8rem;color:#60718A">
+            Generated by <strong>MF Intelligence V10</strong> · Open the app for full analysis and interactive signals.
+            <br><a href="https://mf-intelligence.vercel.app" style="color:#1558D6">→ Open MF Intelligence</a>
+          </div>
+          </body></html>
+          """
+
+          # Send via SendGrid
+          resp = requests.post(
+              "https://api.sendgrid.com/v3/mail/send",
+              headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+              json={
+                  "personalizations": [{"to": [{"email": to_email}]}],
+                  "from": {"email": from_email or "noreply@mfintelligence.app", "name": "MF Intelligence"},
+                  "subject": f"📊 Smart Money Weekly Digest — {date_str}",
+                  "content": [{"type": "text/html", "value": html_body}]
+              }
+          )
+          if resp.status_code in (200, 202):
+              print(f"✅ Digest email sent to {to_email}")
+          else:
+              print(f"❌ Email send failed: {resp.status_code} {resp.text}")
+          PYEOF
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Smart Money Daily Fetch V10" >> $GITHUB_STEP_SUMMARY
+          echo "**Date fetched:** $(date -u +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
+          if [ -f data-repo/data/fno_signals.json ]; then
+            python3 - << 'EOF'
+          import json,sys
+          try:
+            d=json.load(open('data-repo/data/fno_signals.json'))
+            m=d.get('meta',{})
+            print(f"**Stocks:** {m.get('stockCount',0)}")
+            print(f"**Bulk deals:** {len(d.get('bulkDeals',[]))}")
+            print(f"**Insider disclosures:** {len(d.get('insiderData',[]))}")
+            print(f"**PCR symbols:** {len(d.get('pcr',{}))}")
+            fii=d.get('fiiDii',{})
+            if fii: print(f"**FII net:** ₹{fii.get('fii',0):,.0f} Cr | **DII net:** ₹{fii.get('dii',0):,.0f} Cr")
+            print("**Status:** ✅ V10 Success")
+          except Exception as e:
+            print(f"**Status:** ❌ Error: {e}")
+          EOF
+            >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Status:** ❌ fno_signals.json not written" >> $GITHUB_STEP_SUMMARY
+          fi
