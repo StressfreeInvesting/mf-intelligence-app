@@ -1,0 +1,279 @@
+name: Smart Money Daily Fetch
+
+# Runs at 7:00 PM IST (13:30 UTC) Mon–Fri after market close.
+# Also manually triggerable — useful if you upload your own CSV instead.
+#
+# REQUIRED SECRETS (set in app repo → Settings → Secrets → Actions):
+#   DATA_REPO_PAT   — GitHub personal access token with contents:write on the data repo
+#
+# REQUIRED VARS (set in Vercel dashboard → Settings → Environment Variables):
+#   GITHUB_OWNER    — your GitHub username
+#   GITHUB_REPO     — data repo name (default: mf-intelligence-data)
+
+on:
+  schedule:
+    - cron: '30 13 * * 1-5'   # 7:00 PM IST Mon–Fri
+  workflow_dispatch:
+    inputs:
+      date_override:
+        description: 'Date to fetch (DD-Mon-YYYY e.g. 10-Apr-2026). Leave blank for today.'
+        required: false
+        default: ''
+      skip_nse_fetch:
+        description: 'Skip NSE fetch — just recompute from existing CSV if uploaded manually'
+        required: false
+        default: 'false'
+
+jobs:
+  fetch-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout data repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/mf-intelligence-data
+          token: ${{ secrets.DATA_REPO_PAT }}
+          path: data-repo
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests pandas
+
+      - name: Fetch NSE data + compute signals
+        env:
+          DATE_OVERRIDE: ${{ github.event.inputs.date_override }}
+          SKIP_NSE: ${{ github.event.inputs.skip_nse_fetch }}
+        run: |
+          python3 << 'PYEOF'
+          import requests, time, json, csv, io, os, glob
+          from datetime import datetime, date, timedelta
+
+          # ── Resolve target date ───────────────────────────────────
+          override = os.environ.get('DATE_OVERRIDE','').strip()
+          if override:
+              fetch_date_str = override
+              fetch_date_iso = datetime.strptime(override,'%d-%b-%Y').strftime('%Y-%m-%d')
+          else:
+              today = date.today()
+              if today.weekday() == 5: today -= timedelta(days=1)
+              if today.weekday() == 6: today -= timedelta(days=2)
+              fetch_date_str = today.strftime('%d-%b-%Y')
+              fetch_date_iso = today.strftime('%Y-%m-%d')
+          print(f"Target date: {fetch_date_str} ({fetch_date_iso})")
+
+          NSE = "https://www.nseindia.com"
+          HEADERS = {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+              "Accept-Language": "en-US,en;q=0.9",
+              "Accept-Encoding": "gzip, deflate, br",
+              "Connection": "keep-alive",
+          }
+
+          signals = {}
+          fii_dii = {}
+          bulk_deals = []
+          block_deals = []
+          stock_count = 0
+
+          if os.environ.get('SKIP_NSE','false').lower() != 'true':
+              session = requests.Session()
+              session.headers.update(HEADERS)
+
+              # ── Establish NSE session (cookie handshake) ──────────
+              print("Establishing NSE session...")
+              try:
+                  session.get(NSE, timeout=20)
+                  time.sleep(2)
+                  session.get(NSE + "/all-reports-derivatives", timeout=20)
+                  time.sleep(2)
+                  session.headers.update({
+                      "Referer": NSE + "/all-reports-derivatives",
+                      "Accept": "application/json, text/plain, */*",
+                  })
+              except Exception as e:
+                  print(f"Session error: {e}")
+
+              def nse_report(name, category, section, date_str):
+                  try:
+                      archives = json.dumps([{"name": name,"type":"archives","category": category,"section": section}])
+                      params = {"archives": archives,"date": date_str,"type": section,"mode": "single"}
+                      r = session.get(NSE + "/api/reports", params=params, timeout=30)
+                      print(f"  {name[:30]}: HTTP {r.status_code}")
+                      if r.status_code != 200: return None
+                      links = r.json()
+                      if isinstance(links, list) and links:
+                          url = links[0].get('link','')
+                          if url:
+                              time.sleep(1)
+                              dr = session.get(url, timeout=30)
+                              return dr.text
+                  except Exception as e:
+                      print(f"  Report error: {e}")
+                  return None
+
+              # ── F&O Daily Volatility CSV ──────────────────────────
+              print("Fetching F&O Volatility...")
+              fovolt = nse_report("F&O - Daily Volatility (csv)", "derivatives", "equity", fetch_date_str)
+              time.sleep(2)
+
+              if fovolt:
+                  INDEX_SYMS = {'NIFTY','BANKNIFTY','SENSEX','FINNIFTY','NIFTYNXT50','MIDCPNIFTY','BANKEX'}
+                  reader = csv.DictReader(io.StringIO(fovolt))
+                  for row in reader:
+                      try:
+                          sym = str(row.get('Symbol', row.get('SYMBOL','')).strip().upper())
+                          if not sym or sym in INDEX_SYMS: continue
+                          cl   = float(row.get('Closing Price', row.get('CLOSE', 0)) or 0)
+                          pr   = float(row.get('Prev Close',   row.get('PREVCLOSE', cl)) or cl)
+                          vol  = float(row.get('Daily Volatility', row.get('DAILYVOL', 0)) or 0)
+                          d1   = round(((cl-pr)/pr*100),2) if pr else 0
+                          prem = round(d1/100*0.3,4)
+                          raw  = (d1/3.0) + (vol/50.0)
+                          score = round(max(-5.0, min(5.0, raw)), 2)
+                          label = ('Strong Bullish' if score>=3 else 'Bullish' if score>=1.5 else
+                                   'Mild Bullish' if score>=0.5 else 'Strong Bearish' if score<=-3 else
+                                   'Bearish' if score<=-1.5 else 'Mild Bearish' if score<=-0.5 else 'Neutral')
+                          signals[sym] = {'score':score,'label':label,'cl':cl,'pr':pr,
+                                          'd1':str(d1),'d2':str(d1),'prem':str(prem),'vol':str(round(vol,1))}
+                          stock_count += 1
+                      except: continue
+                  print(f"  Parsed {stock_count} stocks")
+
+              # ── FII/DII flow from equity market data ──────────────
+              print("Fetching FII/DII flow...")
+              try:
+                  session.headers.update({"Referer": NSE + "/market-data/live-equity-market"})
+                  fii_r = session.get(NSE + "/api/fiidiiTradeReact", timeout=20)
+                  if fii_r.status_code == 200:
+                      fii_data = fii_r.json()
+                      # NSE returns list of daily records
+                      if isinstance(fii_data, list) and fii_data:
+                          latest = fii_data[0]  # most recent day first
+                          fii_buy  = float(str(latest.get('fiiBuy','0')).replace(',','') or 0)
+                          fii_sell = float(str(latest.get('fiiSell','0')).replace(',','') or 0)
+                          dii_buy  = float(str(latest.get('diiBuy','0')).replace(',','') or 0)
+                          dii_sell = float(str(latest.get('diiSell','0')).replace(',','') or 0)
+                          fii_dii = {
+                              'fii': round(fii_buy - fii_sell, 2),
+                              'dii': round(dii_buy - dii_sell, 2),
+                              'fiiBuy': fii_buy, 'fiiSell': fii_sell,
+                              'diiBuy': dii_buy, 'diiSell': dii_sell,
+                              'date': fetch_date_iso
+                          }
+                          print(f"  FII net: {fii_dii['fii']} Cr, DII net: {fii_dii['dii']} Cr")
+              except Exception as e:
+                  print(f"  FII/DII error: {e}")
+              time.sleep(1)
+
+              # ── Bulk + Block deals ────────────────────────────────
+              print("Fetching Bulk/Block deals...")
+              try:
+                  session.headers.update({"Referer": NSE + "/companies-listing/corporate-filings-bulk-deals"})
+                  bulk_r = session.get(NSE + f"/api/historical/bulk-deals?from={fetch_date_iso}&to={fetch_date_iso}", timeout=20)
+                  if bulk_r.status_code == 200:
+                      for d in (bulk_r.json().get('data') or []):
+                          try:
+                              bulk_deals.append({'sym':str(d.get('symbol','')).upper().strip(),
+                                  'name':str(d.get('clientName','')).strip(),
+                                  'type':str(d.get('buySell','')).strip(),
+                                  'qty':float(str(d.get('quantityTraded','0')).replace(',','') or 0),
+                                  'price':float(str(d.get('tradePrice','0')).replace(',','') or 0)})
+                          except: continue
+                  block_r = session.get(NSE + f"/api/historical/block-deals?from={fetch_date_iso}&to={fetch_date_iso}", timeout=20)
+                  if block_r.status_code == 200:
+                      for d in (block_r.json().get('data') or []):
+                          try:
+                              block_deals.append({'sym':str(d.get('symbol','')).upper().strip(),
+                                  'name':str(d.get('clientName','')).strip(),
+                                  'type':str(d.get('buySell','')).strip(),
+                                  'qty':float(str(d.get('quantityTraded','0')).replace(',','') or 0),
+                                  'price':float(str(d.get('tradePrice','0')).replace(',','') or 0)})
+                          except: continue
+                  print(f"  Bulk: {len(bulk_deals)}, Block: {len(block_deals)}")
+              except Exception as e:
+                  print(f"  Deals error: {e}")
+
+          # ── Build 5-day FII/DII chart data ────────────────────────
+          hist_files = sorted(glob.glob('data-repo/data/history/*.json'))[-5:]
+          five_day = []
+          for hf in hist_files:
+              try:
+                  with open(hf) as f: hd = json.load(f)
+                  d = hd.get('fiiDii',{})
+                  if d:
+                      day_label = os.path.basename(hf).replace('.json','')
+                      from datetime import datetime as dt2
+                      dl = dt2.strptime(day_label,'%Y-%m-%d').strftime('%a')
+                      five_day.append({'d':dl,'fii':d.get('fii',0),'dii':d.get('dii',0)})
+              except: continue
+          if fii_dii:
+              from datetime import datetime as dt2
+              five_day.append({'d':dt2.strptime(fetch_date_iso,'%Y-%m-%d').strftime('%a'),
+                               'fii':fii_dii.get('fii',0),'dii':fii_dii.get('dii',0)})
+
+          # ── Assemble and write JSON ───────────────────────────────
+          from datetime import datetime as dt
+          output = {
+              'signals': signals,
+              'fiiDii': fii_dii,
+              'fiiDiiHistory': five_day[-5:],
+              'bulkDeals': bulk_deals,
+              'blockDeals': block_deals,
+              'meta': {
+                  'date': fetch_date_iso,
+                  'latestDate': fetch_date_str,
+                  'updatedAt': dt.utcnow().isoformat() + 'Z',
+                  'stockCount': stock_count,
+                  'files': [fetch_date_str],
+              }
+          }
+
+          os.makedirs('data-repo/data/history', exist_ok=True)
+          with open('data-repo/data/fno_signals.json','w') as f:
+              json.dump(output, f, separators=(',',':'))
+          print(f"Written fno_signals.json ({stock_count} stocks)")
+
+          hist_path = f'data-repo/data/history/{fetch_date_iso}.json'
+          with open(hist_path,'w') as f:
+              json.dump(output, f, separators=(',',':'))
+          print(f"Written {hist_path}")
+
+          # Update index.json
+          all_hist = sorted([os.path.basename(f).replace('.json','')
+                             for f in glob.glob('data-repo/data/history/*.json')
+                             if '.gitkeep' not in f])
+          with open('data-repo/data/index.json','w') as f:
+              json.dump({'dates':all_hist[-30:],'lastUpdated':dt.utcnow().isoformat()+'Z',
+                         'totalUploads':len(all_hist),'latestDate':fetch_date_iso,
+                         'latestStockCount':stock_count}, f, indent=2)
+          print(f"Updated index.json ({len(all_hist)} dates)")
+          PYEOF
+
+      - name: Commit and push to data repo
+        working-directory: data-repo
+        run: |
+          git config user.name  "smart-money-bot"
+          git config user.email "bot@mf-intelligence"
+          git add -A
+          git diff --cached --quiet && echo "Nothing changed" || \
+            (git commit -m "data: smart money $(date -u +'%Y-%m-%d %H:%M UTC')" && git push)
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Smart Money Daily Fetch" >> $GITHUB_STEP_SUMMARY
+          echo "**Date fetched:** $(date -u +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
+          if [ -f data-repo/data/fno_signals.json ]; then
+            COUNT=$(python3 -c "import json;d=json.load(open('data-repo/data/fno_signals.json'));print(d['meta']['stockCount'])" 2>/dev/null || echo "?")
+            echo "**Stocks parsed:** $COUNT" >> $GITHUB_STEP_SUMMARY
+            echo "**Status:** ✅ Success" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Status:** ❌ fno_signals.json not written" >> $GITHUB_STEP_SUMMARY
+          fi
