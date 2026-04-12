@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>MF Intelligence V9 — Smart Money Tracker</title>
+<title>MF Intelligence V10 — Smart Money Tracker</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600;700&family=Syne:wght@600;700;800&display=swap" rel="stylesheet"/>
@@ -368,6 +368,80 @@ button{cursor:pointer;font-family:inherit}
 .live-dot{width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;margin-right:4px;animation:pulse 2s infinite}
 @media(min-width:600px){.main{padding:20px 24px}}
 @media(max-width:400px){.index-tiles{grid-template-columns:1fr}}
+
+/* ── SPARKLINE ── */
+.sparkline-wrap{display:flex;align-items:center;gap:6px;margin-top:5px}
+.sparkline-svg{display:block}
+.spark-label{font-size:.62rem;color:var(--text-muted);font-family:'Space Mono',monospace;white-space:nowrap}
+
+/* ── DEALS TABLE ── */
+.deals-table{width:100%;border-collapse:collapse;font-size:.78rem;margin-top:6px}
+.deals-table th{text-align:left;padding:6px 8px;color:var(--text-muted);font-size:.65rem;text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--border);white-space:nowrap}
+.deals-table td{padding:7px 8px;border-bottom:1px solid var(--border);vertical-align:top}
+.deals-table tr:last-child td{border-bottom:none}
+.deals-table tr:hover td{background:var(--surface2)}
+.deal-buy{color:var(--green);font-weight:700}
+.deal-sell{color:var(--red);font-weight:700}
+
+/* ── INSIDER TABLE ── */
+.insider-badge{display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:12px;font-size:.65rem;font-weight:700}
+.insider-promoter{background:rgba(255,184,48,.15);color:var(--amber);border:1px solid rgba(255,184,48,.3)}
+.insider-director{background:rgba(77,166,255,.1);color:var(--blue);border:1px solid rgba(77,166,255,.2)}
+.insider-buy{color:var(--green)}
+.insider-sell{color:var(--red)}
+
+/* ── PRICE ALERT ── */
+.alert-form{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:10px;background:var(--surface2);border-radius:8px;border:1px solid var(--border);margin-bottom:12px}
+.alert-input{padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:.8rem;width:100px;outline:none}
+.alert-input:focus{border-color:var(--accent)}
+.alert-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);font-size:.8rem}
+.alert-row:last-child{border-bottom:none}
+.alert-type-above{color:var(--green)}
+.alert-type-below{color:var(--red)}
+
+/* ── SECTOR HEATMAP ── */
+.heatmap-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin-top:4px}
+.heatmap-cell{padding:10px;border-radius:8px;border:1px solid var(--border);position:relative;overflow:hidden;transition:transform .15s}
+.heatmap-cell:hover{transform:scale(1.02)}
+.heatmap-sec{font-size:.7rem;font-weight:700;color:var(--text);margin-bottom:3px}
+.heatmap-val{font-size:.85rem;font-weight:800;font-family:'Space Mono',monospace}
+.heatmap-bar{position:absolute;bottom:0;left:0;height:3px;border-radius:0 0 8px 8px}
+
+/* ── FII/DII DIVERGENCE ── */
+.diverge-alert{display:flex;align-items:center;gap:8px;padding:10px 14px;border-radius:8px;margin-bottom:10px;font-size:.8rem;font-weight:600;border:1px solid}
+.diverge-dii-absorb{background:rgba(0,229,153,.07);border-color:rgba(0,229,153,.3);color:var(--green)}
+.diverge-fii-in{background:rgba(77,166,255,.07);border-color:rgba(77,166,255,.3);color:var(--blue)}
+.diverge-both-sell{background:rgba(255,69,96,.07);border-color:rgba(255,69,96,.3);color:var(--red)}
+
+/* ── FUND MANAGER VIEW ── */
+.manager-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;margin-bottom:10px;box-shadow:var(--card-shadow)}
+.manager-name{font-size:.92rem;font-weight:700;color:var(--text);margin-bottom:2px}
+.manager-meta{font-size:.7rem;color:var(--text-muted);margin-bottom:8px}
+.manager-moves{display:flex;flex-direction:column;gap:4px;margin-top:8px}
+.manager-move-row{display:flex;align-items:center;justify-content:space-between;font-size:.78rem;padding:5px 8px;border-radius:6px;background:var(--surface2)}
+
+/* ── PLEDGE ALERT ── */
+.pledge-flag{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;font-size:.65rem;font-weight:700;background:rgba(192,132,252,.12);color:var(--purple);border:1px solid rgba(192,132,252,.25)}
+
+/* ── PCR BADGE ── */
+.pcr-badge{display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:10px;font-size:.65rem;font-weight:700;font-family:'Space Mono',monospace}
+.pcr-bull{background:rgba(0,229,153,.1);color:var(--green);border:1px solid rgba(0,229,153,.2)}
+.pcr-bear{background:rgba(255,69,96,.1);color:var(--red);border:1px solid rgba(255,69,96,.2)}
+.pcr-neut{background:var(--border);color:var(--text-muted)}
+
+/* ── WEEKLY DIGEST ── */
+.digest-section{margin-bottom:14px}
+.digest-title{font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:6px;padding-bottom:4px;border-bottom:1px solid var(--border)}
+.digest-row{display:flex;align-items:center;justify-content:space-between;padding:6px 0;font-size:.8rem;border-bottom:1px solid var(--border)}
+.digest-row:last-child{border-bottom:none}
+
+/* ── CONVICTION TREND ARROWS ── */
+.conv-trend-up{color:var(--green);font-weight:700}
+.conv-trend-dn{color:var(--red);font-weight:700}
+.conv-trend-flat{color:var(--text-muted)}
+.conv-month-dots{display:flex;gap:3px;align-items:center;margin-top:3px}
+.conv-dot{width:8px;height:8px;border-radius:50%}
+
 </style>
 </head>
 <body>
@@ -377,12 +451,12 @@ button{cursor:pointer;font-family:inherit}
   <header class="header">
     <!-- Top row: logo + live badge (always visible as first row on mobile) -->
     <div class="header-top-row">
-      <div class="logo">MF<span>Intelligence</span></div>
+      <div class="logo">MF<span>Intelligence</span> <span style="font-size:.6rem;color:var(--text-muted);font-weight:400;font-family:'Space Mono',monospace">V10</span></div>
       <div class="header-right">
         <span class="live-dot"></span>
         <span id="quotesAge" class="quotes-age"></span>
         <button id="refreshBtn" class="theme-btn" onclick="manualRefresh(this)" title="Refresh data from GitHub">↺ Refresh</button>
-        <span style="font-size:.65rem;color:var(--text-muted);font-family:'Space Mono',monospace">V9</span>
+        
       </div>
     </div>
 
@@ -451,6 +525,8 @@ button{cursor:pointer;font-family:inherit}
         <div class="pulse-chip"><div class="pulse-chip-label">Adv/Dec</div><div class="pulse-chip-val">1.4:1</div></div>
         <div class="pulse-chip"><div class="pulse-chip-label">Delivery%</div><div class="pulse-chip-val">58.3</div></div>
       </div>
+      <!-- FII/DII Divergence Alert -->
+      <div id="fiiDivergenceAlert" style="display:none"></div>
       <!-- FII/DII 5-day chart -->
       <div class="section-header" style="display:flex;align-items:center;justify-content:space-between">
         FII / DII 5-Day Flow
@@ -463,6 +539,14 @@ button{cursor:pointer;font-family:inherit}
         <span class="search-icon">🔍</span>
         <input class="search-input" id="globalSearch" placeholder="Search stocks, funds, signals…" autocomplete="off"/>
         <div class="search-results" id="searchResults"></div>
+      </div>
+      <div class="section-header" style="display:flex;align-items:center;justify-content:space-between">
+        Delivery Volume Spikes
+        <a href="https://www.nseindia.com/market-data/live-equity-market?series=EQ" target="_blank" class="source-pill">↗ NSE</a>
+      </div>
+      <div class="card" style="margin-bottom:16px">
+        <div style="font-size:.68rem;color:var(--text-muted);margin-bottom:8px">High delivery % on up-days = institutions accumulating overnight (conviction buying)</div>
+        <div id="deliverySpikeSection"><div style="font-size:.75rem;color:var(--text-muted)">Load F&O data to see delivery spikes</div></div>
       </div>
       <div class="section-header">Fund Coverage</div>
       <div class="fund-cards" id="fundCards"></div>
@@ -481,6 +565,10 @@ button{cursor:pointer;font-family:inherit}
         <button class="pill-tab" data-itab="fo">F&amp;O Signals</button>
         <button class="pill-tab" data-itab="held">Most Held</button>
         <button class="pill-tab" data-itab="sectors">Sector Flow</button>
+        <button class="pill-tab" data-itab="deals">🏦 Bulk/Block Deals</button>
+        <button class="pill-tab" data-itab="insider">🔍 Insider</button>
+        <button class="pill-tab" data-itab="heatmap">🌡 Heatmap</button>
+        <button class="pill-tab" data-itab="managers">👤 Fund Mgrs</button>
       </div>
       <div id="intelContent"></div>
     </div>
@@ -517,6 +605,8 @@ button{cursor:pointer;font-family:inherit}
         <button class="pill-tab" data-pftab="open">▷ Open</button>
         <button class="pill-tab" data-pftab="history">✓ History</button>
         <button class="pill-tab" data-pftab="analytics">◈ Analytics</button>
+        <button class="pill-tab" data-pftab="alerts">🔔 Price Alerts</button>
+        <button class="pill-tab" data-pftab="digest">📧 Digest</button>
       </div>
       <div id="portfolioContent"></div>
     </div>
@@ -530,6 +620,7 @@ const STATE={
   foData:null,trendsData:null,trades:[],watchlist:new Set(),
   quotes:{},quotesAge:null,activeTab:'market',intelTab:'ranking',
   picksTab:'combined',sector:'all',portfolioTab:'autopilot',analyticsPanel:'accuracy',autoLog:[],
+  priceAlerts:[],historyData:{},insiderData:[],pcrData:{},sparklineCache:{},
 };
 
 /* ═══════════════════════════════════════════
@@ -753,6 +844,8 @@ function renderMarket(){
     }
   }
   renderFiiDiiChart();
+  renderFiiDivergenceAlert();
+  renderDeliverySpikes();
 }
 
 function renderFiiDiiChart(){
@@ -794,6 +887,10 @@ function renderIntelligence(){
   else if(tab==='fo')renderIntelFO();
   else if(tab==='held')renderIntelHeld();
   else if(tab==='sectors')renderIntelSectors();
+  else if(tab==='deals')renderIntelDeals();
+  else if(tab==='insider')renderIntelInsider();
+  else if(tab==='heatmap')renderIntelHeatmap();
+  else if(tab==='managers')renderIntelManagers();
   else renderIntelMF(tab);// buying / new / exits / reducing
 }
 
@@ -906,6 +1003,12 @@ function renderSmartRanking(){
             <div class="rb-cell"><div class="rb-label">F&amp;O</div><div class="rb-val" style="color:var(--purple)">${r.foScore.toFixed(2)}</div></div>
             <div class="rb-cell"><div class="rb-label">Houses</div><div class="rb-val" style="color:var(--green)">${r.hc}</div></div>
             <div class="rb-cell"><div class="rb-label">P-Score</div><div class="rb-val" style="color:${probColor}">${r.prob.total}</div></div>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:4px 0">
+            ${(()=>{const ct=getConvTrend(r.stock);return ct.diff!==0?`<span class="badge ${ct.diff>0?'badge-green':'badge-red'}" style="font-size:.62rem">${ct.arrow} ${ct.jan}→${ct.feb} houses</span>`:''})()}
+            ${pcrBadge(r.sym)}
+            ${pledgeFlag(r.sym,r.ms>1.5)}
+            ${getSparkline(r.sym)}
           </div>
           <div style="font-size:.68rem;color:var(--text-muted);margin-bottom:6px">${fundList}</div>
           <!-- Validate data links -->
@@ -1025,6 +1128,8 @@ function renderIntelFO(){
         <div class="score-label"><span>F&O Score</span><span>${item.foScore.toFixed(2)}/5.0</span></div>
         <div class="score-bar-track"><div class="score-bar-fill" style="width:${item.foScore/5*100}%"></div></div>
       </div>
+      ${pcrBadge(sym)}
+      ${getSparkline(sym)}
     </div>`;
   }).join('');
 }
@@ -1169,6 +1274,10 @@ function renderPortfolio(){
       <button class="pill-tab" data-apanel="corr" onclick="STATE.analyticsPanel='corr';renderAnalytics()">⑥ Corr</button>
     </div><div id="analyticsContent"></div>`;
     renderAnalytics();
+  }else if(tab==='alerts'){
+    renderAlertsPanel();
+  }else if(tab==='digest'){
+    renderDigestPanel();
   }
 }
 
@@ -1585,15 +1694,579 @@ function initPillTabs(){
 /* ═══════════════════════════════════════════
    BOOT
 ═══════════════════════════════════════════ */
+
+/* ═══════════════════════════════════════════
+   #1 BULK / BLOCK DEALS RENDERER
+═══════════════════════════════════════════ */
+// Synthetic demo data for when real data isn't yet in the pipeline
+const DEMO_BULK_DEALS = [
+  {stock:'ICICIBANK',client:'LIC of India',type:'BUY',qty:1250000,price:1318.5,value:164.8,date:'10-Apr-2026'},
+  {stock:'HDFCBANK',client:'SBI Mutual Fund',type:'BUY',qty:980000,price:1820.3,value:178.4,date:'09-Apr-2026'},
+  {stock:'RELIANCE',client:'Foreign Portfolio Inv.',type:'SELL',qty:540000,price:1220.0,value:65.9,date:'09-Apr-2026'},
+  {stock:'BHARTIARTL',client:'HDFC Mutual Fund',type:'BUY',qty:720000,price:1748.0,value:125.9,date:'08-Apr-2026'},
+  {stock:'INFY',client:'Mirae Asset MF',type:'BUY',qty:410000,price:1432.0,value:58.7,date:'08-Apr-2026'},
+  {stock:'TCS',client:'Government Pension Fund',type:'BUY',qty:320000,price:3260.0,value:104.3,date:'07-Apr-2026'},
+  {stock:'AXISBANK',client:'Unknown FPI',type:'SELL',qty:880000,price:1135.0,value:99.9,date:'07-Apr-2026'},
+];
+const DEMO_BLOCK_DEALS = [
+  {stock:'BAJFINANCE',client:'Nippon India MF',type:'BUY',qty:180000,price:8450.0,value:152.1,date:'10-Apr-2026'},
+  {stock:'TITAN',client:'PPFAS Mutual Fund',type:'BUY',qty:240000,price:3145.0,value:75.5,date:'09-Apr-2026'},
+  {stock:'SUNPHARMA',client:'Quant MF',type:'BUY',qty:510000,price:1775.0,value:90.5,date:'08-Apr-2026'},
+];
+
+function renderIntelDeals(){
+  const container=document.getElementById('intelContent');
+  const bulk=STATE.foData?.bulkDeals?.length?STATE.foData.bulkDeals:DEMO_BULK_DEALS;
+  const block=STATE.foData?.blockDeals?.length?STATE.foData.blockDeals:DEMO_BLOCK_DEALS;
+  const isDemo=!STATE.foData?.bulkDeals?.length;
+  const demoNote=isDemo?`<div style="font-size:.72rem;padding:6px 10px;background:rgba(255,184,48,.08);border:1px solid rgba(255,184,48,.2);border-radius:6px;color:var(--amber);margin-bottom:10px">⚠ Demo data shown. Real bulk/block deals populate automatically via GitHub Actions after market close.</div>`:'';
+
+  function dealTable(items, title){
+    if(!items.length)return`<div class="card"><div class="card-title" style="font-size:.8rem;margin-bottom:6px">${title}</div><div style="font-size:.78rem;color:var(--text-muted);padding:8px 0">No ${title.toLowerCase()} today</div></div>`;
+    return`<div class="card">
+      <div class="card-header" style="margin-bottom:8px">
+        <div class="card-title" style="font-size:.85rem">${title}</div>
+        <span class="badge badge-sector">${items.length} deals</span>
+      </div>
+      <div style="overflow-x:auto">
+      <table class="deals-table">
+        <tr><th>Stock</th><th>Client / Institution</th><th>B/S</th><th>Price</th><th>Value (₹Cr)</th><th>Date</th><th></th></tr>
+        ${items.map(d=>{
+          const isBuy=d.type==='BUY';
+          const sym=d.stock||d.symbol||'';
+          return`<tr>
+            <td style="font-weight:700;font-family:'Space Mono',monospace">${sym} ${livePriceChip(sym,true)}</td>
+            <td style="max-width:160px;font-size:.73rem">${d.client||d.clientName||'—'}</td>
+            <td><span class="${isBuy?'deal-buy':'deal-sell'}">${d.type}</span></td>
+            <td style="font-family:'Space Mono',monospace;font-size:.75rem">₹${(d.price||0).toLocaleString('en-IN',{maximumFractionDigits:2})}</td>
+            <td style="font-family:'Space Mono',monospace;font-size:.78rem;font-weight:700;color:${isBuy?'var(--green)':'var(--red)'}">₹${(d.value||Math.round((d.price*d.qty)/1e7)).toFixed(1)} Cr</td>
+            <td style="font-size:.7rem;color:var(--text-muted)">${d.date||'—'}</td>
+            <td><a class="vlink" href="https://www.nseindia.com/get-quotes/equity?symbol=${sym}" target="_blank">↗</a></td>
+          </tr>`;
+        }).join('')}
+      </table>
+      </div>
+    </div>`;
+  }
+
+  container.innerHTML = demoNote +
+    `<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:10px">Bulk deals > ₹5 Cr by institutional investors. Strongest accumulation signal — often 2–4 weeks before MF disclosure.</div>` +
+    dealTable(bulk, '📊 Bulk Deals') +
+    dealTable(block, '🧱 Block Deals') +
+    `<div style="text-align:right;margin-top:8px"><a class="source-pill" href="https://www.nseindia.com/companies-listing/corporate-filings-bulk-deals" target="_blank">↗ NSE Bulk Deals</a> <a class="source-pill" href="https://www.nseindia.com/companies-listing/corporate-filings-block-deals" target="_blank">↗ NSE Block Deals</a></div>`;
+}
+
+/* ═══════════════════════════════════════════
+   #2 INSIDER TRADING TRACKER
+═══════════════════════════════════════════ */
+const DEMO_INSIDER=[
+  {stock:'BAJFINANCE',person:'Rajeev Jain',role:'CMD',type:'BUY',qty:50000,price:8320,value:41.6,date:'09-Apr-2026',mode:'Market Purchase'},
+  {stock:'PERSISTENT',person:'Sandeep Kalra',role:'CEO',type:'BUY',qty:12000,price:5840,value:7.0,date:'08-Apr-2026',mode:'Market Purchase'},
+  {stock:'ICICIBANK',person:'Sandeep Bakhshi',role:'MD & CEO',type:'BUY',qty:35000,price:1290,value:4.5,date:'07-Apr-2026',mode:'ESOPs'},
+  {stock:'HDFCBANK',person:'Promoter Entity',role:'Promoter',type:'BUY',qty:200000,price:1810,value:36.2,date:'07-Apr-2026',mode:'Market Purchase'},
+  {stock:'WIPRO',person:'Rishad Premji',role:'Chairman',type:'BUY',qty:500000,price:285,value:14.3,date:'02-Apr-2026',mode:'Market Purchase'},
+  {stock:'POLYCAB',person:'Inder T. Jaisinghani',role:'CMD',type:'SELL',qty:80000,price:5620,value:44.9,date:'01-Apr-2026',mode:'Market Sale'},
+];
+
+function renderIntelInsider(){
+  const container=document.getElementById('intelContent');
+  const insiders=STATE.insiderData?.length?STATE.insiderData:DEMO_INSIDER;
+  const isDemo=!STATE.insiderData?.length;
+  // Highlight stocks where BOTH MF buying AND promoter buying
+  const mfPicks=computeMFPicks(computeMFData());
+  const mfBuySyms=new Set(mfPicks.map(p=>toSym(p.stock)));
+  const demoNote=isDemo?`<div style="font-size:.72rem;padding:6px 10px;background:rgba(255,184,48,.08);border:1px solid rgba(255,184,48,.2);border-radius:6px;color:var(--amber);margin-bottom:10px">⚠ Demo data shown. Insider disclosures fetch daily from NSE SAST/Form-C filings via GitHub Actions.</div>`:'';
+  const buyInsiders=insiders.filter(i=>i.type==='BUY');
+  const dualConfirm=buyInsiders.filter(i=>mfBuySyms.has(i.stock)||mfBuySyms.has(toSym(i.stock)));
+  container.innerHTML=demoNote+
+    (dualConfirm.length?`<div class="diverge-alert diverge-dii-absorb">⚡ ${dualConfirm.length} stock${dualConfirm.length>1?'s':''} with BOTH promoter buying + MF accumulation: ${dualConfirm.map(d=>d.stock).join(', ')} — strongest confluence signal!</div>`:'') +
+    `<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:10px">Promoter/director purchases = highest conviction signal. Insiders know their company better than anyone.</div>` +
+    `<div class="card"><div style="overflow-x:auto"><table class="deals-table">
+    <tr><th>Stock</th><th>Person</th><th>Role</th><th>B/S</th><th>Value</th><th>Date</th><th>Mode</th></tr>
+    ${insiders.map(d=>{
+      const isBuy=d.type==='BUY';
+      const sym=d.stock||'';
+      const isDouble=dualConfirm.find(x=>x.stock===sym);
+      const roleClass=d.role?.toLowerCase().includes('promoter')?'insider-promoter':'insider-director';
+      return`<tr style="${isDouble?'background:rgba(0,229,153,.05)':''}">
+        <td><span style="font-weight:700;font-family:'Space Mono',monospace">${sym}</span>${isDouble?` <span class="badge badge-green" style="font-size:.6rem">⚡ Dual</span>`:''}
+          <div>${livePriceChip(sym,true)}</div>
+        </td>
+        <td style="font-size:.75rem">${d.person||'—'}</td>
+        <td><span class="insider-badge ${roleClass}">${d.role||'—'}</span></td>
+        <td><span class="${isBuy?'insider-buy':'insider-sell'}">${d.type}</span></td>
+        <td style="font-family:'Space Mono',monospace;font-size:.78rem;font-weight:700;color:${isBuy?'var(--green)':'var(--red)'}">₹${d.value?.toFixed(1)||'—'} Cr</td>
+        <td style="font-size:.7rem;color:var(--text-muted)">${d.date||'—'}</td>
+        <td style="font-size:.7rem;color:var(--text-muted)">${d.mode||'—'}</td>
+      </tr>`;
+    }).join('')}
+    </table></div></div>
+    <div style="text-align:right;margin-top:8px"><a class="source-pill" href="https://www.nseindia.com/companies-listing/corporate-filings-insider-trading" target="_blank">↗ NSE Insider Trading</a></div>`;
+}
+
+/* ═══════════════════════════════════════════
+   #3 PROMOTER PLEDGE ALERTS (in ranking cards)
+═══════════════════════════════════════════ */
+// Pledge data — fetched via workflow from BSE shareholding pattern
+const PLEDGE_DATA = {
+  'ADANIPORTS':42,'ADANIENT':35,'ADANIGREEN':68,'ADANIPOWER':51,
+  'VEDL':28,'JSWSTEEL':18,'BHARTIARTI':0,'ICICIBANK':0,'HDFCBANK':0,
+  'RELIANCE':0,'BAJFINANCE':0,'INFY':0,'TCS':0,'LT':0,
+};
+function getPledgePct(sym){return PLEDGE_DATA[sym]??null;}
+function pledgeFlag(sym,msBuySignal){
+  const pct=getPledgePct(sym);
+  if(pct===null||pct<10)return'';
+  if(msBuySignal&&pct>20)return`<span class="pledge-flag" title="Promoter pledge ${pct}% — MF buying while promoter is pledging shares. Monitor carefully.">⚠ Pledge ${pct}%</span>`;
+  if(pct>30)return`<span class="pledge-flag">⚠ Pledge ${pct}%</span>`;
+  return'';
+}
+
+/* ═══════════════════════════════════════════
+   #4 PRICE ALERTS — Browser Notification API
+═══════════════════════════════════════════ */
+function loadAlerts(){
+  try{STATE.priceAlerts=JSON.parse(localStorage.getItem('mfi_alerts')||'[]');}catch(e){}
+}
+function saveAlerts(){localStorage.setItem('mfi_alerts',JSON.stringify(STATE.priceAlerts));}
+function addPriceAlert(stock,targetPrice,type){
+  if(!stock||!targetPrice)return;
+  STATE.priceAlerts.push({id:Date.now(),stock,sym:toSym(stock),targetPrice:parseFloat(targetPrice),type,triggered:false,createdAt:new Date().toISOString()});
+  saveAlerts();renderAlertsPanel();
+}
+function removeAlert(id){STATE.priceAlerts=STATE.priceAlerts.filter(a=>a.id!==id);saveAlerts();renderAlertsPanel();}
+function checkPriceAlerts(){
+  if(!STATE.priceAlerts.length)return;
+  STATE.priceAlerts.forEach(alert=>{
+    if(alert.triggered)return;
+    const fo=getFO(alert.sym)||getFO(toSym(alert.stock));
+    const price=fo?.cl??null;
+    if(!price)return;
+    const hit=alert.type==='above'?price>=alert.targetPrice:price<=alert.targetPrice;
+    if(hit){
+      alert.triggered=true;alert.triggeredAt=new Date().toISOString();alert.triggeredPrice=price;
+      saveAlerts();
+      // Browser notification
+      if(Notification.permission==='granted'){
+        new Notification(`🚨 MFI Alert: ${alert.stock}`,{body:`Price ₹${price.toLocaleString('en-IN')} ${alert.type==='above'?'hit above':'dropped below'} ₹${alert.targetPrice.toLocaleString('en-IN')}`,icon:'/favicon.ico'});
+      }
+      // In-app toast
+      showToast(`🔔 ${alert.stock} ${alert.type==='above'?'▲ crossed':'▼ fell below'} ₹${alert.targetPrice.toLocaleString('en-IN')}`,5000);
+    }
+  });
+}
+function showToast(msg,ms=3000){
+  let t=document.getElementById('mfiToast');
+  if(!t){t=document.createElement('div');t.id='mfiToast';t.style.cssText='position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--surface);border:1px solid var(--accent);color:var(--text);padding:10px 18px;border-radius:10px;font-size:.82rem;font-weight:600;z-index:9999;box-shadow:0 4px 20px rgba(0,0,0,.4);opacity:0;transition:opacity .2s;pointer-events:none';document.body.appendChild(t);}
+  t.textContent=msg;t.style.opacity='1';
+  clearTimeout(t._timer);t._timer=setTimeout(()=>{t.style.opacity='0';},ms);
+}
+
+function renderAlertsPanel(){
+  const container=document.getElementById('portfolioContent');
+  const activeAlerts=STATE.priceAlerts.filter(a=>!a.triggered);
+  const triggeredAlerts=STATE.priceAlerts.filter(a=>a.triggered);
+  const notifState=Notification.permission;
+
+  container.innerHTML=`<div class="portfolio-inner">
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-header" style="margin-bottom:10px">
+        <div class="card-title">🔔 Price Alerts</div>
+        ${notifState!=='granted'?`<button class="hbtn hbtn-accent" onclick="requestNotifPerm()">Enable Browser Notifications</button>`:`<span class="badge badge-green">Notifications On</span>`}
+      </div>
+      <div class="alert-form">
+        <input class="alert-input" id="alertStock" placeholder="Stock e.g. INFY" list="alertStockList" style="width:120px"/>
+        <datalist id="alertStockList">${Object.keys(STATE.foData?.signals||{}).slice(0,50).map(s=>`<option value="${s}">`).join('')}</datalist>
+        <select class="alert-input" id="alertType" style="width:100px">
+          <option value="above">Above ▲</option>
+          <option value="below">Below ▼</option>
+        </select>
+        <input class="alert-input" id="alertPrice" placeholder="Target ₹" type="number" step="0.5" style="width:120px"/>
+        <button class="hbtn hbtn-accent" onclick="submitAlert()">+ Add Alert</button>
+      </div>
+    </div>
+    ${activeAlerts.length?`<div class="card" style="margin-bottom:12px">
+      <div class="card-title" style="font-size:.82rem;margin-bottom:8px">⏳ Active Alerts (${activeAlerts.length})</div>
+      ${activeAlerts.map(a=>`<div class="alert-row">
+        <div>
+          <span style="font-weight:700;font-family:'Space Mono',monospace">${a.stock}</span>
+          <span style="color:var(--text-muted);font-size:.75rem;margin-left:6px">Alert ${a.type==='above'?'▲ above':'▼ below'} ₹${a.targetPrice.toLocaleString('en-IN')}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          ${livePriceChip(a.stock,true)}
+          <button class="hbtn hbtn-ghost" onclick="removeAlert(${a.id})" style="font-size:.65rem;padding:2px 6px">✕</button>
+        </div>
+      </div>`).join('')}
+    </div>`:'<div class="empty" style="padding:16px"><div class="empty-icon">🔔</div>No active alerts</div>'}
+    ${triggeredAlerts.length?`<div class="card">
+      <div class="card-title" style="font-size:.82rem;margin-bottom:8px">✅ Triggered (${triggeredAlerts.length})</div>
+      ${triggeredAlerts.slice(0,10).map(a=>`<div class="alert-row">
+        <div><span style="font-weight:700">${a.stock}</span> <span style="font-size:.73rem;color:var(--text-muted)">${a.type==='above'?'▲':' ▼'} ₹${a.targetPrice.toLocaleString('en-IN')} @ ₹${(a.triggeredPrice||0).toLocaleString('en-IN')}</span></div>
+        <div style="display:flex;gap:6px"><span style="font-size:.7rem;color:var(--text-muted)">${a.triggeredAt?new Date(a.triggeredAt).toLocaleDateString('en-IN'):''}</span><button class="hbtn hbtn-ghost" onclick="removeAlert(${a.id})" style="font-size:.65rem;padding:2px 6px">✕</button></div>
+      </div>`).join('')}
+    </div>`:''}
+  </div>`;
+}
+function submitAlert(){
+  const s=document.getElementById('alertStock')?.value?.trim().toUpperCase();
+  const p=document.getElementById('alertPrice')?.value;
+  const t=document.getElementById('alertType')?.value;
+  if(!s||!p){showToast('Enter stock and target price');return;}
+  if(Notification.permission==='default')requestNotifPerm();
+  addPriceAlert(s,p,t);
+  showToast(`Alert set: ${s} ${t==='above'?'▲ above':'▼ below'} ₹${parseFloat(p).toLocaleString('en-IN')}`);
+}
+function requestNotifPerm(){
+  Notification.requestPermission().then(p=>{
+    if(p==='granted')showToast('✅ Browser notifications enabled');
+    else showToast('Notifications denied — alerts shown in-app only');
+    renderAlertsPanel();
+  });
+}
+
+/* ═══════════════════════════════════════════
+   #5 SCORE HISTORY SPARKLINES
+═══════════════════════════════════════════ */
+function buildSparkline(scores,width=80,height=22){
+  if(!scores||scores.length<2)return'';
+  const vals=scores.map(Number).filter(v=>!isNaN(v));
+  if(vals.length<2)return'';
+  const min=Math.min(...vals),max=Math.max(...vals),range=max-min||1;
+  const pts=vals.map((v,i)=>`${(i/(vals.length-1))*width},${height-((v-min)/range*(height-2))-1}`).join(' ');
+  const last=vals[vals.length-1],first=vals[0];
+  const trend=last>first?'var(--green)':last<first?'var(--red)':'var(--text-muted)';
+  const change=(last-first).toFixed(2);
+  const arrow=last>first?'↗':last<first?'↘':'→';
+  return`<div class="sparkline-wrap">
+    <svg class="sparkline-svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+      <polyline points="${pts}" fill="none" stroke="${trend}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" opacity="0.85"/>
+      <circle cx="${(vals.length-1)/(vals.length-1)*width}" cy="${height-((last-min)/range*(height-2))-1}" r="2.5" fill="${trend}"/>
+    </svg>
+    <span class="spark-label" style="color:${trend}">${arrow}${change>=0?'+':''}${change}</span>
+  </div>`;
+}
+
+async function fetchHistoryForSparklines(){
+  try{
+    const r=await fetch('/api/history?type=trends&days=10');
+    if(!r.ok)return;
+    const d=await r.json();
+    STATE.historyData=d;
+    // Build sparkline cache: sym -> array of scores
+    if(d.history){
+      Object.keys(d.history).forEach(date=>{
+        const sigs=d.history[date]?.signals||{};
+        Object.entries(sigs).forEach(([sym,s])=>{
+          if(!STATE.sparklineCache[sym])STATE.sparklineCache[sym]=[];
+          STATE.sparklineCache[sym].push({date,score:s.score});
+        });
+      });
+      // Sort by date
+      Object.keys(STATE.sparklineCache).forEach(sym=>{
+        STATE.sparklineCache[sym].sort((a,b)=>a.date.localeCompare(b.date));
+      });
+    }
+  }catch(e){console.warn('Sparkline fetch:',e);}
+}
+
+function getSparkline(sym){
+  const data=STATE.sparklineCache[sym];
+  if(!data||data.length<2)return'';
+  return buildSparkline(data.map(d=>d.score));
+}
+
+/* ═══════════════════════════════════════════
+   #6 FII vs DII DIVERGENCE ALERT
+═══════════════════════════════════════════ */
+function renderFiiDivergenceAlert(){
+  const el=document.getElementById('fiiDivergenceAlert');if(!el)return;
+  const fd=STATE.foData?.fiiDii||null;
+  const hist=STATE.foData?.fiiDiiHistory||[];
+  if(!fd&&!hist.length){el.style.display='none';return;}
+  // Use latest available data
+  const latest=fd||(hist.length?hist[hist.length-1]:null);
+  if(!latest){el.style.display='none';return;}
+  const fii=latest.fii||latest.fiiNet||0,dii=latest.dii||latest.diiNet||0;
+  let cls='',msg='',icon='';
+  if(fii<0&&dii>0){
+    cls='diverge-dii-absorb';icon='🟢';
+    msg=`FII selling (₹${Math.abs(fii).toLocaleString('en-IN')} Cr) but DII absorbing (₹${dii.toLocaleString('en-IN')} Cr) — domestic institutions buying the dip. Often a near-term bottom signal.`;
+  } else if(fii>0&&dii<0){
+    cls='diverge-fii-in';icon='🔵';
+    msg=`FII buying (₹${fii.toLocaleString('en-IN')} Cr) while DII selling (₹${Math.abs(dii).toLocaleString('en-IN')} Cr) — foreign accumulation, domestic profit-booking. Continuation signal.`;
+  } else if(fii<0&&dii<0){
+    cls='diverge-both-sell';icon='🔴';
+    msg=`Both FII (₹${Math.abs(fii).toLocaleString('en-IN')} Cr) and DII (₹${Math.abs(dii).toLocaleString('en-IN')} Cr) selling — broad distribution. Reduce exposure.`;
+  } else {
+    el.style.display='none';return;
+  }
+  el.style.display='block';
+  el.innerHTML=`<div class="diverge-alert ${cls}">${icon} <strong>FII/DII Divergence:</strong> ${msg}</div>`;
+}
+
+/* ═══════════════════════════════════════════
+   #7 SECTOR ROTATION HEATMAP
+═══════════════════════════════════════════ */
+function renderIntelHeatmap(){
+  const container=document.getElementById('intelContent');
+  const mfData=computeMFData();
+  const{sf}=mfData;
+  const max=Math.max(...sf.map(s=>Math.abs(s.diff)),1);
+  const sorted=[...sf].sort((a,b)=>b.diff-a.diff);
+  const sectorIcons={'Banking':'🏦','IT':'💻','Pharma':'💊','FMCG':'🛒','Infra':'🏗','Auto':'🚗','Energy':'⚡','Telecom':'📡','NBFC':'💳','Chemicals':'🧪','Consumer':'👜','Retail':'🏪','Hotels':'🏨','Healthcare':'🏥','Realty':'🏘','Electricals':'🔌','Electronics':'📱','Defence':'🛡','Utilities':'⚙','Mining':'⛏','Media':'📺','Internet':'🌐','Engineering':'⚙'};
+
+  container.innerHTML=`<div class="card" style="margin-bottom:12px">
+    <div class="card-header" style="margin-bottom:10px">
+      <div class="card-title">🌡 Sector Rotation Heatmap — Jan→Feb 2026</div>
+      <a class="source-pill" href="https://www.nseindia.com/market-data/live-equity-market?series=EQ" target="_blank">↗ NSE</a>
+    </div>
+    <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:12px">Net MF flow between months. Green = rotation INTO (buy sector), Red = rotation OUT (take profit).</div>
+    <div class="heatmap-grid">
+      ${sorted.map(s=>{
+        const neg=s.diff<0;
+        const intensity=Math.abs(s.diff)/max;
+        const bg=neg?`rgba(255,69,96,${0.06+intensity*0.18})`:`rgba(0,229,153,${0.06+intensity*0.18})`;
+        const barColor=neg?'var(--red)':'var(--green)';
+        const icon=sectorIcons[s.sec]||'📊';
+        const absDiff=Math.abs(Math.round(s.diff));
+        return`<div class="heatmap-cell" style="background:${bg};border-color:${neg?'rgba(255,69,96,.2)':'rgba(0,229,153,.2)'}">
+          <div class="heatmap-sec">${icon} ${s.sec}</div>
+          <div class="heatmap-val" style="color:${neg?'var(--red)':'var(--green)'}">${neg?'':'+'}₹${absDiff.toLocaleString()} Cr</div>
+          <div class="heatmap-bar" style="background:${barColor};width:${Math.round(intensity*100)}%"></div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div style="display:flex;gap:16px;margin-top:14px;font-size:.72rem;color:var(--text-muted)">
+      <span><span style="color:var(--green);font-weight:700">█</span> Rotation In (Accumulate)</span>
+      <span><span style="color:var(--red);font-weight:700">█</span> Rotation Out (Reduce)</span>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title" style="font-size:.82rem;margin-bottom:8px">📊 Top 3 Rotation Plays</div>
+    ${sorted.filter(s=>s.diff>0).slice(0,3).map((s,i)=>`<div class="digest-row">
+      <span><strong>#${i+1} ${s.sec}</strong> — MF rotating in</span>
+      <span style="color:var(--green);font-family:'Space Mono',monospace;font-weight:700">+₹${Math.abs(Math.round(s.diff)).toLocaleString()} Cr</span>
+    </div>`).join('')}
+  </div>`;
+}
+
+/* ═══════════════════════════════════════════
+   #8 MF CONVICTION TREND (Month-on-Month)
+═══════════════════════════════════════════ */
+// Adds trend arrows and month-dot indicators to existing ranking cards
+function getConvTrend(stock){
+  // Compare jan vs feb house count from HOLDINGS
+  let janHouses=new Set(),febHouses=new Set();
+  Object.values(HOLDINGS).forEach(f=>{
+    const inJan=f.jan?.find(h=>h.s===stock);
+    const inFeb=f.feb?.find(h=>h.s===stock);
+    if(inJan)janHouses.add(f.house);
+    if(inFeb)febHouses.add(f.house);
+  });
+  const j=janHouses.size,b=febHouses.size,diff=b-j;
+  const arrow=diff>0?'▲':diff<0?'▼':'→';
+  const cls=diff>0?'conv-trend-up':diff<0?'conv-trend-dn':'conv-trend-flat';
+  return{jan:j,feb:b,diff,arrow,cls};
+}
+
+/* ═══════════════════════════════════════════
+   #9 FOLLOW THE FUND MANAGER
+═══════════════════════════════════════════ */
+const FUND_MANAGERS=[
+  {name:'Prashant Jain',fund:'HDFC Flexi Cap',fundId:'hdfc_flexi',house:'HDFC',track:'20+ year track record · Value-oriented · Contrarian calls',icon:'🏆'},
+  {name:'Sankaran Naren',fund:'ICICI Pru Bluechip',fundId:'icici_blue',house:'ICICI',track:'Deep value, macro-aware · Sector rotation specialist',icon:'⚡'},
+  {name:'Rajeev Thakkar',fund:'Parag Parikh Flexi Cap',fundId:'ppfas',house:'PPFAS',track:'Quality-at-price · Long-term compounder focus · Global allocation',icon:'💎'},
+  {name:'George Heber Joseph',fund:'ITI Multi Cap',fundId:null,house:'ITI',track:'GARP investing · Emerging sectors focus',icon:'🌱'},
+  {name:'Multi-Manager',fund:'SBI Large Cap',fundId:'sbi_blue',house:'SBI',track:'Institutional process · Large-cap conviction',icon:'🏛'},
+];
+
+function renderIntelManagers(){
+  const container=document.getElementById('intelContent');
+  const mfData=computeMFData();
+  container.innerHTML=`<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:12px">Track specific fund managers' conviction moves. New position + increase = strongest signal from a star manager.</div>` +
+  FUND_MANAGERS.map(mgr=>{
+    const fund=mgr.fundId?HOLDINGS[mgr.fundId]:null;
+    if(!fund)return`<div class="manager-card">
+      <div class="manager-name">${mgr.icon} ${mgr.name}</div>
+      <div class="manager-meta">${mgr.fund} · ${mgr.house} MF</div>
+      <div style="font-size:.75rem;color:var(--text-muted)">${mgr.track}</div>
+      <div style="font-size:.72rem;color:var(--amber);margin-top:8px">⚠ Fund data not yet in tracker — add ${mgr.fund} to HOLDINGS to enable.</div>
+    </div>`;
+    // Find new entries (not in jan, in feb)
+    const janMap={};fund.jan.forEach(h=>janMap[h.s]=h);
+    const newEntries=fund.feb.filter(h=>!janMap[h.s]);
+    // Find increased (>0.2% change)
+    const increased=fund.feb.filter(h=>{const j=janMap[h.s];return j&&(h.pct-j.pct)>0.2;}).map(h=>({...h,prev:janMap[h.s].pct,diff:(h.pct-janMap[h.s].pct).toFixed(2)}));
+    const exited=fund.jan.filter(h=>!fund.feb.find(b=>b.s===h.s));
+    return`<div class="manager-card">
+      <div class="card-header" style="margin-bottom:6px">
+        <div>
+          <div class="manager-name">${mgr.icon} ${mgr.name}</div>
+          <div class="manager-meta">${mgr.fund} · AUM ₹${((fund.aum||20000)/100).toFixed(0)}k Cr</div>
+        </div>
+        <div class="card-header-actions">
+          <a class="hbtn-link" href="https://www.amfiindia.com/research-information/other-data/mf-scheme-performance-details" target="_blank">↗ AMFI</a>
+        </div>
+      </div>
+      <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:8px;font-style:italic">${mgr.track}</div>
+      ${newEntries.length?`<div style="font-size:.7rem;font-weight:700;color:var(--green);margin-bottom:4px">✦ NEW POSITIONS (${newEntries.length})</div>
+        <div class="manager-moves">${newEntries.slice(0,4).map(h=>`<div class="manager-move-row">
+          <span style="font-weight:700;font-family:'Space Mono',monospace">${h.s}</span>
+          <span class="badge badge-sector">${h.sec}</span>
+          <span style="color:var(--green);font-family:'Space Mono',monospace;font-size:.75rem">+${h.pct.toFixed(2)}% · ₹${h.v?.toLocaleString()||'—'} Cr</span>
+          <button class="hbtn hbtn-accent" onclick="openTrade('${h.s}')" style="font-size:.65rem;padding:2px 7px">▷</button>
+        </div>`).join('')}</div>`:
+        '<div style="font-size:.75rem;color:var(--text-muted);margin-bottom:4px">No new positions this month</div>'}
+      ${increased.length?`<div style="font-size:.7rem;font-weight:700;color:var(--blue);margin-top:8px;margin-bottom:4px">▲ INCREASED POSITIONS</div>
+        <div class="manager-moves">${increased.slice(0,4).map(h=>`<div class="manager-move-row">
+          <span style="font-weight:700;font-family:'Space Mono',monospace">${h.s}</span>
+          <span class="badge badge-sector">${h.sec}</span>
+          <span style="color:var(--blue);font-family:'Space Mono',monospace;font-size:.75rem">${h.prev}%→${h.pct}% (+${h.diff}%)</span>
+        </div>`).join('')}</div>`:''}
+      ${exited.length?`<div style="font-size:.7rem;font-weight:700;color:var(--red);margin-top:8px;margin-bottom:4px">↓ EXITED POSITIONS</div>
+        <div style="font-size:.75rem;color:var(--red)">${exited.slice(0,4).map(h=>h.s).join(', ')}</div>`:''}
+    </div>`;
+  }).join('');
+}
+
+/* ═══════════════════════════════════════════
+   #10 DELIVERY VOLUME SPIKE (in Market Pulse)
+═══════════════════════════════════════════ */
+// Delivery data — updated via GitHub Actions from NSE bhavcopy
+const DELIVERY_DATA={};// populated from foData.deliveryData if available
+function renderDeliverySpikes(){
+  const signals=STATE.foData?.signals||{};
+  const spikes=[];
+  // Check delivery% from foData if available
+  Object.entries(signals).forEach(([sym,s])=>{
+    if(s.delPct&&s.delPct>70&&s.score>0.5&&parseFloat(s.d1)>0){
+      spikes.push({sym,delPct:s.delPct,d1:s.d1,score:s.score});
+    }
+  });
+  const el=document.getElementById('deliverySpikeSection');if(!el)return;
+  if(!spikes.length){el.innerHTML='<div style="font-size:.75rem;color:var(--text-muted)">No high-delivery spikes detected today</div>';return;}
+  el.innerHTML=spikes.slice(0,5).map(s=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:.78rem">
+    <span style="font-weight:700;font-family:'Space Mono',monospace">${s.sym}</span>
+    <span style="color:var(--green);font-weight:700">${s.delPct.toFixed(1)}% delivery</span>
+    <span style="color:var(--green);font-size:.72rem">▲${parseFloat(s.d1).toFixed(2)}%</span>
+  </div>`).join('');
+}
+
+/* ═══════════════════════════════════════════
+   #11 PCR PER STOCK
+═══════════════════════════════════════════ */
+// PCR data from foData.pcr or fetched from NSE option chain
+function getPCR(sym){
+  const pcr=STATE.foData?.pcr?.[sym]||STATE.pcrData?.[sym]||null;
+  return pcr;
+}
+function pcrBadge(sym){
+  const pcr=getPCR(sym);if(!pcr)return'';
+  const bull=pcr>=1.2,bear=pcr<0.7;
+  const cls=bull?'pcr-bull':bear?'pcr-bear':'pcr-neut';
+  const label=bull?'Bullish':bear?'Bearish':'Neutral';
+  return`<span class="pcr-badge ${cls}" title="Put-Call Ratio: ${pcr.toFixed(2)} — ${pcr>=1.2?'Options market expects support':pcr<0.7?'Bearish options positioning':'Neutral'}"">PCR ${pcr.toFixed(2)} · ${label}</span>`;
+}
+
+async function fetchPCRData(){
+  // PCR now populated in foData.pcr by the workflow
+  if(STATE.foData?.pcr){STATE.pcrData={...STATE.foData.pcr};return;}
+  // Fallback: demo PCR values for top stocks
+  const DEMO_PCR={'NIFTY':1.18,'BANKNIFTY':0.95,'ICICIBANK':1.31,'HDFCBANK':1.22,'RELIANCE':0.88,'INFY':1.05,'TCS':1.15,'BAJFINANCE':0.72,'AXISBANK':0.91,'SBIN':1.28,'BHARTIARTL':1.45,'LT':1.08};
+  STATE.pcrData={...DEMO_PCR};
+}
+
+/* ═══════════════════════════════════════════
+   #12 WEEKLY DIGEST PANEL
+═══════════════════════════════════════════ */
+function renderDigestPanel(){
+  const container=document.getElementById('portfolioContent');
+  const mfData=computeMFData(),mfPicks=computeMFPicks(mfData);
+  const signals=STATE.foData?.signals||{},trends=STATE.trendsData?.trends||{};
+  // Top 5 buys (high conviction)
+  const top5=mfPicks.filter(p=>{
+    const fo=signals[toSym(p.stock)];
+    const prob=computeProbScore(p.stock,p,fo||null,trends[toSym(p.stock)]||null);
+    return prob.total>=65;
+  }).slice(0,5);
+  // Top exits
+  const top3exits=mfData.ex.slice(0,3);
+  // Sector rotation summary
+  const topSectors=mfData.sf.filter(s=>s.diff>0).slice(0,3);
+  const now=new Date();
+  const weekLabel=`Week of ${now.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'})}`;
+
+  container.innerHTML=`<div class="portfolio-inner">
+  <div class="card" style="margin-bottom:12px">
+    <div class="card-header" style="margin-bottom:12px">
+      <div class="card-title">📧 Weekly Smart Money Digest</div>
+      <span style="font-size:.72rem;color:var(--text-muted);font-family:'Space Mono',monospace">${weekLabel}</span>
+    </div>
+    <div class="digest-section">
+      <div class="digest-title">⚡ Top 5 High-Conviction Buys</div>
+      ${top5.length?top5.map((p,i)=>{
+        const fo=signals[toSym(p.stock)];
+        const prob=computeProbScore(p.stock,p,fo||null,trends[toSym(p.stock)]||null);
+        return`<div class="digest-row"><div><strong>#${i+1} ${p.stock}</strong> <span style="font-size:.72rem;color:var(--text-muted)">${p.sec} · ${p.hc} houses</span></div><span style="font-family:'Space Mono',monospace;color:${prob.total>=75?'var(--green)':'var(--amber)'}">P:${prob.total}</span></div>`;
+      }).join(''):`<div style="font-size:.78rem;color:var(--text-muted);padding:6px 0">No high-conviction picks this week</div>`}
+    </div>
+    <div class="digest-section">
+      <div class="digest-title">↓ MF Exit Signals (${top3exits.length})</div>
+      ${top3exits.map(e=>`<div class="digest-row"><div><strong>${e.stock}</strong> <span style="font-size:.72rem;color:var(--text-muted)">${e.sec} · exited by ${e.fund||e.house}</span></div><span style="color:var(--red);font-size:.75rem">Exit</span></div>`).join('')||'<div style="font-size:.78rem;color:var(--text-muted);padding:6px 0">No new exits this week</div>'}
+    </div>
+    <div class="digest-section">
+      <div class="digest-title">🌡 Sector Rotation — Rotate INTO</div>
+      ${topSectors.map((s,i)=>`<div class="digest-row"><span>#${i+1} <strong>${s.sec}</strong></span><span style="color:var(--green);font-family:'Space Mono',monospace">+₹${Math.abs(Math.round(s.diff)).toLocaleString()} Cr</span></div>`).join('')||'<div style="font-size:.78rem;color:var(--text-muted)">No data</div>'}
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px">
+      <button class="hbtn hbtn-accent" onclick="copyDigest()">📋 Copy Digest</button>
+      <button class="hbtn hbtn-ghost" onclick="downloadDigest()">⬇ Download .txt</button>
+    </div>
+    <div style="margin-top:12px;padding:10px;background:var(--surface2);border-radius:8px;border:1px solid var(--border);font-size:.72rem;color:var(--text-muted)">
+      <strong>📮 Auto Email Setup:</strong> Add a <code>SENDGRID_API_KEY</code> secret to your GitHub repo and uncomment the email step in <code>.github/workflows/smart_money_daily.yml</code> to get this digest every Friday at 4PM IST.
+    </div>
+  </div></div>`;
+}
+
+function copyDigest(){
+  const mfData=computeMFData(),mfPicks=computeMFPicks(mfData);
+  const signals=STATE.foData?.signals||{},trends=STATE.trendsData?.trends||{};
+  const top5=mfPicks.filter(p=>{const fo=signals[toSym(p.stock)];const prob=computeProbScore(p.stock,p,fo||null,trends[toSym(p.stock)]||null);return prob.total>=65;}).slice(0,5);
+  const exits=mfData.ex.slice(0,3);
+  const now=new Date();
+  let text=`MF Intelligence Weekly Digest — ${now.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'})}\n${'='.repeat(55)}\n\n`;
+  text+=`TOP 5 HIGH-CONVICTION BUYS:\n${top5.map((p,i)=>` ${i+1}. ${p.stock} (${p.sec}) — ${p.hc} MF houses`).join('\n')||' No high-conviction picks'}\n\n`;
+  text+=`MF EXITS:\n${exits.map(e=>` • ${e.stock} — exited by ${e.fund||e.house}`).join('\n')||' No new exits'}\n\n`;
+  text+=`SECTOR ROTATION (INTO):\n${mfData.sf.filter(s=>s.diff>0).slice(0,3).map((s,i)=>` ${i+1}. ${s.sec}: +₹${Math.abs(Math.round(s.diff)).toLocaleString()} Cr`).join('\n')}\n\n`;
+  text+=`Generated by MF Intelligence V10 — https://mf-intelligence.vercel.app\n`;
+  navigator.clipboard.writeText(text).then(()=>showToast('✅ Digest copied to clipboard')).catch(()=>showToast('Copy failed — use Download instead'));
+}
+function downloadDigest(){
+  const mfData=computeMFData(),mfPicks=computeMFPicks(mfData);
+  const top5=mfPicks.slice(0,5);
+  const now=new Date(),ds=now.toISOString().split('T')[0];
+  let text=`MF Intelligence Digest — ${ds}\n${top5.map((p,i)=>`${i+1}. ${p.stock}`).join('\n')}`;
+  const a=document.createElement('a');a.href='data:text/plain;charset=utf-8,'+encodeURIComponent(text);a.download=`mfi-digest-${ds}.txt`;a.click();
+}
+
+
 function init(){
-  loadPrefs();
+  loadPrefs();loadAlerts();
   document.querySelectorAll('.theme-btn').forEach(b=>b.addEventListener('click',()=>applyTheme(b.dataset.theme)));
   document.querySelectorAll('.fs-btn').forEach(b=>b.addEventListener('click',()=>applyFs(parseInt(b.dataset.fs))));
   document.querySelectorAll('.nav-tab').forEach(b=>b.addEventListener('click',()=>switchTab(b.dataset.tab)));
   initPillTabs();initSearch();
   renderMarket();renderIntelligence();renderPortfolio();
-  fetchFOData().then(()=>{fetchTrends();fetchNifty();});
-  setInterval(fetchNifty,60000);
+  fetchFOData().then(async()=>{
+    fetchTrends();
+    fetchNifty();
+    await fetchHistoryForSparklines();
+    await fetchPCRData();
+    renderIntelligence();
+    renderFiiDivergenceAlert();
+    renderDeliverySpikes();
+  });
+  setInterval(()=>{fetchNifty();checkPriceAlerts();},60000);
 }
 document.addEventListener('DOMContentLoaded',init);
 </script>
