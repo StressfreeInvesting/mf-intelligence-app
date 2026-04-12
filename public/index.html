@@ -381,6 +381,7 @@ button{cursor:pointer;font-family:inherit}
       <div class="header-right">
         <span class="live-dot"></span>
         <span id="quotesAge" class="quotes-age"></span>
+        <button id="refreshBtn" class="theme-btn" onclick="manualRefresh(this)" title="Refresh data from GitHub">↺ Refresh</button>
         <span style="font-size:.65rem;color:var(--text-muted);font-family:'Space Mono',monospace">V9</span>
       </div>
     </div>
@@ -561,10 +562,47 @@ const HOLDINGS={
     feb:[{s:"HDFC Bank",sec:"Banking",pct:9.8,v:3940},{s:"ICICI Bank",sec:"Banking",pct:8.1,v:3256},{s:"Reliance",sec:"Energy",pct:6.9,v:2774},{s:"Infosys",sec:"IT",pct:5.8,v:2332},{s:"TCS",sec:"IT",pct:5.0,v:2010},{s:"Bharti Airtel",sec:"Telecom",pct:4.5,v:1809},{s:"L&T",sec:"Infra",pct:3.3,v:1327},{s:"SBI",sec:"Banking",pct:3.0,v:1206},{s:"Bajaj Finance",sec:"NBFC",pct:2.2,v:884}]},
   hdfc_t100:{name:"HDFC Top 100",house:"HDFC",disclosureMonth:"2026-02",
     jan:[{s:"ICICI Bank",sec:"Banking",pct:9.1,v:3349},{s:"HDFC Bank",sec:"Banking",pct:8.2,v:3018},{s:"Reliance",sec:"Energy",pct:6.5,v:2392},{s:"Infosys",sec:"IT",pct:5.8,v:2134},{s:"L&T",sec:"Infra",pct:4.5,v:1656},{s:"TCS",sec:"IT",pct:4.0,v:1472},{s:"Bharti Airtel",sec:"Telecom",pct:3.6,v:1325},{s:"SBI",sec:"Banking",pct:3.2,v:1178},{s:"Axis Bank",sec:"Banking",pct:2.8,v:1030},{s:"ITC",sec:"FMCG",pct:2.5,v:920}],
-    feb:[{s:"ICICI Bank",sec:"Banking",pct:9.5,v:3496},{s:"HDFC Bank",sec:"Banking",pct:8.5,v:3128},{s:"Reliance",sec:"Energy",pct:6.2,v:2282},{s:"Infosys",sec:"IT",pct:5.5,v:2024},{s:"L&T",sec:"Infra",pct:4.7,v:1730},{s:"TCS",sec:"IT",pct:4.2,v:1546},{s:"Bharti Airtel",sec:"Telecom",pct:3.9,v:1435},{s:"SBI",sec:"Banking",pct:3.4,v:1251},{s:"Axis Bank",sec:"Banking",pct:3.0,v:1104},{s:"ITC",sec:"FMCG",pct:2.7,v:994}]}
+    feb:[{s:"ICICI Bank",sec:"Banking",pct:9.5,v:3496},{s:"HDFC Bank",sec:"Banking",pct:8.5,v:3128},{s:"Reliance",sec:"Energy",pct:6.2,v:2282},{s:"Infosys",sec:"IT",pct:5.5,v:2024},{s:"L&T",sec:"Infra",pct:4.7,v:1730},{s:"TCS",sec:"IT",pct:4.2,v:1546},{s:"Bharti Airtel",sec:"Telecom",pct:3.9,v:1435},{s:"SBI",sec:"Banking",pct:3.4,v:1251},{s:"Axis Bank",sec:"Banking",pct:3.0,v:1104},{s:"ITC",sec:"FMCG",pct:2.7,v:994}]},
+  /* ── NEW FUNDS ── */
+  nippon_sc:{name:"Nippon India Small Cap",house:"Nippon",disclosureMonth:"2026-02",aum:61000,
+    jan:[{s:"KPIT Tech",sec:"IT",pct:3.2,v:1952},{s:"Tube Investments",sec:"Engineering",pct:2.8,v:1708},{s:"Karur Vysya Bank",sec:"Banking",pct:2.4,v:1464},{s:"Apar Industries",sec:"Electricals",pct:2.2,v:1342},{s:"Kaynes Tech",sec:"Electronics",pct:2.0,v:1220},{s:"Deepak Nitrite",sec:"Chemicals",pct:1.9,v:1159},{s:"Dixon Tech",sec:"Electronics",pct:1.8,v:1098},{s:"Navin Fluorine",sec:"Chemicals",pct:1.7,v:1037},{s:"Triveni Turbine",sec:"Engineering",pct:1.6,v:976},{s:"Craftsman Auto",sec:"Auto",pct:1.5,v:915},{s:"Fine Organics",sec:"Chemicals",pct:1.4,v:854},{s:"Garware Tech",sec:"Chemicals",pct:1.3,v:793}],
+    feb:[{s:"KPIT Tech",sec:"IT",pct:3.4,v:2074},{s:"Tube Investments",sec:"Engineering",pct:3.0,v:1830},{s:"Karur Vysya Bank",sec:"Banking",pct:2.5,v:1525},{s:"Apar Industries",sec:"Electricals",pct:2.3,v:1403},{s:"Kaynes Tech",sec:"Electronics",pct:2.1,v:1281},{s:"Deepak Nitrite",sec:"Chemicals",pct:2.0,v:1220},{s:"Dixon Tech",sec:"Electronics",pct:1.9,v:1159},{s:"Navin Fluorine",sec:"Chemicals",pct:1.8,v:1098},{s:"Triveni Turbine",sec:"Engineering",pct:1.7,v:1037},{s:"Craftsman Auto",sec:"Auto",pct:1.6,v:976},{s:"Fine Organics",sec:"Chemicals",pct:1.5,v:915},{s:"Garware Tech",sec:"Chemicals",pct:1.4,v:854}]},
+  sbi_sc:{name:"SBI Small Cap",house:"SBI",disclosureMonth:"2026-02",aum:32000,
+    jan:[{s:"Chalet Hotels",sec:"Hotels",pct:3.8,v:1216},{s:"Blue Star",sec:"Consumer",pct:3.2,v:1024},{s:"Mahindra Lifespace",sec:"Realty",pct:2.9,v:928},{s:"Welspun Corp",sec:"Steel",pct:2.6,v:832},{s:"Techno Electric",sec:"Electricals",pct:2.4,v:768},{s:"Sheela Foam",sec:"Consumer",pct:2.2,v:704},{s:"Sudarshan Chemical",sec:"Chemicals",pct:2.0,v:640},{s:"Va Tech Wabag",sec:"Engineering",pct:1.8,v:576},{s:"Greenpanel",sec:"Consumer",pct:1.6,v:512},{s:"Vinati Organics",sec:"Chemicals",pct:1.5,v:480}],
+    feb:[{s:"Chalet Hotels",sec:"Hotels",pct:4.0,v:1280},{s:"Blue Star",sec:"Consumer",pct:3.4,v:1088},{s:"Mahindra Lifespace",sec:"Realty",pct:3.1,v:992},{s:"Welspun Corp",sec:"Steel",pct:2.8,v:896},{s:"Techno Electric",sec:"Electricals",pct:2.6,v:832},{s:"Sheela Foam",sec:"Consumer",pct:2.4,v:768},{s:"Sudarshan Chemical",sec:"Chemicals",pct:2.2,v:704},{s:"Va Tech Wabag",sec:"Engineering",pct:2.0,v:640},{s:"Greenpanel",sec:"Consumer",pct:1.8,v:576},{s:"Vinati Organics",sec:"Chemicals",pct:1.7,v:544}]},
+  hdfc_sc:{name:"HDFC Small Cap",house:"HDFC",disclosureMonth:"2026-02",aum:34000,
+    jan:[{s:"Aster DM Health",sec:"Healthcare",pct:3.5,v:1190},{s:"Indian Energy Exchange",sec:"Utilities",pct:3.0,v:1020},{s:"Sonata Software",sec:"IT",pct:2.8,v:952},{s:"Redington",sec:"IT",pct:2.5,v:850},{s:"Saregama India",sec:"Media",pct:2.2,v:748},{s:"Suprajit Engineering",sec:"Auto",pct:2.0,v:680},{s:"Vesuvius India",sec:"Engineering",pct:1.9,v:646},{s:"Repco Home Fin",sec:"NBFC",pct:1.8,v:612},{s:"Kirloskar Electric",sec:"Electricals",pct:1.7,v:578},{s:"PNC Infratech",sec:"Infra",pct:1.6,v:544}],
+    feb:[{s:"Aster DM Health",sec:"Healthcare",pct:3.7,v:1258},{s:"Indian Energy Exchange",sec:"Utilities",pct:3.2,v:1088},{s:"Sonata Software",sec:"IT",pct:3.0,v:1020},{s:"Redington",sec:"IT",pct:2.7,v:918},{s:"Saregama India",sec:"Media",pct:2.4,v:816},{s:"Suprajit Engineering",sec:"Auto",pct:2.2,v:748},{s:"Vesuvius India",sec:"Engineering",pct:2.1,v:714},{s:"Repco Home Fin",sec:"NBFC",pct:1.9,v:646},{s:"Kirloskar Electric",sec:"Electricals",pct:1.8,v:612},{s:"PNC Infratech",sec:"Infra",pct:1.7,v:578}]},
+  uti_flexi:{name:"UTI Flexi Cap",house:"UTI",disclosureMonth:"2026-02",aum:26000,
+    jan:[{s:"HDFC Bank",sec:"Banking",pct:8.5,v:2210},{s:"ICICI Bank",sec:"Banking",pct:7.2,v:1872},{s:"Infosys",sec:"IT",pct:6.8,v:1768},{s:"Kotak Bank",sec:"Banking",pct:5.1,v:1326},{s:"Bajaj Finance",sec:"NBFC",pct:4.3,v:1118},{s:"Avenue Supermarts",sec:"Retail",pct:3.8,v:988},{s:"Titan",sec:"Consumer",pct:3.5,v:910},{s:"Nestle India",sec:"FMCG",pct:3.2,v:832},{s:"Tata Elxsi",sec:"IT",pct:2.8,v:728},{s:"Astral",sec:"Chemicals",pct:2.3,v:598}],
+    feb:[{s:"HDFC Bank",sec:"Banking",pct:8.8,v:2288},{s:"ICICI Bank",sec:"Banking",pct:7.5,v:1950},{s:"Infosys",sec:"IT",pct:6.5,v:1690},{s:"Kotak Bank",sec:"Banking",pct:5.3,v:1378},{s:"Bajaj Finance",sec:"NBFC",pct:4.5,v:1170},{s:"Avenue Supermarts",sec:"Retail",pct:3.6,v:936},{s:"Titan",sec:"Consumer",pct:3.7,v:962},{s:"Nestle India",sec:"FMCG",pct:3.0,v:780},{s:"Tata Elxsi",sec:"IT",pct:2.6,v:676},{s:"Astral",sec:"Chemicals",pct:2.5,v:650}]},
+  dsp_flexi:{name:"DSP Flexi Cap",house:"DSP",disclosureMonth:"2026-02",aum:11000,
+    jan:[{s:"HDFC Bank",sec:"Banking",pct:7.8,v:858},{s:"ICICI Bank",sec:"Banking",pct:6.5,v:715},{s:"Infosys",sec:"IT",pct:5.9,v:649},{s:"Reliance",sec:"Energy",pct:5.2,v:572},{s:"L&T",sec:"Infra",pct:4.1,v:451},{s:"Tata Motors",sec:"Auto",pct:3.8,v:418},{s:"Wipro",sec:"IT",pct:3.2,v:352},{s:"Sun Pharma",sec:"Pharma",pct:2.9,v:319},{s:"Mankind Pharma",sec:"Pharma",pct:2.5,v:275},{s:"Zomato",sec:"Internet",pct:2.1,v:231}],
+    feb:[{s:"HDFC Bank",sec:"Banking",pct:8.1,v:891},{s:"ICICI Bank",sec:"Banking",pct:6.8,v:748},{s:"Infosys",sec:"IT",pct:5.6,v:616},{s:"Reliance",sec:"Energy",pct:5.0,v:550},{s:"L&T",sec:"Infra",pct:4.3,v:473},{s:"Tata Motors",sec:"Auto",pct:3.6,v:396},{s:"Wipro",sec:"IT",pct:3.4,v:374},{s:"Sun Pharma",sec:"Pharma",pct:3.1,v:341},{s:"Mankind Pharma",sec:"Pharma",pct:2.7,v:297},{s:"Zomato",sec:"Internet",pct:2.3,v:253}]},
+  franklin_flexi:{name:"Franklin India Flexi Cap",house:"Franklin",disclosureMonth:"2026-02",aum:17000,
+    jan:[{s:"HDFC Bank",sec:"Banking",pct:9.2,v:1564},{s:"ICICI Bank",sec:"Banking",pct:7.8,v:1326},{s:"Infosys",sec:"IT",pct:6.1,v:1037},{s:"Bharti Airtel",sec:"Telecom",pct:5.4,v:918},{s:"HCL Tech",sec:"IT",pct:4.8,v:816},{s:"SBI",sec:"Banking",pct:4.2,v:714},{s:"Axis Bank",sec:"Banking",pct:3.7,v:629},{s:"Cipla",sec:"Pharma",pct:3.1,v:527},{s:"Bajaj Auto",sec:"Auto",pct:2.8,v:476},{s:"Coal India",sec:"Mining",pct:2.4,v:408}],
+    feb:[{s:"HDFC Bank",sec:"Banking",pct:9.5,v:1615},{s:"ICICI Bank",sec:"Banking",pct:8.1,v:1377},{s:"Infosys",sec:"IT",pct:5.8,v:986},{s:"Bharti Airtel",sec:"Telecom",pct:5.6,v:952},{s:"HCL Tech",sec:"IT",pct:4.5,v:765},{s:"SBI",sec:"Banking",pct:4.4,v:748},{s:"Axis Bank",sec:"Banking",pct:3.9,v:663},{s:"Cipla",sec:"Pharma",pct:3.3,v:561},{s:"Bajaj Auto",sec:"Auto",pct:3.0,v:510},{s:"Coal India",sec:"Mining",pct:2.6,v:442}]},
+  canara_flexi:{name:"Canara Robeco Flexi Cap",house:"Canara",disclosureMonth:"2026-02",aum:10500,
+    jan:[{s:"HDFC Bank",sec:"Banking",pct:8.9,v:935},{s:"ICICI Bank",sec:"Banking",pct:7.4,v:777},{s:"Reliance",sec:"Energy",pct:6.2,v:651},{s:"Infosys",sec:"IT",pct:5.5,v:578},{s:"TCS",sec:"IT",pct:4.8,v:504},{s:"L&T",sec:"Infra",pct:4.0,v:420},{s:"Bajaj Finance",sec:"NBFC",pct:3.5,v:368},{s:"Sun Pharma",sec:"Pharma",pct:3.1,v:326},{s:"Kotak Bank",sec:"Banking",pct:2.8,v:294},{s:"ITC",sec:"FMCG",pct:2.5,v:263}],
+    feb:[{s:"HDFC Bank",sec:"Banking",pct:9.2,v:966},{s:"ICICI Bank",sec:"Banking",pct:7.7,v:809},{s:"Reliance",sec:"Energy",pct:5.9,v:620},{s:"Infosys",sec:"IT",pct:5.2,v:546},{s:"TCS",sec:"IT",pct:5.0,v:525},{s:"L&T",sec:"Infra",pct:4.2,v:441},{s:"Bajaj Finance",sec:"NBFC",pct:3.7,v:389},{s:"Sun Pharma",sec:"Pharma",pct:3.3,v:347},{s:"Kotak Bank",sec:"Banking",pct:3.0,v:315},{s:"ITC",sec:"FMCG",pct:2.7,v:284}]},
+  tata_flexi:{name:"Tata Flexi Cap",house:"Tata",disclosureMonth:"2026-02",aum:8500,
+    jan:[{s:"ICICI Bank",sec:"Banking",pct:8.1,v:689},{s:"HDFC Bank",sec:"Banking",pct:7.3,v:621},{s:"Infosys",sec:"IT",pct:6.4,v:544},{s:"Reliance",sec:"Energy",pct:5.8,v:493},{s:"Bharti Airtel",sec:"Telecom",pct:5.0,v:425},{s:"TCS",sec:"IT",pct:4.5,v:383},{s:"Tata Motors",sec:"Auto",pct:3.8,v:323},{s:"Tata Steel",sec:"Steel",pct:3.2,v:272},{s:"Tata Consultancy",sec:"IT",pct:2.9,v:247},{s:"Titan",sec:"Consumer",pct:2.6,v:221}],
+    feb:[{s:"ICICI Bank",sec:"Banking",pct:8.4,v:714},{s:"HDFC Bank",sec:"Banking",pct:7.6,v:646},{s:"Infosys",sec:"IT",pct:6.1,v:519},{s:"Reliance",sec:"Energy",pct:5.5,v:468},{s:"Bharti Airtel",sec:"Telecom",pct:5.2,v:442},{s:"TCS",sec:"IT",pct:4.7,v:400},{s:"Tata Motors",sec:"Auto",pct:4.0,v:340},{s:"Tata Steel",sec:"Steel",pct:3.4,v:289},{s:"Tata Consultancy",sec:"IT",pct:2.7,v:230},{s:"Titan",sec:"Consumer",pct:2.8,v:238}]},
+  icici_mc:{name:"ICICI Pru Midcap",house:"ICICI",disclosureMonth:"2026-02",aum:7200,
+    jan:[{s:"Indian Hotels",sec:"Hotels",pct:4.5,v:324},{s:"Persistent Sys",sec:"IT",pct:4.1,v:295},{s:"Max Healthcare",sec:"Healthcare",pct:3.8,v:274},{s:"Astral",sec:"Chemicals",pct:3.4,v:245},{s:"Voltas",sec:"Consumer",pct:3.0,v:216},{s:"Coforge",sec:"IT",pct:2.8,v:202},{s:"Cholamandalam",sec:"NBFC",pct:2.6,v:187},{s:"Manappuram Fin",sec:"NBFC",pct:2.3,v:166},{s:"Sona BLW",sec:"Auto",pct:2.1,v:151},{s:"Kaynes Tech",sec:"Electronics",pct:1.9,v:137}],
+    feb:[{s:"Indian Hotels",sec:"Hotels",pct:4.8,v:346},{s:"Persistent Sys",sec:"IT",pct:4.3,v:310},{s:"Max Healthcare",sec:"Healthcare",pct:4.0,v:288},{s:"Astral",sec:"Chemicals",pct:3.6,v:259},{s:"Voltas",sec:"Consumer",pct:3.2,v:230},{s:"Coforge",sec:"IT",pct:3.0,v:216},{s:"Cholamandalam",sec:"NBFC",pct:2.8,v:202},{s:"Manappuram Fin",sec:"NBFC",pct:2.5,v:180},{s:"Sona BLW",sec:"Auto",pct:2.2,v:158},{s:"Kaynes Tech",sec:"Electronics",pct:2.0,v:144}]},
+  quant_sc:{name:"Quant Small Cap",house:"Quant",disclosureMonth:"2026-02",aum:23000,
+    jan:[{s:"Reliance",sec:"Energy",pct:5.2,v:1196},{s:"ITC",sec:"FMCG",pct:4.8,v:1104},{s:"HDFC Bank",sec:"Banking",pct:4.1,v:943},{s:"IRB Infrastructure",sec:"Infra",pct:3.6,v:828},{s:"Jio Financial",sec:"NBFC",pct:3.2,v:736},{s:"Sula Vineyards",sec:"FMCG",pct:2.9,v:667},{s:"Waaree Energies",sec:"Energy",pct:2.7,v:621},{s:"Rategain Travel",sec:"IT",pct:2.4,v:552},{s:"BLS International",sec:"IT",pct:2.1,v:483},{s:"Premier Explosives",sec:"Chemicals",pct:1.9,v:437}],
+    feb:[{s:"Reliance",sec:"Energy",pct:5.5,v:1265},{s:"ITC",sec:"FMCG",pct:5.1,v:1173},{s:"HDFC Bank",sec:"Banking",pct:4.3,v:989},{s:"IRB Infrastructure",sec:"Infra",pct:3.8,v:874},{s:"Jio Financial",sec:"NBFC",pct:3.4,v:782},{s:"Sula Vineyards",sec:"FMCG",pct:2.7,v:621},{s:"Waaree Energies",sec:"Energy",pct:2.9,v:667},{s:"Rategain Travel",sec:"IT",pct:2.6,v:598},{s:"BLS International",sec:"IT",pct:2.3,v:529},{s:"Premier Explosives",sec:"Chemicals",pct:2.1,v:483}]},
+  motilal_mc:{name:"Motilal Oswal Midcap",house:"Motilal",disclosureMonth:"2026-02",aum:19000,
+    jan:[{s:"Coforge",sec:"IT",pct:8.2,v:1558},{s:"Persistent Sys",sec:"IT",pct:7.5,v:1425},{s:"Kalyan Jewellers",sec:"Retail",pct:6.1,v:1159},{s:"Zomato",sec:"Internet",pct:5.4,v:1026},{s:"Policybazaar",sec:"Internet",pct:4.8,v:912},{s:"Jio Financial",sec:"NBFC",pct:4.2,v:798},{s:"Kaynes Tech",sec:"Electronics",pct:3.8,v:722},{s:"KPIT Tech",sec:"IT",pct:3.5,v:665},{s:"Dixon Tech",sec:"Electronics",pct:3.2,v:608},{s:"Waaree Energies",sec:"Energy",pct:2.9,v:551}],
+    feb:[{s:"Coforge",sec:"IT",pct:8.5,v:1615},{s:"Persistent Sys",sec:"IT",pct:7.8,v:1482},{s:"Kalyan Jewellers",sec:"Retail",pct:6.4,v:1216},{s:"Zomato",sec:"Internet",pct:5.7,v:1083},{s:"Policybazaar",sec:"Internet",pct:5.0,v:950},{s:"Jio Financial",sec:"NBFC",pct:4.4,v:836},{s:"Kaynes Tech",sec:"Electronics",pct:4.0,v:760},{s:"KPIT Tech",sec:"IT",pct:3.7,v:703},{s:"Dixon Tech",sec:"Electronics",pct:3.4,v:646},{s:"Waaree Energies",sec:"Energy",pct:3.1,v:589}]},
+  mirae_mc:{name:"Mirae Asset Midcap",house:"Mirae",disclosureMonth:"2026-02",aum:14000,
+    jan:[{s:"Persistent Sys",sec:"IT",pct:5.2,v:728},{s:"Indian Hotels",sec:"Hotels",pct:4.8,v:672},{s:"Cummins India",sec:"Engineering",pct:4.1,v:574},{s:"Bharat Electronics",sec:"Defence",pct:3.8,v:532},{s:"Divi's Lab",sec:"Pharma",pct:3.5,v:490},{s:"Cholamandalam",sec:"NBFC",pct:3.2,v:448},{s:"Godrej Properties",sec:"Realty",pct:2.9,v:406},{s:"Sona BLW",sec:"Auto",pct:2.7,v:378},{s:"Trent",sec:"Retail",pct:2.5,v:350},{s:"SRF",sec:"Chemicals",pct:2.2,v:308}],
+    feb:[{s:"Persistent Sys",sec:"IT",pct:5.5,v:770},{s:"Indian Hotels",sec:"Hotels",pct:5.0,v:700},{s:"Cummins India",sec:"Engineering",pct:4.3,v:602},{s:"Bharat Electronics",sec:"Defence",pct:4.0,v:560},{s:"Divi's Lab",sec:"Pharma",pct:3.7,v:518},{s:"Cholamandalam",sec:"NBFC",pct:3.4,v:476},{s:"Godrej Properties",sec:"Realty",pct:3.1,v:434},{s:"Sona BLW",sec:"Auto",pct:2.9,v:406},{s:"Trent",sec:"Retail",pct:2.7,v:378},{s:"SRF",sec:"Chemicals",pct:2.4,v:336}]}
 };
 
-const NMAP={"ICICI Bank":"ICICIBANK","HDFC Bank":"HDFCBANK","SBI":"SBIN","Axis Bank":"AXISBANK","Kotak Bank":"KOTAKBANK","Reliance":"RELIANCE","Infosys":"INFY","TCS":"TCS","Bharti Airtel":"BHARTIARTL","L&T":"LT","Maruti Suzuki":"MARUTI","Sun Pharma":"SUNPHARMA","Bajaj Finance":"BAJFINANCE","Titan":"TITAN","Cipla":"CIPLA","HCL Tech":"HCLTECH","ITC":"ITC","Coal India":"COALINDIA","Trent":"TRENT","Tata Motors":"TATAMOTORS","Power Grid":"POWERGRID","Divi's Lab":"DIVISLAB","CG Power":"CGPOWER","Persistent Sys":"PERSISTENT","Coforge":"COFORGE","Indian Hotels":"INDHOTEL","Cholamandalam":"CHOLAFIN","Zomato":"ETERNAL","Avenue Supermarts":"DMART","Dixon Tech":"DIXON","Voltas":"VOLTAS","HUL":"HINDUNILVR","M&M":"M&M","Zydus Life":"ZYDUSLIFE","Dr Reddys":"DRREDDY","Pidilite":"PIDILITIND","CG Power":"CGPOWER","Oberoi Realty":"OBEROIRLTY","Cummins India":"CUMMINSIND","Max Healthcare":"MAXHEALTH","Supreme Ind":"SUPREMEIND"};
+const NMAP={"ICICI Bank":"ICICIBANK","HDFC Bank":"HDFCBANK","SBI":"SBIN","Axis Bank":"AXISBANK","Kotak Bank":"KOTAKBANK","Reliance":"RELIANCE","Infosys":"INFY","TCS":"TCS","Bharti Airtel":"BHARTIARTL","L&T":"LT","Maruti Suzuki":"MARUTI","Sun Pharma":"SUNPHARMA","Bajaj Finance":"BAJFINANCE","Titan":"TITAN","Cipla":"CIPLA","HCL Tech":"HCLTECH","ITC":"ITC","Coal India":"COALINDIA","Trent":"TRENT","Tata Motors":"TATAMOTORS","Power Grid":"POWERGRID","Divi's Lab":"DIVISLAB","CG Power":"CGPOWER","Persistent Sys":"PERSISTENT","Coforge":"COFORGE","Indian Hotels":"INDHOTEL","Cholamandalam":"CHOLAFIN","Zomato":"ETERNAL","Avenue Supermarts":"DMART","Dixon Tech":"DIXON","Voltas":"VOLTAS","HUL":"HINDUNILVR","M&M":"M&M","Zydus Life":"ZYDUSLIFE","Dr Reddys":"DRREDDY","Pidilite":"PIDILITIND","Oberoi Realty":"OBEROIRLTY","Cummins India":"CUMMINSIND","Max Healthcare":"MAXHEALTH","Supreme Ind":"SUPREMEIND","KPIT Tech":"KPITTECH","Tube Investments":"TIINDIA","Karur Vysya Bank":"KARURVYSYA","Apar Industries":"APARINDS","Kaynes Tech":"KAYNES","Deepak Nitrite":"DEEPAKNTR","Navin Fluorine":"NAVINFLUOR","Triveni Turbine":"TRITURBINE","Craftsman Auto":"CRAFTSMAN","Fine Organics":"FINEORG","Garware Tech":"GARFIBRES","Chalet Hotels":"CHALET","Blue Star":"BLUESTARCO","Mahindra Lifespace":"MAHLIFE","Welspun Corp":"WELCORP","Techno Electric":"TECHNOE","Sheela Foam":"SHK","Sudarshan Chemical":"SUDARSCHEM","Va Tech Wabag":"WABAG","Greenpanel":"GREENPANEL","Vinati Organics":"VINATIORGA","Aster DM Health":"ASTERDM","Indian Energy Exchange":"IEX","Sonata Software":"SONATSOFTW","Redington":"REDINGTON","Saregama India":"SAREGAMA","Suprajit Engineering":"SUPRAJIT","Nestle India":"NESTLEIND","Tata Elxsi":"TATAELXSI","Astral":"ASTRAL","Wipro":"WIPRO","Mankind Pharma":"MANKIND","Bajaj Auto":"BAJAJ-AUTO","Bharat Electronics":"BEL","IRB Infrastructure":"IRB","Jio Financial":"JIOFIN","Sula Vineyards":"SULA","Waaree Energies":"WAAREEENER","Rategain Travel":"RATEGAIN","BLS International":"BLS","Premier Explosives":"PREMEXPLN","Kalyan Jewellers":"KALYANKJIL","Policybazaar":"POLICYBZR","Godrej Properties":"GODREJPROP","SRF":"SRF","Manappuram Fin":"MANAPPURAM","Sona BLW":"SONACOMS","Tata Steel":"TATASTEEL","Tata Consultancy":"TCS"};
 const INDEX_SYMS=new Set(["NIFTY","BANKNIFTY","SENSEX","FINNIFTY","NIFTYNXT50","MIDCPNIFTY","BANKEX","SX40","SENSEX50"]);
 
 function toSym(name){return NMAP[name]||name.toUpperCase().replace(/\s+/g,'');}
@@ -698,7 +736,22 @@ function renderMarket(){
   const houseMap={};
   mfData.mh.forEach(s=>s.funds.forEach(fn=>{Object.keys(HOLDINGS).forEach(fid=>{if(HOLDINGS[fid].name===fn){const h=HOLDINGS[fid].house;houseMap[h]=(houseMap[h]||0)+1;}});}));
   const el=document.getElementById('fundCards');
-  if(el)el.innerHTML=Object.entries(houseMap).map(([h,n])=>`<div class="fund-card"><div class="fund-card-name">${h} MF</div><div class="fund-card-count">${n}</div><div class="fund-card-label">Active picks</div></div>`).join('');
+  if(el){
+    const total=Object.keys(HOLDINGS).length;
+    el.innerHTML=Object.entries(houseMap).sort((a,b)=>b[1]-a[1]).map(([h,n])=>`<div class="fund-card"><div class="fund-card-name">${h} MF</div><div class="fund-card-count">${n}</div><div class="fund-card-label">Active picks</div></div>`).join('')+
+    `<div class="fund-card" style="border-style:dashed"><div class="fund-card-name">Total</div><div class="fund-card-count">${total}</div><div class="fund-card-label">Funds tracked</div></div>`;
+  }
+  // Show foData date in market pulse chips
+  if(STATE.foData?.meta){
+    const meta=STATE.foData.meta;
+    const fiiEl=document.getElementById('fiiChip');
+    const diiEl=document.getElementById('diiChip');
+    if(STATE.foData.fiiDii){
+      const fd=STATE.foData.fiiDii;
+      if(fiiEl){fiiEl.textContent=(fd.fii>=0?'+':'')+fd.fii.toLocaleString('en-IN')+' Cr';fiiEl.style.color=fd.fii>=0?'var(--green)':'var(--red)';}
+      if(diiEl){diiEl.textContent=(fd.dii>=0?'+':'')+fd.dii.toLocaleString('en-IN')+' Cr';diiEl.style.color=fd.dii>=0?'var(--blue)':'var(--red)';}
+    }
+  }
   renderFiiDiiChart();
 }
 
@@ -1018,57 +1071,6 @@ function renderIntelSectors(){
         </div>
       </div></div>`;
   }).join('')||`<div class="empty"><div class="empty-icon">▣</div>No sector data</div>`;
-}
-  if(tab==='sectors'){
-    const max=Math.max(...sf.map(s=>Math.abs(s.diff)),1);
-    container.innerHTML=sf.map(s=>{
-      const neg=s.diff<0,pct=Math.abs(s.diff)/max*100;
-      return`<div class="card"><div class="card-accent ${neg?'red':''}"></div>
-        <div class="card-grid">
-          <div><div class="card-col-label">Sector</div><div class="card-col-val">${s.sec}</div>
-            <div style="margin-top:6px;height:6px;background:var(--border);border-radius:3px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${neg?'var(--red)':'var(--accent)'};border-radius:3px"></div></div></div>
-          <div><div class="card-col-label">Net MF Flow</div><div class="card-col-val" style="color:${neg?'var(--red)':'var(--green)'}">${neg?'':'+'}₹${Math.abs(Math.round(s.diff)).toLocaleString()} Cr</div></div>
-        </div></div>`;
-    }).join('')||`<div class="empty"><div class="empty-icon">▣</div>No sector data</div>`;
-    return;
-  }
-  const items=tab==='buying'?sb:tab==='new'?fe:tab==='exits'?ex:tab==='reducing'?dec:[];
-  if(!items.length){container.innerHTML=`<div class="empty"><div class="empty-icon">▣</div>No data for this view</div>`;return;}
-  const mfPicks=computeMFPicks(mfData);
-  container.innerHTML=items.map((item,idx)=>{
-    const stock=item.stock,sym=toSym(stock),fo=getFO(sym);
-    const mfPick=mfPicks.find(p=>p.stock===stock)||null,trend=STATE.trendsData?.trends?.[sym]||null;
-    const prob=(fo||mfPick||trend)?computeProbScore(stock,mfPick,fo,trend):null;
-    const disc=disclosureBadge(item.disclosureMonth||item.funds?.[0]?.disclosureMonth);
-    const conf=confluenceBadge(prob?.sources||0);
-    const isWatched=STATE.watchlist.has(stock),isReducing=tab==='reducing',isExit=tab==='exits';
-    const fundLabel=Array.isArray(item.funds)?item.funds.map(f=>typeof f==='string'?f:f.fund||f.house||'').join(' · '):(item.fund||'');
-    let rightCol='';
-    if(isReducing){
-      const diff=(parseFloat(item.from)-parseFloat(item.to)).toFixed(1);
-      rightCol=`<div><div class="card-col-label">Allocation Change</div><div class="card-col-val" style="color:var(--red)">${item.from}% → ${item.to}%</div>
-        <div class="alloc-bar" style="margin-top:6px"><div class="alloc-bar-old" style="width:${parseFloat(item.from)*8}%"></div><div class="alloc-bar-fill" style="width:${parseFloat(item.to)*8}%"></div></div>
-        <div style="font-size:.68rem;color:var(--red);margin-top:3px">-${diff}% trimmed</div></div>`;
-    }else if(isExit){
-      rightCol=`<div><div class="card-col-label">Was Held At</div><div class="card-col-val" style="color:var(--red)">${item.pct}%</div><div class="card-col-label" style="margin-top:8px">House</div><div class="card-col-val">${item.house||''}</div></div>`;
-    }else{
-      const change=item.diff?parseFloat(item.diff):(item.pct||0),aum=item.v?`₹${Math.round(item.v).toLocaleString()} Cr`:'—';
-      rightCol=`<div><div class="card-col-label">Alloc Change</div><div class="card-col-val" style="color:${change>=0?'var(--green)':'var(--red)'}">${change>=0?'+':''}${parseFloat(change).toFixed(2)}%</div><div class="card-col-label" style="margin-top:8px">AUM Weight</div><div class="card-col-val">${aum}</div></div>`;
-    }
-    const probBadge=prob&&prob.total>=75?`<span class="badge badge-green" style="font-family:'Space Mono',monospace">P:${prob.total}</span>`:prob&&prob.total>=60?`<span class="badge badge-amber" style="font-family:'Space Mono',monospace">P:${prob.total}</span>`:'';
-    return`<div class="card"><div class="card-accent ${isExit||isReducing?'red':''}"></div>
-      <div class="card-header">
-        <div class="card-title">${stock} ${livePriceChip(stock,true)}</div>
-        <span class="badge badge-sector">${item.sec||''}</span>${disc}${conf}${probBadge}
-        <div class="card-header-actions">
-          <button class="hbtn-link" onclick="window.open('https://www.nseindia.com/get-quotes/equity?symbol=${sym}','_blank')">↗ NSE</button>
-          <button class="hbtn hbtn-ghost" onclick="toggleWatch('${stock}',this)">${isWatched?'★ Watching':'☆ Watch'}</button>
-          ${!isExit?`<button class="hbtn hbtn-accent" onclick="openTrade('${stock}')">▷ Buy</button>`:''}
-        </div>
-      </div>
-      <div class="card-grid"><div><div class="card-col-label">${isExit?'Exited by':isReducing?'Reducing:':'Buying fund'}</div><div class="card-col-val" style="font-size:.8rem">${fundLabel}</div></div>${rightCol}</div>
-    </div>`;
-  }).join('');
 }
 
 /* ═══════════════════════════════════════════
@@ -1418,8 +1420,22 @@ function renderCorrelation(){
 }
 
 /* ═══════════════════════════════════════════
-   EXPAND TOGGLE
+   MANUAL REFRESH
 ═══════════════════════════════════════════ */
+async function manualRefresh(btn){
+  if(btn){btn.textContent='↺ …';btn.disabled=true;}
+  try{
+    await fetchFOData();
+    await fetchTrends();
+    await fetchNifty();
+    renderMarket();
+    if(STATE.activeTab==='intelligence')renderIntelligence();
+    if(STATE.activeTab==='picks')renderPicks();
+    if(btn){btn.textContent='↺ Done';setTimeout(()=>{btn.textContent='↺ Refresh';btn.disabled=false;},2000);}
+  }catch(e){
+    if(btn){btn.textContent='↺ Error';setTimeout(()=>{btn.textContent='↺ Refresh';btn.disabled=false;},2000);}
+  }
+}
 function toggleExpand(id,btn){
   const body=document.getElementById(id);if(!body)return;
   const isOpen=body.classList.contains('open');
@@ -1455,14 +1471,22 @@ function updateFreshness(){
 ═══════════════════════════════════════════ */
 async function fetchNifty(){
   try{
-    const r=await fetch('/api/nifty');if(!r.ok)return;
-    const d=await r.json();if(!d.dataAvailable)return;
+    const r=await fetch('/api/nifty');if(!r.ok)throw new Error('no data');
+    const d=await r.json();if(!d.dataAvailable)throw new Error('not available');
     if(d.indices?.nifty)renderNiftyTile('nifty',d.indices.nifty);
     if(d.indices?.banknifty)renderNiftyTile('bnk',d.indices.banknifty);
     if(d.quotes)Object.assign(STATE.quotes,d.quotes);
     STATE.quotesAge=d.fetchedAt;
     refreshCurrentTab();
-  }catch(e){console.warn('Nifty fetch:',e);}
+  }catch(e){
+    // Show "Upload data to see live prices" instead of "Loading…"
+    const nv=document.getElementById('niftyVal'),bv=document.getElementById('bnkVal');
+    const nc=document.getElementById('niftyChg'),bc=document.getElementById('bnkChg');
+    if(nv&&nv.textContent==='—'){nv.textContent='—';if(nc)nc.textContent='Upload F&O data for live prices';}
+    if(bv&&bv.textContent==='—'){bv.textContent='—';if(bc)bc.textContent='Upload F&O data for live prices';}
+    console.warn('Nifty fetch:',e);
+  }
+}
 }
 
 async function fetchFOData(){
@@ -1470,11 +1494,11 @@ async function fetchFOData(){
     const cfg=await fetch('/api/config').then(r=>r.json()).catch(()=>null);
     if(cfg?.dataUrl){
       const r=await fetch(cfg.dataUrl+'?t='+Date.now());
-      if(r.ok){STATE.foData=await r.json();updateFreshness();renderIntelligence();renderPicks();return;}
+      if(r.ok){STATE.foData=await r.json();updateFreshness();renderMarket();renderIntelligence();renderPicks();return;}
     }
     const r=await fetch('/api/history?type=trends&days=5');
     if(r.ok)STATE.trendsData=await r.json();
-    updateFreshness();renderIntelligence();renderPicks();
+    updateFreshness();renderMarket();renderIntelligence();renderPicks();
   }catch(e){console.warn('FO fetch:',e);}
 }
 
