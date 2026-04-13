@@ -1097,7 +1097,7 @@ function renderIntelFO(){
   // Use live foData OR fall back to last available signals from trendsData
   const signals=STATE.foData?.signals||STATE.trendsData?.latestSignals||{};
   const trends=STATE.trendsData?.trends||{};
-  const hasLiveData=!!STATE.foData?.signals;
+  const hasLiveData=!!(STATE.foData?.signals&&Object.keys(STATE.foData.signals).length>0);
   const dataDate=STATE.foData?.meta?.latestDate||'historical';
   // Build universe: all MF picks + any FO signals above threshold
   const allSyms=new Set([...mfPicks.map(p=>toSym(p.stock)),...Object.keys(signals).filter(s=>signals[s].score>0.5)]);
@@ -1117,7 +1117,8 @@ function renderIntelFO(){
   items.sort((a,b)=>hasLiveData?b.foScore-a.foScore:b.mfScore-a.mfScore);
   items=items.slice(0,40);
   if(!items.length){container.innerHTML=`<div class="empty"><div class="empty-icon">⚡</div>No signals available</div>`;return;}
-  const staleBanner=!hasLiveData?`<div style="padding:8px 12px;background:rgba(255,184,48,.08);border:1px solid rgba(255,184,48,.2);border-radius:8px;font-size:.72rem;color:var(--amber);margin-bottom:10px">⚠ F&O data not yet loaded for today — showing MF conviction ranking. Upload today's FOVOLT CSV via Admin for live signals.</div>`:'';
+  const foFallbackDate=STATE.trendsData?.latestSignalsDate||null;
+  const staleBanner=!hasLiveData?`<div style="padding:8px 12px;background:rgba(255,184,48,.08);border:1px solid rgba(255,184,48,.2);border-radius:8px;font-size:.72rem;color:var(--amber);margin-bottom:10px">⚠ Today's F&O signals unavailable (NSE fetch may have failed) — showing ${foFallbackDate?`signals from <b>${foFallbackDate}</b>`:'MF conviction ranking only'}. Rankings will auto-update when next workflow run succeeds.</div>`:'';
   container.innerHTML=staleBanner+items.map((item,idx)=>{
     const{sym,fo,mfPick,trend,prob,d1,oiSig,prem}=item,expandId=`fo-exp-${idx}`;
     const isWatched=STATE.watchlist.has(sym),isLong=oiSig==='Long Buildup',isShort=oiSig==='Short Buildup';
@@ -1249,10 +1250,11 @@ function renderPicks(){
     items=items.slice(0,15);
     if(!items.length){container.innerHTML=`<div class="empty"><div class="empty-icon">⚡</div>No high-probability trades found<br><small style="color:var(--text-muted)">Upload today's F&O data to unlock full scoring</small></div>`;return;}
     // Header banner explaining what Best Trades means
-    const hasLive=!!STATE.foData?.signals;
+    const hasLive=!!(STATE.foData?.signals&&Object.keys(STATE.foData.signals).length>0);
+    const foDateLabel=hasLive?STATE.foData?.meta?.latestDate:(STATE.trendsData?.latestSignalsDate||null);
     const banner=`<div style="padding:10px 14px;background:rgba(0,229,153,.06);border:1px solid rgba(0,229,153,.15);border-radius:10px;margin-bottom:12px">
       <div style="font-size:.78rem;font-weight:700;color:var(--accent);margin-bottom:4px">⚡ Best Trades — Multi-Signal Confirmed</div>
-      <div style="font-size:.7rem;color:var(--text-muted);line-height:1.5">Ranked by combined probability score across: MF conviction · F&O OI signal · Volume spike · Bulk/Block deals. ${hasLive?`F&O data: <span style="color:var(--green)">${STATE.foData?.meta?.latestDate||'live'}</span>`:'<span style="color:var(--amber)">⚠ No F&O data — MF-only scoring</span>'}</div>
+      <div style="font-size:.7rem;color:var(--text-muted);line-height:1.5">Ranked by combined probability score across: MF conviction · F&O OI signal · Volume spike · Bulk/Block deals. ${foDateLabel?`F&O data: <span style="color:${hasLive?'var(--green)':'var(--amber)'}">${foDateLabel}${hasLive?'':' (last available)'}</span>`:'<span style="color:var(--amber)">⚠ No F&O data — MF-only scoring</span>'}</div>
     </div>`;
     container.innerHTML=banner+items.map((item,idx)=>renderPickCard(item,idx,'best')).join('');
   } else if(tab==='mf'){
@@ -1265,7 +1267,7 @@ function renderPicks(){
     container.innerHTML=items.map((item,idx)=>renderPickCard(item,idx,'combined')).join('');
   } else if(tab==='fo'){
     items=items.filter(i=>i.foScore>0.3).sort((a,b)=>b.foScore-a.foScore).slice(0,30);
-    if(!items.length){container.innerHTML=`<div class="empty"><div class="empty-icon">⚡</div>F&O data not loaded<br><small style="color:var(--text-muted)">Upload today's FOVOLT CSV via Admin panel</small></div>`;return;}
+    if(!items.length){container.innerHTML=`<div class="empty"><div class="empty-icon">⚡</div>No F&O signals available<br><small style="color:var(--text-muted)">Today's NSE fetch returned no data — historical signals shown where available</small></div>`;return;}
     container.innerHTML=items.map((item,idx)=>renderPickCard(item,idx,'fo')).join('');
   }
 }
