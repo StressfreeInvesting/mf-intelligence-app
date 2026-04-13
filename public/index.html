@@ -467,8 +467,8 @@ button{cursor:pointer;font-family:inherit}
     <div class="header-bottom-row">
       <div class="header-controls">
         <span class="ctrl-label">Theme</span>
-        <button class="theme-btn active" data-theme="void">Void</button>
-        <button class="theme-btn" data-theme="slate">Slate</button>
+        <button class="theme-btn" data-theme="void">Void</button>
+        <button class="theme-btn active" data-theme="slate">Slate</button>
         <button class="theme-btn" data-theme="dusk">Dusk</button>
         <span class="sep">|</span>
         <button class="fs-btn" data-fs="11">S</button>
@@ -576,9 +576,10 @@ button{cursor:pointer;font-family:inherit}
     <!-- ════ PICKS ════ -->
     <div class="tab-panel" id="tab-picks">
       <div class="pill-tabs" id="picksPills">
-        <button class="pill-tab active" data-ptab="combined">Combined Score</button>
-        <button class="pill-tab" data-ptab="mf">MF Score</button>
-        <button class="pill-tab" data-ptab="fo">F&amp;O Score</button>
+        <button class="pill-tab active" data-ptab="best">⚡ Best Trades</button>
+        <button class="pill-tab" data-ptab="mf">MF Conviction</button>
+        <button class="pill-tab" data-ptab="combined">Combined Score</button>
+        <button class="pill-tab" data-ptab="fo">F&amp;O Only</button>
       </div>
       <div class="sector-chips" id="sectorChips">
         <button class="sector-chip active" data-sector="all">All</button>
@@ -619,7 +620,7 @@ button{cursor:pointer;font-family:inherit}
 const STATE={
   foData:null,trendsData:null,trades:[],watchlist:new Set(),
   quotes:{},quotesAge:null,activeTab:'market',intelTab:'ranking',
-  picksTab:'combined',sector:'all',portfolioTab:'autopilot',analyticsPanel:'accuracy',autoLog:[],
+  picksTab:'best',sector:'all',portfolioTab:'autopilot',analyticsPanel:'accuracy',autoLog:[],
   priceAlerts:[],historyData:{},insiderData:[],pcrData:{},sparklineCache:{},
 };
 
@@ -763,8 +764,10 @@ function computeProbScore(stock,mfPick,foSignal,trend){
   const bd={};let total=0;
   const hasMF=mfPick&&mfPick.ms>=2.0,hasFO=foSignal&&foSignal.score>=1.5,hasTrend=trend&&trend.positionalStrength==="Strong";
   const sources=(hasMF?1:0)+(hasFO?1:0)+(hasTrend?1:0);
-  const f1=sources>=3?25:sources===2?17:8;
+  // F1: Confluence - MF-only stocks score 14 so they appear in Picks without F&O
+  const f1=sources>=3?25:sources===2?20:hasMF?14:8;
   bd.confluence={score:f1,max:25,sources,hasMF,hasFO,hasTrend};total+=f1;
+  // F2: F&O Momentum (stays 0 if no foData - no penalty)
   let f2=0;
   if(foSignal){
     f2=Math.min(22,Math.max(0,foSignal.score*2.5));
@@ -773,6 +776,7 @@ function computeProbScore(stock,mfPick,foSignal,trend){
     if(foSignal.score>1&&d1<-1)f2=Math.max(0,f2-5);
   }
   f2=Math.round(f2);bd.momentum={score:f2,max:25,foScore:foSignal?.score||0};total+=f2;
+  // F3: Trend consistency
   let f3=0;
   if(trend&&trend.daysTracked>=3){
     const c=trend.consistencyPct;
@@ -781,17 +785,28 @@ function computeProbScore(stock,mfPick,foSignal,trend){
     if(trend.momentum==="declining")f3=Math.max(0,f3-4);
   }else if(trend&&trend.daysTracked>=1)f3=5;
   f3=Math.round(f3);bd.consistency={score:f3,max:25,consistencyPct:trend?.consistencyPct||0,daysTracked:trend?.daysTracked||0,momentum:trend?.momentum||"unknown"};total+=f3;
-  let f4=15;
+  // F4: Timing - default 18 for strong MF picks (was 15), adjusted by F&O
+  let f4=hasMF?18:12;
   if(foSignal){
     const d1=parseFloat(foSignal.d1)||0;
     if(d1>=-1&&d1<=2)f4=20;else if(d1>2&&d1<=3)f4=14;else if(d1>3)f4=8;else if(d1<-2)f4=5;
     const nd=trend?.periodReturn||0;
     if(nd>10)f4=Math.max(0,f4-5);if(nd<5&&nd>=0)f4=Math.min(25,f4+5);
   }
-  f4=Math.round(Math.min(25,Math.max(0,f4)));bd.timing={score:f4,max:25,d1:parseFloat(foSignal?.d1)||0,periodReturn:trend?.periodReturn||null};total+=f4;
-  return{total:Math.min(100,Math.round(total)),breakdown:bd,sources};
+  f4=Math.round(Math.min(25,Math.max(0,f4)));
+  // Volume spike bonus: vol > 50% = above-average activity = +1 to +5
+  let volBonus=0;
+  if(foSignal&&parseFloat(foSignal.vol||0)>50){
+    volBonus=Math.min(5,Math.round((parseFloat(foSignal.vol)-50)/10));
+    bd.volSpike=true;
+  }
+  bd.timing={score:f4,max:25,d1:parseFloat(foSignal?.d1)||0,periodReturn:trend?.periodReturn||null,volSpike:bd.volSpike||false};
+  total+=f4;
+  let finalTotal=Math.min(100,Math.round(total+volBonus));
+  // MF conviction floor: strong MF picks (ms>=3) always show in picks
+  if(mfPick&&mfPick.ms>=3&&finalTotal<40)finalTotal=40;
+  return{total:finalTotal,breakdown:bd,sources};
 }
-
 /* ═══════════════════════════════════════════
    HELPERS
 ═══════════════════════════════════════════ */
@@ -1079,23 +1094,31 @@ function renderIntelMF(tab){
 function renderIntelFO(){
   const container=document.getElementById('intelContent');
   const mfData=computeMFData(),mfPicks=computeMFPicks(mfData);
-  const signals=STATE.foData?.signals||{},trends=STATE.trendsData?.trends||{};
+  // Use live foData OR fall back to last available signals from trendsData
+  const signals=STATE.foData?.signals||STATE.trendsData?.latestSignals||{};
+  const trends=STATE.trendsData?.trends||{};
+  const hasLiveData=!!STATE.foData?.signals;
+  const dataDate=STATE.foData?.meta?.latestDate||'historical';
+  // Build universe: all MF picks + any FO signals above threshold
   const allSyms=new Set([...mfPicks.map(p=>toSym(p.stock)),...Object.keys(signals).filter(s=>signals[s].score>0.5)]);
   let items=[];
   allSyms.forEach(sym=>{
     if(INDEX_SYMS.has(sym))return;
-    const fo=signals[sym],mfPick=mfPicks.find(p=>toSym(p.stock)===sym),trend=trends[sym]||null;
+    const fo=signals[sym]||null,mfPick=mfPicks.find(p=>toSym(p.stock)===sym),trend=trends[sym]||null;
     const prob=computeProbScore(sym,mfPick,fo,trend);
     const sec=(mfPick?.sec||'').toLowerCase(),mfScore=mfPick?.ms||0,foScore=fo?.score||0;
     const d1=parseFloat(fo?.d1)||0,prem=parseFloat(fo?.prem)||0;
     const isLong=prem>0.05&&foScore>1&&d1>0,isShort=prem<-0.05&&foScore<-1;
     const oiSig=isLong?'Long Buildup':isShort?'Short Buildup':'Neutral';
-    items.push({sym,sec,fo,mfPick,trend,prob,mfScore,foScore,combined:Math.round((mfScore+foScore)*100)/100,d1,oiSig,prem});
+    // Include all MF stocks when no F&O data (show by mfScore), or FO-filtered when data present
+    const passFilter=hasLiveData?foScore>0.3:mfScore>0;
+    if(passFilter)items.push({sym,sec,fo,mfPick,trend,prob,mfScore,foScore,combined:Math.round((mfScore+foScore)*100)/100,d1,oiSig,prem});
   });
-  items.sort((a,b)=>b.foScore-a.foScore);
-  items=items.filter(i=>i.foScore>0.3).slice(0,40);
-  if(!items.length){container.innerHTML=`<div class="empty"><div class="empty-icon">⚡</div>F&O data not loaded<br><small style="color:var(--text-muted)">Data auto-fetched after market close</small></div>`;return;}
-  container.innerHTML=items.map((item,idx)=>{
+  items.sort((a,b)=>hasLiveData?b.foScore-a.foScore:b.mfScore-a.mfScore);
+  items=items.slice(0,40);
+  if(!items.length){container.innerHTML=`<div class="empty"><div class="empty-icon">⚡</div>No signals available</div>`;return;}
+  const staleBanner=!hasLiveData?`<div style="padding:8px 12px;background:rgba(255,184,48,.08);border:1px solid rgba(255,184,48,.2);border-radius:8px;font-size:.72rem;color:var(--amber);margin-bottom:10px">⚠ F&O data not yet loaded for today — showing MF conviction ranking. Upload today's FOVOLT CSV via Admin for live signals.</div>`:'';
+  container.innerHTML=staleBanner+items.map((item,idx)=>{
     const{sym,fo,mfPick,trend,prob,d1,oiSig,prem}=item,expandId=`fo-exp-${idx}`;
     const isWatched=STATE.watchlist.has(sym),isLong=oiSig==='Long Buildup',isShort=oiSig==='Short Buildup';
     const diverge=isLong&&d1<0,probColor=prob.total>=75?'var(--green)':prob.total>=60?'var(--amber)':'var(--text-muted)';
@@ -1179,72 +1202,132 @@ function renderIntelSectors(){
 }
 
 /* ═══════════════════════════════════════════
-   PICKS TAB (Combined Score view)
+   PICKS TAB — Unified Best Trades Engine
 ═══════════════════════════════════════════ */
+function buildPicksUniverse(){
+  const mfData=computeMFData(),mfPicks=computeMFPicks(mfData);
+  const signals=STATE.foData?.signals||STATE.trendsData?.latestSignals||{};
+  const trends=STATE.trendsData?.trends||{};
+  const bulkSyms=new Set((STATE.foData?.bulkDeals||[]).filter(d=>d.type==='B').map(d=>d.sym));
+  const blockSyms=new Set((STATE.foData?.blockDeals||[]).filter(d=>d.type==='B').map(d=>d.sym));
+  const allSyms=new Set([...mfPicks.map(p=>toSym(p.stock)),...Object.keys(signals).filter(s=>signals[s].score>0.3)]);
+  const items=[];
+  allSyms.forEach(sym=>{
+    if(INDEX_SYMS.has(sym))return;
+    const fo=signals[sym]||null,mfPick=mfPicks.find(p=>toSym(p.stock)===sym)||null,trend=trends[sym]||null;
+    const prob=computeProbScore(sym,mfPick,fo,trend);
+    const sec=(mfPick?.sec||'').toLowerCase();
+    const mfScore=mfPick?.ms||0,foScore=fo?.score||0;
+    const d1=parseFloat(fo?.d1)||0,prem=parseFloat(fo?.prem)||0,vol=parseFloat(fo?.vol||0);
+    const isLong=prem>0.05&&foScore>1&&d1>0,isShort=prem<-0.05&&foScore<-1;
+    const oiSig=isLong?'Long Buildup':isShort?'Short Buildup':'Neutral';
+    // Signal layer flags
+    const hasBulk=bulkSyms.has(sym),hasBlock=blockSyms.has(sym);
+    const volSpike=vol>50,conflict=fo&&fo.score<=-1&&mfScore>=1.5;
+    // Layer count for badge
+    const layers=(mfScore>0?1:0)+(foScore>0.3?1:0)+(hasBulk||hasBlock?1:0)+(volSpike?1:0);
+    items.push({sym,sec,fo,mfPick,trend,prob,mfScore,foScore,d1,oiSig,prem,vol,hasBulk,hasBlock,volSpike,conflict,layers});
+  });
+  return items;
+}
+
 function renderPicks(){
   const container=document.getElementById('picksContent');
   const tab=STATE.picksTab,sector=STATE.sector;
-  const mfData=computeMFData(),mfPicks=computeMFPicks(mfData);
-  const signals=STATE.foData?.signals||{},trends=STATE.trendsData?.trends||{};
-  const allSyms=new Set([...mfPicks.map(p=>toSym(p.stock)),...Object.keys(signals).filter(s=>signals[s].score>0.5)]);
-  let items=[];
-  allSyms.forEach(sym=>{
-    if(INDEX_SYMS.has(sym))return;
-    const fo=signals[sym],mfPick=mfPicks.find(p=>toSym(p.stock)===sym),trend=trends[sym]||null;
-    const prob=computeProbScore(sym,mfPick,fo,trend);
-    const sec=(mfPick?.sec||'').toLowerCase(),mfScore=mfPick?.ms||0,foScore=fo?.score||0;
-    const d1=parseFloat(fo?.d1)||0,prem=parseFloat(fo?.prem)||0;
-    const isLong=prem>0.05&&foScore>1&&d1>0,isShort=prem<-0.05&&foScore<-1;
-    items.push({sym,sec,fo,mfPick,trend,prob,mfScore,foScore,combined:Math.round((mfScore+foScore)*100)/100,d1,oiSig:isLong?'Long Buildup':isShort?'Short Buildup':'Neutral',prem});
-  });
+  let items=buildPicksUniverse();
   if(sector!=='all')items=items.filter(i=>i.sec.toLowerCase().includes(sector));
-  items.sort((a,b)=>tab==='mf'?b.mfScore-a.mfScore:tab==='fo'?b.foScore-a.foScore:b.prob.total-a.prob.total);
-  items=items.filter(i=>tab==='mf'?i.mfScore>0:tab==='fo'?i.foScore>0.3:i.prob.total>30).slice(0,40);
-  if(!items.length){container.innerHTML=`<div class="empty"><div class="empty-icon">⚡</div>No picks match this filter${!STATE.foData?'<br><small style="color:var(--text-muted)">F&O data loads automatically after market close</small>':''}</div>`;return;}
-  container.innerHTML=items.map((item,idx)=>{
-    const{sym,fo,mfPick,prob,d1,oiSig,prem}=item,expandId=`pick-exp-${idx}`;
-    const isWatched=STATE.watchlist.has(sym),up1d=d1>=0;
-    const isLong=oiSig==='Long Buildup',isShort=oiSig==='Short Buildup';
-    const probColor=prob.total>=75?'var(--green)':prob.total>=60?'var(--amber)':'var(--text-muted)';
-    const scoreVal=tab==='mf'?item.mfScore:tab==='fo'?item.foScore:item.combined,scoreMax=tab==='combined'?10:5;
-    return`<div class="card">
-      <div class="card-accent${isShort?' red':''}"></div>
-      <div class="card-header">
-        <div class="card-title">${sym} ${livePriceChip(sym,true)}</div>
-        ${mfPick?`<span class="badge badge-sector">${item.sec}</span>`:''}
-        ${confluenceBadge(prob.sources)}
-        <span style="font-size:.72rem;font-family:'Space Mono',monospace;font-weight:800;color:${probColor}">P:${prob.total}</span>
-        <div class="card-header-actions">
-          <a class="hbtn-link" href="https://www.nseindia.com/get-quotes/derivatives?symbol=${sym}" target="_blank">↗ NSE</a>
-          <button class="hbtn hbtn-ghost" onclick="toggleWatch('${sym}',this)">${isWatched?'★':'☆'} Watch</button>
-          <button class="hbtn hbtn-accent" onclick="openTrade('${sym}')">▷ Buy</button>
-        </div>
-      </div>
-      <div class="oi-price-row">
-        <div class="oi-cell">
-          <span class="oi-type-badge ${isLong?'oi-badge-long':isShort?'oi-badge-short':'oi-badge-neutral'}">${isLong?'▲':isShort?'▼':'—'} ${oiSig}</span>
-          <span class="oi-stat">Prem <strong style="color:${prem>0?'var(--green)':'var(--red)'}">${prem>0?'+':''}${parseFloat(fo?.prem||0).toFixed(3)}%</strong></span>
-        </div>
-        <div class="price-cell">
-          <span class="price-cmp">₹${(fo?.cl||0).toLocaleString('en-IN',{maximumFractionDigits:2})}</span>
-          <span class="price-change ${up1d?'up':'down'}">${up1d?'▲':'▼'}${Math.abs(d1).toFixed(2)}% 1D</span>
-        </div>
-      </div>
-      <div class="score-bar-wrap">
-        <div class="score-label"><span>${tab==='mf'?'MF Score':tab==='fo'?'F&O Score':'Probability'}</span><span>${tab==='combined'?prob.total+'/100':scoreVal.toFixed(1)+'/'+scoreMax}</span></div>
-        <div class="score-bar-track"><div class="score-bar-fill" style="width:${tab==='combined'?prob.total:(scoreVal/scoreMax*100)}%"></div></div>
-      </div>
-      <button class="card-expand-toggle" onclick="toggleExpand('${expandId}',this)"><span>▸</span> Full breakdown</button>
-      <div class="card-expand-body" id="${expandId}">
-        <div class="expand-section-title">Probability: ${prob.total}/100</div>
-        <div class="expand-line"><span class="expand-label">Confluence (${prob.breakdown.confluence.sources} sources)</span><span class="expand-val">${prob.breakdown.confluence.score}/25</span></div>
-        <div class="expand-line"><span class="expand-label">Momentum Quality</span><span class="expand-val">${prob.breakdown.momentum.score}/25</span></div>
-        <div class="expand-line"><span class="expand-label">Trend Consistency (${prob.breakdown.consistency.daysTracked}d)</span><span class="expand-val">${prob.breakdown.consistency.score}/25</span></div>
-        <div class="expand-line"><span class="expand-label">Entry Timing</span><span class="expand-val">${prob.breakdown.timing.score}/25</span></div>
-        ${mfPick?.sig?.length?`<div class="expand-section-title">MF Signals</div>${mfPick.sig.map(s=>`<div class="expand-line"><span class="expand-label" style="color:var(--text)">${s}</span></div>`).join('')}`:''}
-      </div>
+
+  if(tab==='best'){
+    // Best Trades = highest probability, multi-layer confirmed, no conflict
+    items=items.filter(i=>!i.conflict&&i.prob.total>=32&&i.layers>=1);
+    items.sort((a,b)=>{
+      // Primary: prob score. Secondary: layer count. Tertiary: mfScore (tiebreak)
+      if(b.prob.total!==a.prob.total)return b.prob.total-a.prob.total;
+      if(b.layers!==a.layers)return b.layers-a.layers;
+      return b.mfScore-a.mfScore;
+    });
+    items=items.slice(0,15);
+    if(!items.length){container.innerHTML=`<div class="empty"><div class="empty-icon">⚡</div>No high-probability trades found<br><small style="color:var(--text-muted)">Upload today's F&O data to unlock full scoring</small></div>`;return;}
+    // Header banner explaining what Best Trades means
+    const hasLive=!!STATE.foData?.signals;
+    const banner=`<div style="padding:10px 14px;background:rgba(0,229,153,.06);border:1px solid rgba(0,229,153,.15);border-radius:10px;margin-bottom:12px">
+      <div style="font-size:.78rem;font-weight:700;color:var(--accent);margin-bottom:4px">⚡ Best Trades — Multi-Signal Confirmed</div>
+      <div style="font-size:.7rem;color:var(--text-muted);line-height:1.5">Ranked by combined probability score across: MF conviction · F&O OI signal · Volume spike · Bulk/Block deals. ${hasLive?`F&O data: <span style="color:var(--green)">${STATE.foData?.meta?.latestDate||'live'}</span>`:'<span style="color:var(--amber)">⚠ No F&O data — MF-only scoring</span>'}</div>
     </div>`;
-  }).join('');
+    container.innerHTML=banner+items.map((item,idx)=>renderPickCard(item,idx,'best')).join('');
+  } else if(tab==='mf'){
+    items=items.filter(i=>i.mfScore>0).sort((a,b)=>b.mfScore-a.mfScore).slice(0,30);
+    if(!items.length){container.innerHTML=`<div class="empty"><div class="empty-icon">▣</div>No MF picks found</div>`;return;}
+    container.innerHTML=items.map((item,idx)=>renderPickCard(item,idx,'mf')).join('');
+  } else if(tab==='combined'){
+    items=items.filter(i=>i.prob.total>20).sort((a,b)=>b.prob.total-a.prob.total).slice(0,30);
+    if(!items.length){container.innerHTML=`<div class="empty"><div class="empty-icon">⚡</div>No scored picks — upload F&O data for full scores</div>`;return;}
+    container.innerHTML=items.map((item,idx)=>renderPickCard(item,idx,'combined')).join('');
+  } else if(tab==='fo'){
+    items=items.filter(i=>i.foScore>0.3).sort((a,b)=>b.foScore-a.foScore).slice(0,30);
+    if(!items.length){container.innerHTML=`<div class="empty"><div class="empty-icon">⚡</div>F&O data not loaded<br><small style="color:var(--text-muted)">Upload today's FOVOLT CSV via Admin panel</small></div>`;return;}
+    container.innerHTML=items.map((item,idx)=>renderPickCard(item,idx,'fo')).join('');
+  }
+}
+
+function renderPickCard(item,idx,mode){
+  const{sym,fo,mfPick,prob,d1,oiSig,prem,mfScore,foScore,volSpike,hasBulk,hasBlock,conflict,layers}=item;
+  const expandId=`pick-exp-${idx}`;
+  const isWatched=STATE.watchlist.has(sym),up1d=d1>=0;
+  const isLong=oiSig==='Long Buildup',isShort=oiSig==='Short Buildup';
+  const probColor=prob.total>=75?'var(--green)':prob.total>=60?'var(--amber)':prob.total>=40?'var(--blue)':'var(--text-muted)';
+  const scoreVal=mode==='mf'?mfScore:mode==='fo'?foScore:prob.total;
+  const scoreMax=mode==='mf'||mode==='fo'?5:100;
+  // Signal layer badges
+  const layerBadges=[
+    mfScore>0?`<span class="rank-layer layer-mf">MF ${mfScore.toFixed(1)}</span>`:'',
+    foScore>0.3?`<span class="rank-layer layer-fo">F&O ${foScore.toFixed(1)}</span>`:'',
+    volSpike?`<span class="rank-layer layer-new">Vol↑</span>`:'',
+    hasBulk?`<span class="rank-layer layer-new">Bulk</span>`:'',
+    hasBlock?`<span class="rank-layer layer-new">Block</span>`:'',
+    conflict?`<span class="rank-layer layer-decay">⚠ Conflict</span>`:'',
+  ].filter(Boolean).join('');
+  return`<div class="card${conflict?' rank-conflict':''}">
+    <div class="card-accent${isShort?' red':conflict?' red':''}"></div>
+    <div class="card-header">
+      <div class="card-title">${mode==='best'?`<span style="font-family:'Space Mono',monospace;color:var(--accent);font-weight:800;font-size:.85rem;margin-right:6px">${idx+1}</span>`:''}${sym} ${livePriceChip(sym,true)}</div>
+      ${mfPick?`<span class="badge badge-sector">${item.sec}</span>`:''}
+      ${confluenceBadge(prob.sources)}
+      <span style="font-size:.72rem;font-family:'Space Mono',monospace;font-weight:800;color:${probColor}">P:${prob.total}</span>
+      <div class="card-header-actions">
+        <a class="hbtn-link" href="https://www.nseindia.com/get-quotes/derivatives?symbol=${sym}" target="_blank">↗ NSE</a>
+        <button class="hbtn hbtn-ghost" onclick="toggleWatch('${sym}',this)">${isWatched?'★':'☆'} Watch</button>
+        ${!conflict?`<button class="hbtn hbtn-accent" onclick="openTrade('${sym}')">▷ Buy</button>`:`<button class="hbtn" style="background:rgba(255,69,96,.15);color:var(--red);border:1px solid rgba(255,69,96,.3);padding:3px 9px;border-radius:6px;font-size:.68rem" disabled>⚠ Review</button>`}
+      </div>
+    </div>
+    <div class="rank-layers">${layerBadges}</div>
+    ${fo?`<div class="oi-price-row">
+      <div class="oi-cell">
+        <span class="oi-type-badge ${isLong?'oi-badge-long':isShort?'oi-badge-short':'oi-badge-neutral'}">${isLong?'▲':isShort?'▼':'—'} ${oiSig}</span>
+        <span class="oi-stat">Prem <strong style="color:${prem>0?'var(--green)':'var(--red)'}">${prem>0?'+':''}${parseFloat(fo?.prem||0).toFixed(3)}%</strong></span>
+        ${volSpike?`<span class="oi-diverge" style="background:rgba(0,229,153,.1);border-color:rgba(0,229,153,.25);color:var(--green)">Vol ${fo.vol}%↑</span>`:''}
+      </div>
+      <div class="price-cell">
+        <span class="price-cmp">₹${(fo?.cl||0).toLocaleString('en-IN',{maximumFractionDigits:2})}</span>
+        <span class="price-change ${up1d?'up':'down'}">${up1d?'▲':'▼'}${Math.abs(d1).toFixed(2)}% 1D</span>
+      </div>
+    </div>`:''}
+    <div class="score-bar-wrap">
+      <div class="score-label"><span>${mode==='mf'?'MF Conviction':mode==='fo'?'F&O Score':'Probability Score'}</span><span style="color:${probColor};font-weight:700">${mode==='best'||mode==='combined'?prob.total+'/100':scoreVal.toFixed(2)+'/5.0'}</span></div>
+      <div class="score-bar-track"><div class="score-bar-fill" style="width:${mode==='best'||mode==='combined'?prob.total:(scoreVal/scoreMax*100)}%;background:${probColor}"></div></div>
+    </div>
+    <button class="card-expand-toggle" onclick="toggleExpand('${expandId}',this)"><span>▸</span> Score breakdown</button>
+    <div class="card-expand-body" id="${expandId}">
+      <div class="expand-section-title">Probability Breakdown: ${prob.total}/100</div>
+      <div class="expand-line"><span class="expand-label">Confluence (${prob.breakdown.confluence.sources} signal sources)</span><span class="expand-val">${prob.breakdown.confluence.score}/25</span></div>
+      <div class="expand-line"><span class="expand-label">F&O Momentum</span><span class="expand-val">${prob.breakdown.momentum.score}/25 ${!fo?'<span style="color:var(--text-muted);font-size:.65rem">(no F&O data)</span>':''}</span></div>
+      <div class="expand-line"><span class="expand-label">Trend Consistency (${prob.breakdown.consistency.daysTracked}d)</span><span class="expand-val">${prob.breakdown.consistency.score}/25</span></div>
+      <div class="expand-line"><span class="expand-label">Entry Timing${prob.breakdown.timing.volSpike?' + Vol Spike bonus':''}</span><span class="expand-val">${prob.breakdown.timing.score}/25</span></div>
+      ${conflict?`<div class="expand-line" style="color:var(--red)"><span class="expand-label">⚠ CONFLICT: MF buying (${mfScore.toFixed(1)}) but F&O bearish (${foScore.toFixed(1)}) — do NOT trade without manual review</span></div>`:''}
+      ${mfPick?.sig?.length?`<div class="expand-section-title">MF Signal Detail</div>${mfPick.sig.map(s=>`<div class="expand-line"><span class="expand-label" style="color:var(--text)">${s}</span></div>`).join('')}`:''}
+      ${hasBulk||hasBlock?`<div class="expand-line"><span class="expand-label" style="color:var(--amber)">🏛 ${hasBulk?'Bulk deal':''}${hasBulk&&hasBlock?' + ':''}${hasBlock?'Block deal':''} detected today</span></div>`:''}
+    </div>
+  </div>`;
 }
 
 /* ═══════════════════════════════════════════
@@ -1665,7 +1748,7 @@ function handleSearchClick(stock){document.getElementById('globalSearch').value=
    PERSISTENCE
 ═══════════════════════════════════════════ */
 function loadPrefs(){
-  const theme=localStorage.getItem('mfi_theme')||'void',fs=localStorage.getItem('mfi_fs')||'13';
+  const theme=localStorage.getItem('mfi_theme')||'slate',fs=localStorage.getItem('mfi_fs')||'13';
   try{STATE.watchlist=new Set(JSON.parse(localStorage.getItem('mfi_watch')||'[]'));}catch(e){}
   try{STATE.trades=JSON.parse(localStorage.getItem('mfi_trades')||'[]');}catch(e){}
   try{STATE.autoLog=JSON.parse(localStorage.getItem('mfi_auto')||'[]');}catch(e){}
