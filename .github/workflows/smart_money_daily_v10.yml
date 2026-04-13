@@ -363,11 +363,27 @@ jobs:
                                'fii':fii_dii.get('fii',0),'dii':fii_dii.get('dii',0)})
 
           # ── Guard: abort if NSE fetch returned too few stocks ─────
+          # ── Retry + carry-forward if NSE fetch insufficient ────────────
           if stock_count < 100:
-              print(f"CRITICAL: Only {stock_count} stocks parsed (expected 150+).")
-              print("NSE fetch likely failed or returned incomplete data.")
-              print("Aborting write — existing fno_signals.json is preserved.")
-              import sys; sys.exit(1)
+              print(f"WARNING: Only {stock_count} stocks parsed. Checking history for carry-forward...")
+              import glob as _glob
+              hist_files = sorted(_glob.glob('data-repo/data/history/*.json'))
+              carried = False
+              carry_from = None
+              for hf in reversed(hist_files):
+                  try:
+                      with open(hf) as _f: prev = json.load(_f)
+                      if len(prev.get('signals', {})) >= 100:
+                          signals = prev['signals']
+                          stock_count = len(signals)
+                          carry_from = os.path.basename(hf).replace('.json','')
+                          print(f"  Carried {stock_count} signals from {carry_from}")
+                          carried = True
+                          break
+                  except: continue
+              if not carried:
+                  print("CRITICAL: No valid history found. Aborting.")
+                  import sys; sys.exit(1)
 
           # ── Assemble and write JSON ───────────────────────────────
           from datetime import datetime as dt
@@ -384,6 +400,7 @@ jobs:
                   'latestDate': fetch_date_str,
                   'updatedAt': dt.utcnow().isoformat() + 'Z',
                   'stockCount': stock_count,
+                  'carriedForwardFrom': carry_from if 'carry_from' in dir() and carry_from else None,
                   'files': [fetch_date_str],
                   'version': 'V10'
               }
