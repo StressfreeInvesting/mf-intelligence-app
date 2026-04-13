@@ -287,8 +287,16 @@ export default async function handler(req, res) {
         .slice(0, 5)
         .map(([sym, t]) => ({ sym, ...t }));
 
+      // Expose the most recent valid day's raw signals as a fallback for the
+      // frontend when fno_signals.json is stale or empty (STATE.foData missing).
+      const latestValidDay = validDays[validDays.length - 1];
+      const latestSignals  = latestValidDay?.signals || {};
+      const latestSignalsDate = latestValidDay?.date || null;
+
       return res.status(200).json({
         trends,
+        latestSignals,
+        latestSignalsDate,
         strong,
         top10Bullish,
         top5Bearish,
