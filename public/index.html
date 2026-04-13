@@ -486,14 +486,19 @@ button{cursor:pointer;font-family:inherit}
     <span><span class="fresh-dot fresh-green" id="foDot"></span>F&amp;O: <span id="foDate">—</span></span>
     <span>·</span>
     <span><span class="fresh-dot fresh-amber" id="trendsDot"></span>Trends: <span id="trendsLabel">—</span></span>
+  
+    <span id="dataAgeBadge" style="margin-left:auto;font-size:.68rem"></span>
   </div>
 
+  <!-- EXIT ALERT BAR -->
+  <div id="exitAlertBar" style="display:none"></div>
   <!-- NAV -->
   <nav class="nav" id="mainNav">
     <button class="nav-tab active" data-tab="market"><span class="nav-icon">◇</span> MARKET</button>
     <button class="nav-tab" data-tab="intelligence"><span class="nav-icon">▣</span> INTELLIGENCE</button>
     <button class="nav-tab" data-tab="picks"><span class="nav-icon">⚡</span> PICKS</button>
     <button class="nav-tab" data-tab="portfolio"><span class="nav-icon">▷</span> PORTFOLIO</button>
+    <button class="nav-tab" data-tab="guide"><span class="nav-icon">?</span> GUIDE</button>
   </nav>
 
   <!-- MAIN -->
@@ -613,6 +618,11 @@ button{cursor:pointer;font-family:inherit}
     </div>
 </div>
 
+    <!-- ════ GUIDE ════ -->
+    <div class="tab-panel" id="tab-guide">
+      <div id="guideContent"></div>
+    </div>
+
 <script>
 /* ═══════════════════════════════════════════
    STATE
@@ -622,6 +632,7 @@ const STATE={
   quotes:{},quotesAge:null,activeTab:'market',intelTab:'ranking',
   picksTab:'best',sector:'all',portfolioTab:'autopilot',analyticsPanel:'accuracy',autoLog:[],
   priceAlerts:[],historyData:{},insiderData:[],pcrData:{},sparklineCache:{},
+  capital:0,riskPct:1.5,
 };
 
 /* ═══════════════════════════════════════════
@@ -762,39 +773,57 @@ function computeMFPicks(mfData){
 ═══════════════════════════════════════════ */
 function computeProbScore(stock,mfPick,foSignal,trend){
   const bd={};let total=0;
+  // Insider check
+  const insiders=STATE.foData?.insiderData||[];
+  const sym=toSym(stock);
+  const hasInsiderBuy=insiders.some(i=>(toSym(i.sym||i.name||'')||'').includes(sym.slice(0,4))&&(i.type||'').toLowerCase().includes('buy'));
   const hasMF=mfPick&&mfPick.ms>=2.0,hasFO=foSignal&&foSignal.score>=1.5,hasTrend=trend&&trend.positionalStrength==="Strong";
-  const sources=(hasMF?1:0)+(hasFO?1:0)+(hasTrend?1:0);
-  // F1: Confluence - MF-only stocks score 14 so they appear in Picks without F&O
-  const f1=sources>=3?25:sources===2?20:hasMF?14:8;
-  bd.confluence={score:f1,max:25,sources,hasMF,hasFO,hasTrend};total+=f1;
-  // F2: F&O Momentum (stays 0 if no foData - no penalty)
+  const sources=(hasMF?1:0)+(hasFO?1:0)+(hasTrend?1:0)+(hasInsiderBuy?1:0);
+  // F1: Confluence — 4 possible sources now (MF, F&O, Trend, Insider)
+  const f1=sources>=4?25:sources>=3?22:sources===2?18:hasMF?14:8;
+  bd.confluence={score:f1,max:25,sources,hasMF,hasFO,hasTrend,hasInsiderBuy};total+=f1;
+  // F2: F&O Momentum + Delivery % conviction
   let f2=0;
   if(foSignal){
     f2=Math.min(22,Math.max(0,foSignal.score*2.5));
     const d1=parseFloat(foSignal.d1)||0,prem=parseFloat(foSignal.prem)||0;
     if(prem>0.05&&d1>0)f2=Math.min(25,f2+3);
     if(foSignal.score>1&&d1<-1)f2=Math.max(0,f2-5);
+    // Delivery % — high delivery = institutional conviction
+    const delPct=parseFloat(foSignal.delPct||0);
+    if(delPct>=60)f2=Math.min(25,f2+4);
+    else if(delPct>=45)f2=Math.min(25,f2+2);
+    else if(delPct<20&&foSignal.score>0.5)f2=Math.max(0,f2-3);// speculative spike
   }
-  f2=Math.round(f2);bd.momentum={score:f2,max:25,foScore:foSignal?.score||0};total+=f2;
-  // F3: Trend consistency
+  f2=Math.round(f2);bd.momentum={score:f2,max:25,foScore:foSignal?.score||0,delPct:parseFloat(foSignal?.delPct||0)};total+=f2;
+  // F3: Trend consistency with score velocity
   let f3=0;
   if(trend&&trend.daysTracked>=3){
     const c=trend.consistencyPct;
     f3=c>=90?25:c>=70?18:c>=55?12:c>=40?6:0;
     if(trend.momentum==="improving")f3=Math.min(25,f3+3);
     if(trend.momentum==="declining")f3=Math.max(0,f3-4);
+    // Score velocity: rising trend gets bonus
+    const sv=scoreVelocity(trend);
+    if(sv&&sv.direction==='rising')f3=Math.min(25,f3+2);
+    else if(sv&&sv.direction==='falling')f3=Math.max(0,f3-2);
   }else if(trend&&trend.daysTracked>=1)f3=5;
   f3=Math.round(f3);bd.consistency={score:f3,max:25,consistencyPct:trend?.consistencyPct||0,daysTracked:trend?.daysTracked||0,momentum:trend?.momentum||"unknown"};total+=f3;
-  // F4: Timing - default 18 for strong MF picks (was 15), adjusted by F&O
+  // F4: Entry Timing — improved with pullback and consolidation detection
   let f4=hasMF?18:12;
   if(foSignal){
     const d1=parseFloat(foSignal.d1)||0;
     if(d1>=-1&&d1<=2)f4=20;else if(d1>2&&d1<=3)f4=14;else if(d1>3)f4=8;else if(d1<-2)f4=5;
     const nd=trend?.periodReturn||0;
-    if(nd>10)f4=Math.max(0,f4-5);if(nd<5&&nd>=0)f4=Math.min(25,f4+5);
+    if(nd>20)f4=Math.max(0,f4-8);// already ran a lot — late entry
+    else if(nd>10)f4=Math.max(0,f4-4);
+    else if(nd<0)f4=Math.min(25,f4+4);// pullback = better entry
+    else if(nd<5&&nd>=0)f4=Math.min(25,f4+2);
+    // Tight consolidation bonus (last 3 days low volatility = coiling)
+    const recent=(trend?.scoreSeries||[]).slice(-3);
+    if(recent.length===3&&recent.every(d=>Math.abs(d.score)<0.5))f4=Math.min(25,f4+3);
   }
   f4=Math.round(Math.min(25,Math.max(0,f4)));
-  // Volume spike bonus: vol > 50% = above-average activity = +1 to +5
   let volBonus=0;
   if(foSignal&&parseFloat(foSignal.vol||0)>50){
     volBonus=Math.min(5,Math.round((parseFloat(foSignal.vol)-50)/10));
@@ -802,10 +831,74 @@ function computeProbScore(stock,mfPick,foSignal,trend){
   }
   bd.timing={score:f4,max:25,d1:parseFloat(foSignal?.d1)||0,periodReturn:trend?.periodReturn||null,volSpike:bd.volSpike||false};
   total+=f4;
-  let finalTotal=Math.min(100,Math.round(total+volBonus));
-  // MF conviction floor: strong MF picks (ms>=3) always show in picks
+  // PCR guard — put-call ratio adjustment
+  const pcr=getPCR(sym)||getPCR(stock)||null;
+  let pcrAdj=0;
+  if(pcr!==null){
+    if(pcr>1.5)pcrAdj=3;
+    else if(pcr>1.2)pcrAdj=1;
+    else if(pcr<0.6)pcrAdj=-6;
+    else if(pcr<0.8)pcrAdj=-3;
+  }
+  bd.pcr={score:pcrAdj,value:pcr};
+  let finalTotal=Math.min(100,Math.round(total+volBonus+pcrAdj));
   if(mfPick&&mfPick.ms>=3&&finalTotal<40)finalTotal=40;
-  return{total:finalTotal,breakdown:bd,sources};
+  return{total:finalTotal,breakdown:bd,sources,hasInsiderBuy};
+}
+
+// Score velocity: how much has the F&O score improved over last 3 sessions
+function scoreVelocity(trend){
+  const series=trend?.scoreSeries||[];
+  if(series.length<2)return null;
+  const last=series[series.length-1].score;
+  const prev=series[Math.max(0,series.length-3)].score;
+  const delta=+(last-prev).toFixed(2);
+  return{delta,direction:delta>0.3?'rising':delta<-0.3?'falling':'flat',label:delta>0.3?'↑ Rising':delta<-0.3?'↓ Falling':'→ Flat'};
+}
+
+// Setup type classifier
+function classifySetup(fo,trend){
+  if(!fo)return null;
+  const d1=parseFloat(fo.d1||0),vol=parseFloat(fo.vol||0),prem=parseFloat(fo.prem||0);
+  const mom=trend?.momentum||'',conPct=trend?.consistencyPct||0;
+  if(vol>60&&d1>1&&prem>0.05)return{type:'Breakout',cls:'layer-fo',tip:'High volume + premium expansion'};
+  if(d1<-0.5&&d1>-3&&fo.score>0.5&&conPct>60)return{type:'Pullback',cls:'layer-new',tip:'Dip in uptrend — watch for bounce entry'};
+  if(Math.abs(d1)<0.5&&vol<30&&mom==='stable')return{type:'Compression',cls:'layer-held',tip:'Range tightening — coil before the move'};
+  if(fo.score>0.3&&conPct>55&&vol>40)return{type:'Accumulation',cls:'layer-mf',tip:'Steady OI buildup — institutional entry'};
+  return null;
+}
+
+// Signal age in trading days
+function signalAgeLabel(dateStr){
+  if(!dateStr)return null;
+  const sigDate=new Date(dateStr);
+  let tradingDays=0,cursor=new Date(sigDate);
+  cursor.setDate(cursor.getDate()+1);
+  const now=new Date();
+  while(cursor<=now){const dow=cursor.getDay();if(dow!==0&&dow!==6)tradingDays++;cursor.setDate(cursor.getDate()+1);}
+  if(tradingDays===0)return{label:'Today',color:'var(--green)'};
+  if(tradingDays===1)return{label:'1 trading day old',color:'var(--amber)'};
+  return{label:`${tradingDays} trading days old`,color:'var(--red)'};
+}
+
+// Position sizing helper
+function calcPositionSize(entry,sl,capital,riskPct){
+  if(!capital||!sl||sl>=entry||entry<=0)return null;
+  const riskAmount=capital*(riskPct/100);
+  const riskPerShare=entry-sl;
+  const shares=Math.max(1,Math.floor(riskAmount/riskPerShare));
+  return{shares,capitalDeployed:Math.round(shares*entry),maxLoss:Math.round(shares*riskPerShare),riskPct:+((shares*riskPerShare/capital)*100).toFixed(2)};
+}
+
+// Dynamic SL/Target based on vol and prob
+function calcTargetSL(entry,fo,trend,prob){
+  const vol=parseFloat(fo?.vol||25)/100;
+  const slPct=vol<0.3?0.15:vol<0.5?0.20:0.25;
+  const sl=+(entry*(1-slPct)).toFixed(2);
+  const tgtMult=(prob&&prob.total>=80)?0.5:(prob&&prob.total>=65)?0.4:0.3;
+  const target=+(entry*(1+vol*tgtMult)).toFixed(2);
+  const rr=+((target-entry)/(entry-sl)).toFixed(1);
+  return{sl,target,rr,valid:rr>=1.5};
 }
 /* ═══════════════════════════════════════════
    HELPERS
@@ -969,9 +1062,10 @@ function computeSmartRank(){
     // Conflict check: FII/DII diverge with MF
     const conflict=fo&&fo.score<=-1&&p.ms>=1.5;
     score=Math.round(score*1000)/1000;// 3 decimal places = no ties
-    ranked.push({stock:p.stock,sym,score,ms:p.ms,foScore:fo?.score||0,hc:p.hc,fc:p.fc,sec:p.sec,layers,conflict,prob,fo,trend,isNew,funds:p.funds||[]});
+    const vel=scoreVelocity(trend);
+    ranked.push({stock:p.stock,sym,score,ms:p.ms,foScore:fo?.score||0,hc:p.hc,fc:p.fc,sec:p.sec,layers,conflict,prob,fo,trend,isNew,funds:p.funds||[],vel});
   });
-  return ranked.sort((a,b)=>b.score-a.score);
+  return ranked.sort((a,b)=>b.score-a.score||(b.vel?.delta||0)-(a.vel?.delta||0));
 }
 
 function renderSmartRanking(){
@@ -991,6 +1085,8 @@ function renderSmartRanking(){
     const rankCls=r.conflict?'rank-conflict':i<3?'rank-top':'';
     const numCls=i===0?'gold':i===1?'silver':i===2?'bronze':'';
     const scoreCls=r.score>=4?'score-high':r.score>=2?'score-med':'';
+    const velBadge=r.vel?`<span style="font-size:.62rem;font-weight:700;color:${r.vel.direction==='rising'?'var(--green)':r.vel.direction==='falling'?'var(--red)':'var(--text-muted)'};margin-left:4px">${r.vel.label}</span>`:'';
+    const setup=classifySetup(r.fo,r.trend);
     const probColor=r.prob.total>=75?'var(--green)':r.prob.total>=60?'var(--amber)':'var(--text-muted)';
     const expandId=`rank-exp-${i}`;
     const isWatched=STATE.watchlist.has(r.stock);
@@ -1037,7 +1133,7 @@ function renderSmartRanking(){
           <button class="card-expand-toggle" onclick="toggleExpand('${expandId}',this)"><span>▸</span> Score breakdown</button>
           <div class="card-expand-body" id="${expandId}">
             <div class="expand-section-title">Probability: ${r.prob.total}/100</div>
-            <div class="expand-line"><span class="expand-label">Confluence (${r.prob.breakdown.confluence.sources} sources)</span><span class="expand-val">${r.prob.breakdown.confluence.score}/25</span></div>
+            <div class="expand-line"><span class="expand-label">Confluence (${r.prob.breakdown.confluence.sources} sources${r.prob.hasInsiderBuy?' · Insider buy':''})</span><span class="expand-val">${r.prob.breakdown.confluence.score}/25</span></div>
             <div class="expand-line"><span class="expand-label">Momentum</span><span class="expand-val">${r.prob.breakdown.momentum.score}/25</span></div>
             <div class="expand-line"><span class="expand-label">Trend Consistency</span><span class="expand-val">${r.prob.breakdown.consistency.score}/25</span></div>
             <div class="expand-line"><span class="expand-label">Entry Timing</span><span class="expand-val">${r.prob.breakdown.timing.score}/25</span></div>
@@ -1118,7 +1214,7 @@ function renderIntelFO(){
   items=items.slice(0,40);
   if(!items.length){container.innerHTML=`<div class="empty"><div class="empty-icon">⚡</div>No signals available</div>`;return;}
   const foFallbackDate=STATE.trendsData?.latestSignalsDate||null;
-  const staleBanner=!hasLiveData?`<div style="padding:8px 12px;background:rgba(255,184,48,.08);border:1px solid rgba(255,184,48,.2);border-radius:8px;font-size:.72rem;color:var(--amber);margin-bottom:10px">⚠ Today's F&O signals unavailable (NSE fetch may have failed) — showing ${foFallbackDate?`signals from <b>${foFallbackDate}</b>`:'MF conviction ranking only'}. Rankings will auto-update when next workflow run succeeds.</div>`:'';
+  const staleBanner=!hasLiveData?`<div style="padding:8px 12px;background:rgba(255,184,48,.08);border:1px solid rgba(255,184,48,.2);border-radius:8px;font-size:.72rem;color:var(--amber);margin-bottom:10px">⚠ Today's F&O signals unavailable — showing ${foFallbackDate?'data from <b>'+foFallbackDate+'</b>':'MF conviction ranking only'}. Rankings auto-update when next workflow succeeds.</div>`:'';
   container.innerHTML=staleBanner+items.map((item,idx)=>{
     const{sym,fo,mfPick,trend,prob,d1,oiSig,prem}=item,expandId=`fo-exp-${idx}`;
     const isWatched=STATE.watchlist.has(sym),isLong=oiSig==='Long Buildup',isShort=oiSig==='Short Buildup';
@@ -1227,7 +1323,8 @@ function buildPicksUniverse(){
     const volSpike=vol>50,conflict=fo&&fo.score<=-1&&mfScore>=1.5;
     // Layer count for badge
     const layers=(mfScore>0?1:0)+(foScore>0.3?1:0)+(hasBulk||hasBlock?1:0)+(volSpike?1:0);
-    items.push({sym,sec,fo,mfPick,trend,prob,mfScore,foScore,d1,oiSig,prem,vol,hasBulk,hasBlock,volSpike,conflict,layers});
+    const setup=classifySetup(fo,trend),vel=scoreVelocity(trend);
+    items.push({sym,sec,fo,mfPick,trend,prob,mfScore,foScore,d1,oiSig,prem,vol,hasBulk,hasBlock,volSpike,conflict,layers,setup,vel});
   });
   return items;
 }
@@ -1254,7 +1351,7 @@ function renderPicks(){
     const foDateLabel=hasLive?STATE.foData?.meta?.latestDate:(STATE.trendsData?.latestSignalsDate||null);
     const banner=`<div style="padding:10px 14px;background:rgba(0,229,153,.06);border:1px solid rgba(0,229,153,.15);border-radius:10px;margin-bottom:12px">
       <div style="font-size:.78rem;font-weight:700;color:var(--accent);margin-bottom:4px">⚡ Best Trades — Multi-Signal Confirmed</div>
-      <div style="font-size:.7rem;color:var(--text-muted);line-height:1.5">Ranked by combined probability score across: MF conviction · F&O OI signal · Volume spike · Bulk/Block deals. ${foDateLabel?`F&O data: <span style="color:${hasLive?'var(--green)':'var(--amber)'}">${foDateLabel}${hasLive?'':' (last available)'}</span>`:'<span style="color:var(--amber)">⚠ No F&O data — MF-only scoring</span>'}</div>
+      <div style="font-size:.7rem;color:var(--text-muted);line-height:1.5">Ranked by combined probability score: MF conviction · F&O OI · Delivery% · Volume · Deals. ${foDateLabel?`F&O: <span style="color:${hasLive?'var(--green)':'var(--amber)'}">${foDateLabel}${hasLive?'':' (last available)'}</span>`:'<span style="color:var(--amber)">⚠ No F&O data — MF-only scoring</span>'}</div>
     </div>`;
     container.innerHTML=banner+items.map((item,idx)=>renderPickCard(item,idx,'best')).join('');
   } else if(tab==='mf'){
@@ -1267,7 +1364,7 @@ function renderPicks(){
     container.innerHTML=items.map((item,idx)=>renderPickCard(item,idx,'combined')).join('');
   } else if(tab==='fo'){
     items=items.filter(i=>i.foScore>0.3).sort((a,b)=>b.foScore-a.foScore).slice(0,30);
-    if(!items.length){container.innerHTML=`<div class="empty"><div class="empty-icon">⚡</div>No F&O signals available<br><small style="color:var(--text-muted)">Today's NSE fetch returned no data — historical signals shown where available</small></div>`;return;}
+    if(!items.length){container.innerHTML=`<div class="empty"><div class="empty-icon">⚡</div>No F&O signals today<br><small style="color:var(--text-muted)">Historical data shown where available — auto-updates each trading day</small></div>`;return;}
     container.innerHTML=items.map((item,idx)=>renderPickCard(item,idx,'fo')).join('');
   }
 }
@@ -1284,6 +1381,9 @@ function renderPickCard(item,idx,mode){
   const layerBadges=[
     mfScore>0?`<span class="rank-layer layer-mf">MF ${mfScore.toFixed(1)}</span>`:'',
     foScore>0.3?`<span class="rank-layer layer-fo">F&O ${foScore.toFixed(1)}</span>`:'',
+    item.setup?`<span class="rank-layer ${item.setup.cls}" title="${item.setup.tip}">${item.setup.type}</span>`:'',
+    item.vel&&item.vel.direction!=='flat'?`<span class="rank-layer" style="color:${item.vel.direction==='rising'?'var(--green)':'var(--red)'};background:${item.vel.direction==='rising'?'rgba(0,229,153,.1)':'rgba(255,69,96,.1)'};border:1px solid ${item.vel.direction==='rising'?'rgba(0,229,153,.2)':'rgba(255,69,96,.2)'}">${item.vel.label}</span>`:'',
+    fo?.delPct>=60?`<span class="rank-layer layer-held">Del ${fo.delPct}%</span>`:'',
     volSpike?`<span class="rank-layer layer-new">Vol↑</span>`:'',
     hasBulk?`<span class="rank-layer layer-new">Bulk</span>`:'',
     hasBlock?`<span class="rank-layer layer-new">Block</span>`:'',
@@ -1322,7 +1422,9 @@ function renderPickCard(item,idx,mode){
     <div class="card-expand-body" id="${expandId}">
       <div class="expand-section-title">Probability Breakdown: ${prob.total}/100</div>
       <div class="expand-line"><span class="expand-label">Confluence (${prob.breakdown.confluence.sources} signal sources)</span><span class="expand-val">${prob.breakdown.confluence.score}/25</span></div>
-      <div class="expand-line"><span class="expand-label">F&O Momentum</span><span class="expand-val">${prob.breakdown.momentum.score}/25 ${!fo?'<span style="color:var(--text-muted);font-size:.65rem">(no F&O data)</span>':''}</span></div>
+      <div class="expand-line"><span class="expand-label">F&O Momentum${fo?.delPct>=45?' · Del '+fo.delPct+'%':''}</span><span class="expand-val">${prob.breakdown.momentum.score}/25 ${!fo?'<span style="color:var(--text-muted);font-size:.65rem">(no F&O data)</span>':''}</span></div>
+      ${prob.breakdown.pcr&&prob.breakdown.pcr.value!==null?`<div class="expand-line"><span class="expand-label">PCR (Put-Call Ratio)</span><span class="expand-val" style="color:${prob.breakdown.pcr.score>=0?'var(--green)':'var(--red)'}">${prob.breakdown.pcr.value.toFixed(2)} ${prob.breakdown.pcr.score>0?'✓':prob.breakdown.pcr.score<0?'⚠ Caution':'Neutral'}</span></div>`:''}
+      ${prob.hasInsiderBuy?'<div class="expand-line"><span class="expand-label" style="color:var(--amber)">🔍 Insider buy detected this month</span></div>':''}
       <div class="expand-line"><span class="expand-label">Trend Consistency (${prob.breakdown.consistency.daysTracked}d)</span><span class="expand-val">${prob.breakdown.consistency.score}/25</span></div>
       <div class="expand-line"><span class="expand-label">Entry Timing${prob.breakdown.timing.volSpike?' + Vol Spike bonus':''}</span><span class="expand-val">${prob.breakdown.timing.score}/25</span></div>
       ${conflict?`<div class="expand-line" style="color:var(--red)"><span class="expand-label">⚠ CONFLICT: MF buying (${mfScore.toFixed(1)}) but F&O bearish (${foScore.toFixed(1)}) — do NOT trade without manual review</span></div>`:''}
@@ -1402,8 +1504,9 @@ function runAutoPilot(){
     if(recentExit.has(sym)||openNow.find(t=>t.sym===sym))return;
     const sec=mfPick?.sec||'Unknown';
     if((secCount[sec]||0)>=AUTO_MAX_SEC)return;
-    const vol=parseFloat(fo.vol)/100||0.25,entry=fo.cl,target=+(entry*(1+vol*0.35)).toFixed(2),sl=+(entry*(1-vol*0.18)).toFixed(2),rr=(target-entry)/(entry-sl);
-    if(rr<1.5)return;
+    const entry=fo.cl,ts=calcTargetSL(entry,fo,trend,prob);
+    if(!ts.valid)return;
+    const{sl,target,rr}=ts;
     scored.push({sym,sec,entry,target,sl,rr:+rr.toFixed(1),prob,fo,mfPick,trend});
   });
   scored.sort((a,b)=>b.prob.total-a.prob.total);
@@ -1429,9 +1532,26 @@ function renderAutoTrades(){
   const container=document.getElementById('autoTrades'),ac=document.getElementById('autoCount');
   const open=STATE.autoLog.filter(t=>t.status==='open');
   ac.textContent=`${open.length}/${AUTO_MAX}`;
-  if(!STATE.foData?.signals){container.innerHTML=`<div class="empty"><div class="empty-icon">🤖</div>Auto-pilot initialising — F&O data required</div>`;return;}
+  // Capital settings card (always shown)
+  const capCard=`<div class="card" style="margin-bottom:12px">
+    <div class="card-header" style="margin-bottom:8px">
+      <div class="card-title">💼 Capital &amp; Risk Settings</div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end">
+      <div>
+        <div class="card-col-label">Trading Capital (₹)</div>
+        <input id="capitalInput" type="number" min="0" step="10000" value="${STATE.capital||''}" placeholder="e.g. 500000" style="width:100%;padding:6px 9px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:.82rem" oninput="STATE.capital=parseFloat(this.value)||0;savePrefs()"/>
+      </div>
+      <div>
+        <div class="card-col-label">Risk per trade (%)</div>
+        <input id="riskInput" type="number" min="0.5" max="5" step="0.5" value="${STATE.riskPct||1.5}" style="width:100%;padding:6px 9px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:.82rem" oninput="STATE.riskPct=parseFloat(this.value)||1.5;savePrefs()"/>
+      </div>
+    </div>
+    <div style="font-size:.68rem;color:var(--text-muted);margin-top:6px">Max risk per trade: <strong style="color:var(--text)">₹${STATE.capital&&STATE.riskPct?Math.round(STATE.capital*(STATE.riskPct/100)).toLocaleString('en-IN'):'—'}</strong> · Position sizing shown in trade modal</div>
+  </div>`;
+  if(!STATE.foData?.signals){container.innerHTML=capCard+`<div class="empty"><div class="empty-icon">🤖</div>Auto-pilot initialising — F&O data required</div>`;return;}
   if(!open.length){container.innerHTML=`<div class="empty"><div class="empty-icon">🤖</div>No qualifying trades today<br><small style="color:var(--text-muted)">Threshold: P≥${AUTO_THRESHOLD} · R:R≥1.5</small></div>`;return;}
-  container.innerHTML=open.map(t=>{
+  container.innerHTML=capCard+open.map(t=>{
     const fo=STATE.foData.signals[t.sym],cmp=fo?.cl??t.entry,uPnl=+((cmp-t.entry)/t.entry*100).toFixed(2),up=uPnl>=0;
     const prog=Math.min(98,Math.max(2,((cmp-t.sl)/(t.target-t.sl))*100)).toFixed(0);
     const toTgt=(((t.target-cmp)/cmp)*100).toFixed(1),prob=t.prob||{total:0,breakdown:{confluence:{score:0},momentum:{score:0},consistency:{score:0},timing:{score:0}}};
@@ -1490,10 +1610,66 @@ function renderWatching(){
 }
 
 function openTrade(stock){
-  const sym=toSym(stock),fo=getFO(sym),entry=fo?.cl||1200,vol=parseFloat(fo?.vol||25)/100;
-  const target=+(entry*(1+vol*0.35)).toFixed(2),sl=+(entry*(1-vol*0.18)).toFixed(2);
+  const sym=toSym(stock),fo=getFO(sym);
+  const mfPick=computeMFPicks(computeMFData()).find(p=>toSym(p.stock)===sym)||null;
+  const trend=STATE.trendsData?.trends?.[sym]||null;
+  const prob=computeProbScore(stock,mfPick,fo,trend);
+  const entry=fo?.cl||0;
+  const ts=entry>0?calcTargetSL(entry,fo,trend,prob):null;
+  const capital=STATE.capital||0;
+  const sizing=ts&&entry>0&&capital>0?calcPositionSize(entry,ts.sl,capital,STATE.riskPct||1.5):null;
+
+  // Gates
+  const gates=[
+    {ok:prob.total>=55,label:'Probability score',val:prob.total+'/100',threshold:'≥55'},
+    {ok:!!(fo&&fo.score>0),label:'F&O direction',val:fo?fo.label:'No F&O data',threshold:'Bullish'},
+    {ok:!(fo&&fo.score<=-1&&(mfPick?.ms||0)>=1.5),label:'No MF vs F&O conflict',val:'Check',threshold:'No conflict'},
+    {ok:!prob.breakdown.pcr||prob.breakdown.pcr.value===null||prob.breakdown.pcr.value>=0.7,label:'PCR acceptable',val:prob.breakdown.pcr?.value!=null?prob.breakdown.pcr.value.toFixed(2):'N/A',threshold:'≥0.7'},
+    {ok:(prob.breakdown.consistency?.daysTracked||0)>=2,label:'Multi-day trend data',val:(prob.breakdown.consistency?.daysTracked||0)+' days',threshold:'≥2 days'},
+  ];
+  const allPass=gates.every(g=>g.ok);
+
+  // Remove any existing modal
+  document.getElementById('tradeModal')?.remove();
+
+  const modal=document.createElement('div');
+  modal.id='tradeModal';
+  modal.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:999;display:flex;align-items:center;justify-content:center;padding:16px';
+  modal.innerHTML=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px;max-width:400px;width:100%;box-shadow:0 8px 40px rgba(0,0,0,.8)">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <div style="font-size:.95rem;font-weight:700;color:var(--text)">Trade Entry — ${sym}</div>
+      <button onclick="document.getElementById('tradeModal').remove()" style="background:none;border:none;color:var(--text-muted);font-size:1.2rem;cursor:pointer">✕</button>
+    </div>
+    <div style="margin-bottom:14px">
+      ${gates.map(g=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:.75rem">
+        <span style="color:var(--text-muted)">${g.label}</span>
+        <span style="font-weight:700;color:${g.ok?'var(--green)':'var(--red)'}">${g.ok?'✓':'✗'} ${g.val}</span>
+      </div>`).join('')}
+    </div>
+    ${!allPass?`<div style="font-size:.72rem;color:var(--amber);background:rgba(255,184,48,.08);border:1px solid rgba(255,184,48,.25);border-radius:8px;padding:8px 10px;margin-bottom:10px">⚠ One or more checks failed. Review before trading.</div>`:''}
+    ${ts&&entry>0?`<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px;text-align:center">
+      <div style="background:var(--surface2);border-radius:8px;padding:8px;border:1px solid var(--border)"><div style="font-size:.6rem;color:var(--text-muted);margin-bottom:2px">ENTRY</div><div style="font-size:.82rem;font-weight:700;font-family:'Space Mono',monospace">₹${fmt(entry)}</div></div>
+      <div style="background:rgba(255,69,96,.06);border-radius:8px;padding:8px;border:1px solid rgba(255,69,96,.2)"><div style="font-size:.6rem;color:var(--text-muted);margin-bottom:2px">STOP LOSS</div><div style="font-size:.82rem;font-weight:700;color:var(--red);font-family:'Space Mono',monospace">₹${fmt(ts.sl)}</div></div>
+      <div style="background:rgba(0,229,153,.06);border-radius:8px;padding:8px;border:1px solid rgba(0,229,153,.2)"><div style="font-size:.6rem;color:var(--text-muted);margin-bottom:2px">TARGET</div><div style="font-size:.82rem;font-weight:700;color:var(--green);font-family:'Space Mono',monospace">₹${fmt(ts.target)}</div></div>
+    </div>
+    <div style="font-size:.72rem;color:var(--text-muted);text-align:center;margin-bottom:12px">R:R ${ts.rr}:1 ${ts.rr>=2?'<span style="color:var(--green)">✓ Good</span>':ts.rr>=1.5?'<span style="color:var(--amber)">Fair</span>':'<span style="color:var(--red)">⚠ Weak</span>'}</div>
+    ${sizing?`<div style="font-size:.72rem;color:var(--text-muted);background:var(--surface2);border-radius:8px;padding:8px;margin-bottom:12px;border:1px solid var(--border)">📊 Position size: <strong style="color:var(--text)">${sizing.shares} shares</strong> · Deploy ₹${sizing.capitalDeployed.toLocaleString('en-IN')} · Max loss ₹${sizing.maxLoss.toLocaleString('en-IN')} (${sizing.riskPct}% of capital)</div>`:'<div style="font-size:.7rem;color:var(--text-muted);text-align:center;margin-bottom:10px">Set capital in Portfolio → Auto-Pilot for position sizing</div>'}
+    `:'<div style="font-size:.75rem;color:var(--text-muted);text-align:center;padding:10px;margin-bottom:12px">No live price — load F&O data for entry levels</div>'}
+    <div style="display:flex;gap:8px">
+      <button onclick="document.getElementById('tradeModal').remove()" style="flex:1;padding:9px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text-muted);font-size:.78rem;font-weight:600">Cancel</button>
+      <button onclick="confirmTrade('${stock}','${sym}',${entry>0&&ts?ts.sl:entry*0.88},${entry>0&&ts?ts.target:entry*1.12},${entry})" style="flex:2;padding:9px;border-radius:8px;border:none;background:var(--accent);color:#000;font-size:.78rem;font-weight:700">${allPass?'✓ Confirm Trade':'⚠ Trade Anyway'}</button>
+    </div>
+  </div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener('click',e=>{if(e.target===modal)modal.remove();});
+}
+
+function confirmTrade(stock,sym,sl,target,entry){
+  if(!entry||entry<=0){showToast('No live price available — cannot record trade');return;}
   STATE.trades.push({id:Date.now(),stock,sym,entry,target,sl,date:new Date().toISOString(),type:'manual',status:'open'});
   savePrefs();STATE.portfolioTab='open';renderPortfolio();switchTab('portfolio');
+  document.getElementById('tradeModal')?.remove();
+  showToast('✓ Trade recorded — manage in Portfolio');
 }
 
 function renderTrades(){renderPortfolio();}
@@ -1681,17 +1857,27 @@ async function fetchNifty(){
     console.warn('Nifty fetch:',e);
   }
 }
+  updateDataAgeBadge();
+
+function updateDataAgeBadge(){
+  const dateStr=STATE.foData?.meta?.date||STATE.trendsData?.latestSignalsDate||null;
+  const age=signalAgeLabel(dateStr);
+  const el=document.getElementById('dataAgeBadge');
+  if(!el||!age)return;
+  el.textContent=age.label;
+  el.style.color=age.color;
+}
 
 async function fetchFOData(){
   try{
     const cfg=await fetch('/api/config').then(r=>r.json()).catch(()=>null);
     if(cfg?.dataUrl){
       const r=await fetch(cfg.dataUrl+'?t='+Date.now());
-      if(r.ok){STATE.foData=await r.json();updateFreshness();renderMarket();renderIntelligence();renderPicks();return;}
+      if(r.ok){STATE.foData=await r.json();updateFreshness();renderMarket();renderIntelligence();renderPicks();checkExitSignals();return;}
     }
     const r=await fetch('/api/history?type=trends&days=5');
-    if(r.ok)STATE.trendsData=await r.json();
-    updateFreshness();renderMarket();renderIntelligence();renderPicks();
+    if(r.ok){STATE.trendsData=await r.json();}
+    updateFreshness();renderMarket();renderIntelligence();renderPicks();checkExitSignals();
   }catch(e){console.warn('FO fetch:',e);}
 }
 
@@ -1754,9 +1940,10 @@ function loadPrefs(){
   try{STATE.watchlist=new Set(JSON.parse(localStorage.getItem('mfi_watch')||'[]'));}catch(e){}
   try{STATE.trades=JSON.parse(localStorage.getItem('mfi_trades')||'[]');}catch(e){}
   try{STATE.autoLog=JSON.parse(localStorage.getItem('mfi_auto')||'[]');}catch(e){}
+  try{const cap=localStorage.getItem('mfi_capital');if(cap){const c=JSON.parse(cap);STATE.capital=c.capital||0;STATE.riskPct=c.riskPct||1.5;}}catch(e){}
   applyTheme(theme);applyFs(parseInt(fs));
 }
-function savePrefs(){localStorage.setItem('mfi_watch',JSON.stringify([...STATE.watchlist]));localStorage.setItem('mfi_trades',JSON.stringify(STATE.trades));localStorage.setItem('mfi_auto',JSON.stringify(STATE.autoLog));}
+function savePrefs(){localStorage.setItem('mfi_watch',JSON.stringify([...STATE.watchlist]));localStorage.setItem('mfi_trades',JSON.stringify(STATE.trades));localStorage.setItem('mfi_auto',JSON.stringify(STATE.autoLog));localStorage.setItem('mfi_capital',JSON.stringify({capital:STATE.capital,riskPct:STATE.riskPct}));}
 function applyTheme(t){document.documentElement.setAttribute('data-theme',t==='void'?'':t);document.querySelectorAll('.theme-btn').forEach(b=>b.classList.toggle('active',b.dataset.theme===t));localStorage.setItem('mfi_theme',t);}
 function applyFs(sz){document.documentElement.style.setProperty('--fs',sz+'px');document.querySelectorAll('.fs-btn').forEach(b=>b.classList.toggle('active',parseInt(b.dataset.fs)===sz));localStorage.setItem('mfi_fs',sz);}
 
@@ -1767,6 +1954,7 @@ function switchTab(tab){
   STATE.activeTab=tab;
   document.querySelectorAll('.nav-tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
   document.querySelectorAll('.tab-panel').forEach(p=>p.classList.toggle('active',p.id===`tab-${tab}`));
+  if(tab==='guide')renderGuide();
   if(tab==='intelligence')renderIntelligence();if(tab==='picks')renderPicks();if(tab==='portfolio')renderPortfolio();if(tab==='market')renderMarket();
 }
 function initPillTabs(){
@@ -2335,13 +2523,160 @@ function downloadDigest(){
 }
 
 
+
+/* ═══════════════════════════════════════════
+   GUIDE TAB
+═══════════════════════════════════════════ */
+function renderGuide(){
+  const c=document.getElementById('guideContent');
+  if(!c)return;
+  c.innerHTML=`
+  <div class="card" style="margin-bottom:12px;border-left:3px solid var(--accent)">
+    <div style="font-size:.9rem;font-weight:700;color:var(--accent);margin-bottom:4px">How to make profitable trades with this app</div>
+    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.6">This app tracks what India's top 20 mutual fund houses are buying and combines it with live F&O (Futures & Options) data. When <em>both</em> smart money and derivatives markets agree — that's your edge.</div>
+  </div>
+
+  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">THE 3-STEP DAILY ROUTINE</div>
+
+  <div class="card" style="margin-bottom:8px">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <div style="width:28px;height:28px;border-radius:50%;background:var(--accent);color:#000;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.85rem;flex-shrink:0">1</div>
+      <div style="font-weight:700;font-size:.88rem">Morning check — MARKET tab (5 min)</div>
+    </div>
+    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.7;margin-left:38px">
+      • Look at <strong style="color:var(--text)">FII/DII flow</strong>. FII buying + DII buying = green light. Both selling = stay out.<br>
+      • Check <strong style="color:var(--text)">PCR</strong>. Above 1.0 = market has a cushion. Below 0.7 = danger zone — avoid new longs.<br>
+      • Look at <strong style="color:var(--text)">Delivery %</strong> chip. Above 55% = genuine buying. Below 30% = speculative noise.<br>
+      • If VIX &gt; 20: reduce position size. High VIX means high risk.
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:8px">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <div style="width:28px;height:28px;border-radius:50%;background:var(--accent);color:#000;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.85rem;flex-shrink:0">2</div>
+      <div style="font-weight:700;font-size:.88rem">Find your trade — PICKS tab → Best Trades</div>
+    </div>
+    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.7;margin-left:38px">
+      • Open <strong style="color:var(--text)">Picks → Best Trades</strong>. This list is sorted by probability score (P score).<br>
+      • Only consider stocks with <strong style="color:var(--green)">P ≥ 65</strong>. Below 55 = not enough evidence.<br>
+      • Look for badges: <span style="background:rgba(0,229,153,.12);color:var(--green);padding:1px 6px;border-radius:8px;font-size:.65rem;font-weight:700">⚡⚡ Triple Lock</span> = MF + F&O + Trend all agree. This is the best setup.<br>
+      • Prefer <strong style="color:var(--text)">Breakout</strong> or <strong style="color:var(--text)">Accumulation</strong> setup types over Pullback (higher risk).<br>
+      • Avoid any stock showing a <span style="background:rgba(255,69,96,.12);color:var(--red);padding:1px 6px;border-radius:8px;font-size:.65rem;font-weight:700">⚠ Conflict</span> badge — MF and F&O disagree.
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:12px">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <div style="width:28px;height:28px;border-radius:50%;background:var(--accent);color:#000;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.85rem;flex-shrink:0">3</div>
+      <div style="font-weight:700;font-size:.88rem">Enter the trade — with discipline</div>
+    </div>
+    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.7;margin-left:38px">
+      • Tap <strong style="color:var(--accent)">▷ Buy</strong> on your chosen stock. A checklist will appear — review all 5 gates.<br>
+      • The app auto-calculates <strong style="color:var(--text)">Stop Loss and Target</strong> based on volatility and signal strength.<br>
+      • Set your capital in <strong style="color:var(--text)">Portfolio → Auto-Pilot</strong> and the app will show exactly how many shares to buy (1.5% risk per trade rule).<br>
+      • Only enter if R:R (Risk:Reward) is ≥ 1.5. The app flags weak setups.
+    </div>
+  </div>
+
+  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">UNDERSTANDING THE SCORES</div>
+
+  <div class="card" style="margin-bottom:12px">
+    <div style="font-size:.78rem;font-weight:700;margin-bottom:10px">Probability Score (P score) — out of 100</div>
+    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.8">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--border)"><span><strong style="color:var(--green)">P ≥ 75</strong> — High conviction</span><span style="color:var(--green);font-weight:700">Strong Buy</span></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--border)"><span><strong style="color:var(--amber)">P 60–74</strong> — Good evidence</span><span style="color:var(--amber);font-weight:700">Buy with caution</span></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--border)"><span><strong>P 45–59</strong> — Weak signal</span><span style="color:var(--text-muted)">Watch only</span></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0"><span><strong style="color:var(--red)">P &lt; 45</strong> — Not enough evidence</span><span style="color:var(--red)">Skip</span></div>
+    </div>
+    <div style="font-size:.72rem;color:var(--text-muted);margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">The score has 4 components: <strong style="color:var(--text)">Confluence</strong> (how many signals agree) · <strong style="color:var(--text)">F&O Momentum</strong> (derivatives direction + delivery %) · <strong style="color:var(--text)">Trend Consistency</strong> (days of bullish data) · <strong style="color:var(--text)">Entry Timing</strong> (pullback vs overextended).</div>
+  </div>
+
+  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">SIGNAL BADGES EXPLAINED</div>
+
+  <div class="card" style="margin-bottom:12px">
+    <div style="font-size:.75rem;color:var(--text-muted);line-height:2">
+      <div><span style="background:rgba(0,229,153,.12);color:var(--green);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">⚡⚡ Triple Lock</span> — MF buying + F&O bullish + Multi-day trend confirmed. Highest quality signal.</div>
+      <div><span style="background:rgba(0,229,153,.12);color:var(--green);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">⚡ 2 Signals</span> — Two of three confirm. Good signal, watch for 3rd to align.</div>
+      <div><span style="background:rgba(0,229,153,.12);color:var(--green);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">F&O Bullish</span> — Derivatives players are positioning long. Strong momentum signal.</div>
+      <div><span style="background:rgba(59,158,255,.12);color:var(--blue);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">MF Strong</span> — Multiple mutual fund houses accumulated this month.</div>
+      <div><span style="background:rgba(255,184,48,.12);color:var(--amber);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">Breakout</span> — High volume + premium expansion. Enter on confirmation, not anticipation.</div>
+      <div><span style="background:rgba(255,184,48,.12);color:var(--amber);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">Pullback</span> — Short-term dip in an uptrend. Good risk:reward but requires patience.</div>
+      <div><span style="background:rgba(255,184,48,.12);color:var(--amber);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">Compression</span> — Range tightening. Expect a move soon — direction not yet confirmed.</div>
+      <div><span style="background:rgba(255,184,48,.12);color:var(--amber);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">Accumulation</span> — Steady institutional buying with no price breakout yet. Early-stage opportunity.</div>
+      <div><span style="background:rgba(0,229,153,.12);color:var(--green);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">Del 65%</span> — High delivery percentage. Institutions are taking delivery, not just speculating.</div>
+      <div><span style="background:rgba(0,229,153,.12);color:var(--green);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">↑ Rising</span> — F&O score improving over last 3 sessions. Momentum building.</div>
+      <div><span style="background:rgba(255,69,96,.12);color:var(--red);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">↓ Falling</span> — F&O score weakening. Consider waiting or skipping.</div>
+      <div><span style="background:rgba(255,69,96,.12);color:var(--red);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">⚠ Conflict</span> — MF is buying but F&O is bearish. DO NOT TRADE without manual research.</div>
+    </div>
+  </div>
+
+  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">WHEN TO EXIT</div>
+
+  <div class="card" style="margin-bottom:12px">
+    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.8">
+      <div style="padding:4px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--red)">Immediate exit:</strong> Stock hits your Stop Loss. No exceptions.</div>
+      <div style="padding:4px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--red)">Exit signal:</strong> F&O score turns negative (crosses from positive to bearish label).</div>
+      <div style="padding:4px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--amber)">Review and exit:</strong> MF exits the stock (shown in Intelligence → Exits).</div>
+      <div style="padding:4px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--amber)">Consider exit:</strong> P score drops below 40 on your open position.</div>
+      <div style="padding:4px 0"><strong style="color:var(--green)">Book partial profits:</strong> Stock hits 60% of target. Move SL to entry (risk-free trade).</div>
+    </div>
+  </div>
+
+  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">GOLDEN RULES</div>
+
+  <div class="card" style="margin-bottom:12px">
+    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.9">
+      <div>1. <strong style="color:var(--text)">Never risk more than 2% of capital on a single trade.</strong> Set this in Portfolio → Auto-Pilot.</div>
+      <div>2. <strong style="color:var(--text)">Maximum 2 stocks from the same sector at a time.</strong> The Auto-Pilot enforces this; do the same manually.</div>
+      <div>3. <strong style="color:var(--text)">Wait for Triple Lock before sizing up.</strong> 2-signal setups get half position, 3-signal get full.</div>
+      <div>4. <strong style="color:var(--text)">Don't chase breakouts.</strong> If a stock is up 5%+ on the day, wait for the next pullback.</div>
+      <div>5. <strong style="color:var(--text)">Red market days (FII + DII both selling) = no new trades.</strong> Let the market find its footing.</div>
+      <div>6. <strong style="color:var(--text)">The Auto-Pilot is your discipline engine.</strong> Let it run 5 positions — it uses the same scoring without emotion.</div>
+    </div>
+  </div>
+
+  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">DATA FRESHNESS</div>
+  <div class="card" style="margin-bottom:16px">
+    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.7">
+      <strong style="color:var(--text)">MF Holdings</strong> — Updated monthly (SEBI mandate). Current data: Jan–Feb 2026.<br>
+      <strong style="color:var(--text)">F&O Signals</strong> — Auto-fetched each trading day via GitHub Actions workflow. If today's data is unavailable, last valid day's signals are shown with an amber banner.<br>
+      <strong style="color:var(--text)">Nifty / BankNifty</strong> — Live, refreshed every 60 seconds during market hours.<br>
+      <div style="margin-top:6px;padding:6px 10px;background:var(--surface2);border-radius:6px;border:1px solid var(--border)">If you see an amber "F&O signals unavailable" banner, the data is from the previous trading day. Rankings still work — F&O momentum scores will be slightly stale but MF conviction and trend scores are unaffected.</div>
+    </div>
+  </div>`;
+}
+
+/* ═══════════════════════════════════════════
+   EXIT SIGNAL CHECKER
+═══════════════════════════════════════════ */
+function checkExitSignals(){
+  const signals=STATE.foData?.signals||{},mfData=computeMFData();
+  const exits=new Set(mfData.ex.map(e=>toSym(e.stock)));
+  const allOpen=STATE.trades.filter(t=>t.status==='open');
+  const alerts=[];
+  allOpen.forEach(t=>{
+    const sym=toSym(t.stock),fo=signals[sym];
+    const mfPick=computeMFPicks(mfData).find(p=>toSym(p.stock)===sym)||null;
+    const trend=STATE.trendsData?.trends?.[sym]||null;
+    const prob=computeProbScore(t.stock,mfPick,fo,trend);
+    if(fo&&fo.score<-1)alerts.push({sym,reason:'F&O turned bearish',severity:'high',prob:prob.total});
+    else if(exits.has(sym))alerts.push({sym,reason:'MF exited this month',severity:'high',prob:prob.total});
+    else if(prob.total<40)alerts.push({sym,reason:'P score dropped to '+prob.total,severity:'medium',prob:prob.total});
+  });
+  const bar=document.getElementById('exitAlertBar');
+  if(!bar)return;
+  if(!alerts.length){bar.style.display='none';return;}
+  bar.style.display='block';
+  bar.innerHTML=`<div style="padding:8px 16px;background:rgba(255,69,96,.08);border-bottom:1px solid rgba(255,69,96,.2);font-size:.72rem;color:var(--red);display:flex;align-items:center;gap:8px;flex-wrap:wrap"><strong>⚠ Exit Signals:</strong>${alerts.map(a=>`<span style="background:rgba(255,69,96,.12);border:1px solid rgba(255,69,96,.25);padding:2px 8px;border-radius:10px;font-weight:700">${a.sym}: ${a.reason}</span>`).join('')}</div>`;
+}
+
 function init(){
   loadPrefs();loadAlerts();
   document.querySelectorAll('.theme-btn').forEach(b=>b.addEventListener('click',()=>applyTheme(b.dataset.theme)));
   document.querySelectorAll('.fs-btn').forEach(b=>b.addEventListener('click',()=>applyFs(parseInt(b.dataset.fs))));
   document.querySelectorAll('.nav-tab').forEach(b=>b.addEventListener('click',()=>switchTab(b.dataset.tab)));
   initPillTabs();initSearch();
-  renderMarket();renderIntelligence();renderPortfolio();
+  renderMarket();renderIntelligence();renderPortfolio();renderGuide();
   fetchFOData().then(async()=>{
     fetchTrends();
     fetchNifty();
@@ -2351,7 +2686,7 @@ function init(){
     renderFiiDivergenceAlert();
     renderDeliverySpikes();
   });
-  setInterval(()=>{fetchNifty();checkPriceAlerts();},60000);
+  setInterval(()=>{fetchNifty();checkPriceAlerts();checkExitSignals();},60000);
 }
 document.addEventListener('DOMContentLoaded',init);
 </script>
