@@ -362,6 +362,13 @@ jobs:
               five_day.append({'d':dt2.strptime(fetch_date_iso,'%Y-%m-%d').strftime('%a'),
                                'fii':fii_dii.get('fii',0),'dii':fii_dii.get('dii',0)})
 
+          # ── Guard: abort if NSE fetch returned too few stocks ─────
+          if stock_count < 100:
+              print(f"CRITICAL: Only {stock_count} stocks parsed (expected 150+).")
+              print("NSE fetch likely failed or returned incomplete data.")
+              print("Aborting write — existing fno_signals.json is preserved.")
+              import sys; sys.exit(1)
+
           # ── Assemble and write JSON ───────────────────────────────
           from datetime import datetime as dt
           output = {
