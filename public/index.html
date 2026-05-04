@@ -1048,13 +1048,16 @@ function renderFiiDiiChart(){
     rows=STATE._fiiDiiLive;
   }
 
-  // If still no rows, fetch live from NSE and re-render
+  // If still no rows, show clean actionable message (no fetch attempt)
   if(!rows.length){
-    c.innerHTML=`<div style="text-align:center;padding:16px 0">
-      <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:8px">⏳ Loading FII/DII data from NSE…</div>
-      <div class="spinner" style="margin:0 auto"></div>
+    c.innerHTML=`<div style="padding:14px;background:var(--surface2);border-radius:8px;border:1px solid var(--border)">
+      <div style="font-size:.8rem;font-weight:600;margin-bottom:6px">📡 FII/DII Chart — Connect your workflow</div>
+      <div style="font-size:.72rem;color:var(--text-muted);line-height:1.7">
+        Push <code style="background:var(--bg);padding:1px 4px;border-radius:3px">fiiDiiHistory</code> array to <code style="background:var(--bg);padding:1px 4px;border-radius:3px">foData.json</code> from your GitHub Actions workflow.<br>
+        Format: <code style="background:var(--bg);padding:1px 4px;border-radius:3px">[{"date":"2026-05-01","fii":1240,"dii":830}, ...]</code><br>
+        Source: <a href="https://www.nseindia.com/market-data/fii-dii-trend" target="_blank" style="color:var(--accent)">NSE FII/DII page</a> — parse server-side in your workflow, not in the browser.
+      </div>
     </div>`;
-    fetchLiveFiiDii().then(()=>renderFiiDiiChart());
     return;
   }
 
@@ -1122,40 +1125,13 @@ function renderFiiDiiChart(){
 }
 
 /* ── Live FII/DII fetch from NSE public endpoint (no auth needed) ── */
-let _fiiDiiFetching=false;
-async function fetchLiveFiiDii(){
-  if(_fiiDiiFetching||STATE._fiiDiiLive?.length)return;
-  _fiiDiiFetching=true;
-  try{
-    // NSE FII/DII monthly data endpoint
-    const r=await fetch('https://www.nseindia.com/api/fiidiiTradeReact',{
-      signal:AbortSignal.timeout(8000),
-      credentials:'include',
-      headers:{'Accept':'application/json','Accept-Language':'en-US'}
-    });
-    if(!r.ok)throw new Error('NSE FII/DII API returned '+r.status);
-    const raw=await r.json();
-    // Response: [{date:'28-Apr-2026',fiiNet:'1240.00',diiNet:'830.00',...},...]
-    const arr=Array.isArray(raw)?raw:(raw.data||[]);
-    if(!arr.length)throw new Error('empty');
-    STATE._fiiDiiLive=arr.slice(-10).map(d=>{
-      // Parse date like "28-Apr-2026" → "2026-04-28"
-      const parts=(d.date||d.Date||'').split('-');
-      const months={Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12'};
-      const iso=parts.length===3?`${parts[2]}-${months[parts[1]]||'01'}-${parts[0].padStart(2,'0')}`:d.date||'';
-      return{
-        date:iso,
-        fii:parseFloat(d.fiiNet||d.fiiBuyAmount||d.fii||0),
-        dii:parseFloat(d.diiNet||d.diiBuyAmount||d.dii||0)
-      };
-    }).filter(d=>d.date);
-    console.log('✓ FII/DII live data loaded from NSE:',STATE._fiiDiiLive.length,'days');
-  }catch(e){
-    console.warn('FII/DII NSE fetch failed:',e.message,
-      '— Add fiiDiiHistory array to foData.json in your GitHub Actions workflow to populate this chart.');
-    // Set empty array so we don't retry in a loop
-    STATE._fiiDiiLive=STATE._fiiDiiLive||[];
-  }finally{_fiiDiiFetching=false;}
+/* ── FII/DII: only use data from foData (GitHub Actions) or mfapi.in NAV.
+   NSE direct calls are CORS-blocked in browsers — never attempt them. ── */
+function fetchLiveFiiDii(){
+  // No-op: FII/DII data comes from foData.fiiDiiHistory pushed by GitHub Actions.
+  // If not available, chart shows a clean "connect your workflow" message.
+  // This function intentionally does nothing to prevent page freezes.
+  return Promise.resolve();
 }
 
 /* ═══════════════════════════════════════════
@@ -2193,44 +2169,45 @@ const MFDATA_SCHEME_MAP={
   motilal_mc:'120847',   // Motilal Oswal Midcap - Direct Growth
 };
 
+/* ── fetchLiveHoldings: mfapi.in is CORS-friendly (confirmed).
+   Fires all requests in parallel (Promise.allSettled), 4s hard timeout each.
+   Runs only once per session. Never blocks the UI. ── */
 async function fetchLiveHoldings(){
   if(STATE._holdingsFetched)return;
   STATE._holdingsFetched=true;
-  let anyUpdated=false;
-  const banner=document.getElementById('holdingsBanner');
-  for(const[fundId,schemeCode]of Object.entries(MFDATA_SCHEME_MAP)){
-    try{
-      const url=`https://mfdata.in/api/v1/schemes/${schemeCode}/portfolio`;
-      const r=await fetch(url,{signal:AbortSignal.timeout(8000)});
-      if(!r.ok)continue;
-      const d=await r.json();
-      // mfdata.in returns {holdings:[{stockName,sectorName,percentage,value},...],...}
-      const raw=d.holdings||d.portfolio||[];
-      if(!raw.length)continue;
-      const live=raw.slice(0,20).map(h=>({
-        s:h.stockName||h.name||h.stock||'',
-        sec:h.sectorName||h.sector||'Unknown',
-        pct:parseFloat(h.percentage||h.pct||0),
-        v:Math.round(parseFloat(h.value||h.marketValue||0)/1e7) // convert to ₹Cr
-      })).filter(h=>h.s&&h.pct>0);
-      if(live.length>0&&HOLDINGS[fundId]){
-        // Keep jan as-is, replace feb with live data
-        HOLDINGS[fundId].feb=live;
-        HOLDINGS[fundId].disclosureMonth='2026-03'; // mfdata.in has Mar 2026
-        anyUpdated=true;
-        console.log(`✓ Live holdings loaded: ${HOLDINGS[fundId].name} (${live.length} stocks)`);
+
+  const entries=Object.entries(MFDATA_SCHEME_MAP);
+  // Fire ALL requests in parallel — never await in a loop
+  const results=await Promise.allSettled(
+    entries.map(([fundId,schemeCode])=>
+      fetch(`https://mfapi.in/mf/${schemeCode}`,{signal:AbortSignal.timeout(4000)})
+        .then(r=>r.ok?r.json():null)
+        .then(d=>{
+          if(!d||!d.data?.length)return null;
+          // mfapi.in returns NAV history — not portfolio holdings.
+          // Only use it to update latest NAV for the scheme, not holdings.
+          // Holdings come from embedded SEBI-disclosed data.
+          return{fundId,nav:parseFloat(d.data[0]?.nav||0),date:d.data[0]?.date||''};
+        })
+        .catch(()=>null)
+    )
+  );
+  let updated=0;
+  results.forEach(r=>{
+    if(r.status==='fulfilled'&&r.value){
+      const{fundId,nav,date}=r.value;
+      if(HOLDINGS[fundId]&&nav>0){
+        HOLDINGS[fundId].latestNav=nav;
+        HOLDINGS[fundId].navDate=date;
+        updated++;
       }
-    }catch(e){
-      // Silently skip — embedded fallback data is used
     }
-  }
-  if(anyUpdated){
-    if(banner){banner.style.display='none';}
-    // Re-render intelligence if active
-    if(STATE.activeTab==='intelligence')renderIntelligence();
-    if(STATE.activeTab==='market')renderMarket();
-    showToast('✓ Live MF portfolio data loaded from mfdata.in');
-  }
+  });
+  if(updated>0)console.log(`✓ NAV updated for ${updated} funds from mfapi.in`);
+  // Note: mfapi.in does NOT provide portfolio holdings — only NAV.
+  // Portfolio holdings data comes from the embedded SEBI-disclosed dataset.
+  // To get live holdings, use your GitHub Actions workflow to fetch from
+  // individual AMC websites and push to foData.json.
 }
 
 function renderNiftyTile(prefix,d){
@@ -2754,351 +2731,275 @@ function renderIntelManagers(){
 ═══════════════════════════════════════════ */
 /* ═══════════════════════════════════════════
    #10 DELIVERY VOLUME SPIKE — Home Tab
-   Sources (in priority order):
-   1. foData.deliveryHistory  — array pushed by GitHub Actions from NSE bhavcopy
-   2. Live NSE bhavcopy URL   — fetched fresh on page load (last trading day)
-   3. foData.deliveryData     — single-day snapshot from foData.json
-   Data shape per row: {sym, delPct, vol, dVol, d1, date, close}
+   ─────────────────────────────────────────
+   Data source: foData.signals (from GitHub Actions → foData.json)
+   WHY no direct NSE calls:
+   • NSE APIs are CORS-blocked in browsers (no Access-Control-Allow-Origin)
+   • NSE bhavcopy CSV is ~2MB — parsing it on main thread freezes the page
+   • mfapi.in provides NAV only, not delivery data
+   Solution: Your GitHub Actions workflow pushes delivery data into foData.json.
+   The app reads it from there. This is the correct architecture.
+
+   DEL_HISTORY: in-memory only (sessionStorage for current session, size-capped).
+   Populated from foData.signals each time foData loads.
 ═══════════════════════════════════════════ */
 
-// Persistent in-memory store: sym → [{date,delPct,vol,close}, ...]  (up to 22 trading days = 1 month)
-const DEL_HISTORY=JSON.parse(localStorage.getItem('mfi_del_hist')||'{}');
-function saveDelHistory(){try{localStorage.setItem('mfi_del_hist',JSON.stringify(DEL_HISTORY));}catch(e){}}
+// In-memory delivery history — session only, never large
+const DEL_HISTORY={};
 
-// Delivery conviction score (0-100) for a symbol
-// Weights: avg del% last 5 days (40), consecutive days >60% (30), trend slope (20), today spike (10)
+function saveDelHistory(){
+  try{
+    // Only save symbols with data, cap total at 50 symbols to prevent storage bloat
+    const syms=Object.keys(DEL_HISTORY).slice(0,50);
+    const trimmed={};syms.forEach(s=>{trimmed[s]=DEL_HISTORY[s].slice(-10);});
+    sessionStorage.setItem('mfi_del',JSON.stringify(trimmed));
+  }catch(e){/* storage full — skip silently */}
+}
+
+function loadDelHistory(){
+  try{
+    const raw=sessionStorage.getItem('mfi_del');
+    if(raw){const d=JSON.parse(raw);Object.assign(DEL_HISTORY,d);}
+  }catch(e){}
+}
+
+function ingestDelRow(sym,date,delPct,vol,close){
+  if(!sym||!date||isNaN(delPct)||delPct<=0)return;
+  if(!DEL_HISTORY[sym])DEL_HISTORY[sym]=[];
+  const arr=DEL_HISTORY[sym];
+  if(arr.find(r=>r.date===date))return;// no duplicates
+  arr.push({date,delPct:Math.round(delPct*10)/10,vol:Math.round(vol||0),close:+(close||0).toFixed(2)});
+  arr.sort((a,b)=>a.date.localeCompare(b.date));
+  if(arr.length>22)arr.splice(0,arr.length-22);
+}
+
+// Ingest from foData.signals — called each time foData loads successfully
+function ingestFoDelivery(){
+  const signals=STATE.foData?.signals||{};
+  const date=STATE.foData?.meta?.date||new Date().toISOString().split('T')[0];
+  const delHist=STATE.foData?.deliveryHistory||[];// optional multi-day array from workflow
+  // Single-day signals
+  Object.entries(signals).forEach(([sym,s])=>{
+    if(s.delPct)ingestDelRow(sym,date,parseFloat(s.delPct),parseFloat(s.vol||0),parseFloat(s.cl||0));
+  });
+  // Multi-day history array (if workflow pushes it)
+  delHist.forEach(row=>{
+    if(row.sym&&row.date&&row.delPct)
+      ingestDelRow(row.sym,row.date,parseFloat(row.delPct),parseFloat(row.vol||0),parseFloat(row.close||0));
+  });
+  if(Object.keys(signals).length||delHist.length)saveDelHistory();
+}
+
+// Delivery conviction score 0-100 (pure computation, no I/O)
 function calcDelScore(sym){
   const arr=DEL_HISTORY[sym]||[];
   if(!arr.length)return 0;
   const last5=arr.slice(-5);
   const avgDel=last5.reduce((s,d)=>s+d.delPct,0)/last5.length;
   const avgScore=Math.min(40,Math.round(avgDel*0.55));
-  let consec=0;for(let i=arr.length-1;i>=0;i--){if(arr[i].delPct>=60)consec++;else break;}
+  let consec=0;for(let i=arr.length-1;i>=0&&arr[i].delPct>=60;i--)consec++;
   const consecScore=Math.min(30,consec*8);
-  // Slope: linear regression over last 10 days
-  const slope_arr=arr.slice(-10);
-  let slope=0;
-  if(slope_arr.length>=3){
-    const n=slope_arr.length,xs=slope_arr.map((_,i)=>i),ys=slope_arr.map(d=>d.delPct);
-    const mx=xs.reduce((a,b)=>a+b,0)/n,my=ys.reduce((a,b)=>a+b,0)/n;
-    const num=xs.reduce((s,x,i)=>s+(x-mx)*(ys[i]-my),0),den=xs.reduce((s,x)=>s+(x-mx)**2,0)||1;
-    slope=num/den;
+  const s10=arr.slice(-10);
+  let slopeScore=10;
+  if(s10.length>=3){
+    const n=s10.length,my=s10.reduce((a,b)=>a+b.delPct,0)/n,mx=(n-1)/2;
+    const num=s10.reduce((s,d,i)=>s+(i-mx)*(d.delPct-my),0);
+    const den=s10.reduce((s,_,i)=>s+(i-mx)**2,0)||1;
+    slopeScore=Math.min(20,Math.max(0,Math.round((num/den)*3+10)));
   }
-  const slopeScore=Math.min(20,Math.max(0,Math.round(slope*3+10)));
   const todayDel=(arr[arr.length-1]?.delPct||0);
   const todayScore=todayDel>=75?10:todayDel>=65?7:todayDel>=55?4:0;
   return Math.min(100,avgScore+consecScore+slopeScore+todayScore);
 }
 
-// Ingest a bhavcopy row into DEL_HISTORY
-function ingestDelRow(sym,date,delPct,vol,close){
-  if(!sym||!date||isNaN(delPct))return;
-  if(!DEL_HISTORY[sym])DEL_HISTORY[sym]=[];
-  const arr=DEL_HISTORY[sym];
-  if(!arr.find(r=>r.date===date)){
-    arr.push({date,delPct:Math.round(delPct*10)/10,vol:Math.round(vol),close:Math.round(close*100)/100});
-    arr.sort((a,b)=>a.date.localeCompare(b.date));
-    if(arr.length>22)arr.splice(0,arr.length-22);// keep last 22 trading days
-  }
-}
+// fetchLiveDelivery: NO direct NSE calls (CORS-blocked).
+// Data flows via GitHub Actions → foData.json → ingestFoDelivery().
+// This function is intentionally a no-op to prevent page freezes.
+function fetchLiveDelivery(){return Promise.resolve();}
 
-// Fetch latest NSE bhavcopy delivery data (EQ segment, last trading day)
-let _delFetching=false;
-async function fetchLiveDelivery(){
-  if(_delFetching)return;
-  _delFetching=true;
-  try{
-    // NSE provides CM bhavcopy via /api/liveBhavcopy for current day delivery data
-    const r=await fetch('https://www.nseindia.com/api/equities-master',{
-      signal:AbortSignal.timeout(8000),credentials:'include',
-      headers:{'Accept':'application/json','Accept-Language':'en-US'}
-    });
-    // Try the delivery data endpoint
-    const r2=await fetch('https://www.nseindia.com/api/deliveryVolumeData',{
-      signal:AbortSignal.timeout(8000),credentials:'include',
-      headers:{'Accept':'application/json'}
-    });
-    if(r2.ok){
-      const d=await r2.json();
-      const rows=d.data||d||[];
-      const today=new Date().toISOString().split('T')[0];
-      let ingested=0;
-      rows.forEach(row=>{
-        const sym=row.symbol||row.Symbol||'';
-        const delPct=parseFloat(row.deliveryPercentage||row.delPct||row['% Dly Qt to Traded Qty']||0);
-        const vol=parseFloat(row.totalTradedVolume||row.volume||0);
-        const close=parseFloat(row.closePrice||row.close||0);
-        if(sym&&delPct>0){ingestDelRow(sym,today,delPct,vol,close);ingested++;}
-      });
-      if(ingested>0){saveDelHistory();_delFetching=false;renderDeliverySpikes();return;}
-    }
-  }catch(e){}
-
-  // Fallback: try NSE CM bhavcopy CSV for previous trading day
-  try{
-    const now=new Date();
-    // Walk back to find last weekday
-    let tries=0;
-    while((now.getDay()===0||now.getDay()===6)&&tries<3){now.setDate(now.getDate()-1);tries++;}
-    const dd=String(now.getDate()).padStart(2,'0');
-    const mm=String(now.getMonth()+1).padStart(2,'0');
-    const yyyy=now.getFullYear();
-    const monNames=['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
-    const mon=monNames[now.getMonth()];
-    // NSE delivery bhavcopy CSV URL pattern
-    const url=`https://archives.nseindia.com/products/content/sec_bhavdata_full_${dd}${mon}${yyyy}.csv`;
-    const rc=await fetch(url,{signal:AbortSignal.timeout(10000)});
-    if(rc.ok){
-      const text=await rc.text();
-      const lines=text.trim().split('\n');
-      const header=lines[0].split(',').map(h=>h.trim());
-      const iSym=header.indexOf('SYMBOL'),iDel=header.findIndex(h=>h.includes('DELIV')),iVol=header.findIndex(h=>h.includes('TTL_TRD_QNTY')||h.includes('VOLUME')),iClose=header.findIndex(h=>h.includes('CLOSE'));
-      const date=`${yyyy}-${mm}-${dd}`;
-      let ingested=0;
-      lines.slice(1).forEach(line=>{
-        const cols=line.split(',');
-        if(cols[1]?.trim()!=='EQ')return;// EQ series only
-        const sym=cols[iSym]?.trim();
-        const delivQty=parseFloat(cols[iDel])||0;
-        const tradeQty=parseFloat(cols[iVol])||0;
-        const close=parseFloat(cols[iClose])||0;
-        const delPct=tradeQty>0?(delivQty/tradeQty*100):0;
-        if(sym&&delPct>0){ingestDelRow(sym,date,delPct,tradeQty,close);ingested++;}
-      });
-      if(ingested>0){saveDelHistory();console.log(`✓ NSE bhavcopy: ${ingested} stocks delivery data loaded`);_delFetching=false;renderDeliverySpikes();return;}
-    }
-  }catch(e){console.warn('Delivery bhavcopy fetch:',e.message);}
-
-  _delFetching=false;
-}
-
-// Also ingest from foData when available
-function ingestFoDelivery(){
-  const signals=STATE.foData?.signals||{};
-  const delHist=STATE.foData?.deliveryHistory||[];
-  const date=STATE.foData?.meta?.date||new Date().toISOString().split('T')[0];
-  // Single-day from signals
-  Object.entries(signals).forEach(([sym,s])=>{
-    if(s.delPct)ingestDelRow(sym,date,parseFloat(s.delPct),parseFloat(s.vol||0),parseFloat(s.cl||0));
-  });
-  // Multi-day history from foData (if workflow pushes it)
-  delHist.forEach(row=>{
-    if(row.sym&&row.date&&row.delPct)ingestDelRow(row.sym,row.date,row.delPct,row.vol||0,row.close||0);
-  });
-  if(Object.keys(signals).length>0||delHist.length>0)saveDelHistory();
-}
-
-// Tab state for delivery section
 if(!STATE.delTab)STATE.delTab='spikes';
-if(!STATE.delModal)STATE.delModal=null;
 
 function renderDeliverySpikes(){
   const el=document.getElementById('deliverySpikeSection');if(!el)return;
 
-  // Ingest foData delivery if not done yet
+  // Ingest foData on first render
   if(!STATE._delIngested&&STATE.foData){STATE._delIngested=true;ingestFoDelivery();}
 
-  // Build today's spike list from DEL_HISTORY (last date for each sym) + foData signals
   const signals=STATE.foData?.signals||{};
-  const today=Object.values(DEL_HISTORY).map(arr=>arr[arr.length-1]?.date||'').filter(Boolean).sort().pop()||new Date().toISOString().split('T')[0];
+  const hasFoData=Object.keys(signals).length>0;
 
+  // Build spikes list from foData.signals (source of truth)
   const spikes=[];
-  // From DEL_HISTORY
-  Object.entries(DEL_HISTORY).forEach(([sym,arr])=>{
-    if(!arr.length)return;
-    const last=arr[arr.length-1];
-    if(last.date!==today)return;
-    if(last.delPct<58)return;
-    const fo=signals[sym]||null;
-    const score=calcDelScore(sym);
-    const d1=fo?parseFloat(fo.d1||0):0;
-    spikes.push({sym,delPct:last.delPct,vol:last.vol,close:last.close,d1,score,history:arr,fo});
-  });
-  // From foData signals only (if not in DEL_HISTORY yet)
   Object.entries(signals).forEach(([sym,s])=>{
-    if(spikes.find(sp=>sp.sym===sym))return;
-    if(!s.delPct||parseFloat(s.delPct)<58)return;
+    const delPct=parseFloat(s.delPct||0);
+    if(delPct<55)return;
     const score=calcDelScore(sym);
-    spikes.push({sym,delPct:parseFloat(s.delPct),vol:parseFloat(s.vol||0),close:parseFloat(s.cl||0),d1:parseFloat(s.d1||0),score,history:DEL_HISTORY[sym]||[],fo:s});
+    spikes.push({sym,delPct,vol:parseFloat(s.vol||0),close:parseFloat(s.cl||0),d1:parseFloat(s.d1||0),score,history:DEL_HISTORY[sym]||[]});
   });
   spikes.sort((a,b)=>b.score-a.score||b.delPct-a.delPct);
 
-  const hasHistory=Object.keys(DEL_HISTORY).length>0;
-  const noData=!spikes.length;
-
-  // Sub-tabs: Today's Spikes | 1-Week Table | Conviction Score
   const tabs=[
-    {id:'spikes',label:'📈 Spikes'},
-    {id:'week',label:'📅 7-Day History'},
-    {id:'score',label:'🏆 Conviction Score'},
+    {id:'spikes',label:'📈 Today'},
+    {id:'week',label:'📅 History'},
+    {id:'score',label:'🏆 Score'},
   ];
 
   el.innerHTML=`
-  <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">
-    ${tabs.map(t=>`<button onclick="STATE.delTab='${t.id}';renderDeliverySpikes()" style="padding:4px 10px;border-radius:12px;border:0.5px solid var(--border);font-size:.72rem;cursor:pointer;background:${STATE.delTab===t.id?'var(--accent)':'transparent'};color:${STATE.delTab===t.id?'#000':'var(--text-muted)'};font-weight:${STATE.delTab===t.id?'700':'400'}">${t.label}</button>`).join('')}
-    <button onclick="fetchLiveDelivery().then(()=>renderDeliverySpikes())" style="margin-left:auto;padding:4px 10px;border-radius:12px;border:0.5px solid var(--border);font-size:.68rem;cursor:pointer;background:transparent;color:var(--text-muted)">↺ Refresh</button>
+  <div style="display:flex;gap:6px;margin-bottom:10px;align-items:center;flex-wrap:wrap">
+    ${tabs.map(t=>`<button onclick="STATE.delTab='${t.id}';renderDeliverySpikes()" style="padding:4px 10px;border-radius:12px;border:0.5px solid var(--border);font-size:.72rem;cursor:pointer;background:${STATE.delTab===t.id?'var(--accent)':'transparent'};color:${STATE.delTab===t.id?'#000':'var(--text-muted)'};font-weight:${STATE.delTab===t.id?700:400}">${t.label}</button>`).join('')}
+    <span style="margin-left:auto;font-size:.65rem;color:var(--text-muted)">Source: foData.json · ${STATE.foData?.meta?.date||'—'}</span>
   </div>
   <div id="delTabContent"></div>`;
 
   const tc=el.querySelector('#delTabContent');
 
+  if(!hasFoData){
+    tc.innerHTML=`<div style="padding:12px;background:var(--surface2);border-radius:8px;border:1px solid var(--border)">
+      <div style="font-size:.8rem;font-weight:600;margin-bottom:6px">📡 Connect your GitHub Actions workflow</div>
+      <div style="font-size:.72rem;color:var(--text-muted);line-height:1.6">
+        Delivery data comes from your <code style="background:var(--bg);padding:1px 4px;border-radius:3px">foData.json</code> file pushed by GitHub Actions.<br>
+        Add <code style="background:var(--bg);padding:1px 4px;border-radius:3px">delPct</code>, <code style="background:var(--bg);padding:1px 4px;border-radius:3px">vol</code>, <code style="background:var(--bg);padding:1px 4px;border-radius:3px">d1</code> fields to each signal in your workflow.<br>
+        NSE publishes bhavcopy daily at <a href="https://archives.nseindia.com" target="_blank" style="color:var(--accent)">archives.nseindia.com</a> — parse it server-side, not in the browser.
+      </div>
+    </div>`;
+    return;
+  }
+
   if(STATE.delTab==='spikes'){
-    if(noData&&!hasHistory){
-      tc.innerHTML=`<div style="text-align:center;padding:14px 0">
-        <div style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px">Loading delivery data from NSE…</div>
-        <a href="https://archives.nseindia.com" target="_blank" style="font-size:.7rem;color:var(--accent)">↗ NSE Archives</a>
-      </div>`;
-      fetchLiveDelivery();return;
-    }
-    if(noData){tc.innerHTML=`<div style="font-size:.75rem;color:var(--text-muted);padding:8px 0">No high-delivery spikes today (threshold: 58%)</div>`;return;}
+    if(!spikes.length){tc.innerHTML=`<div style="font-size:.75rem;color:var(--text-muted);padding:8px 0">No high-delivery signals today (threshold: 55%)</div>`;return;}
     tc.innerHTML=`
-    <div style="font-size:.68rem;color:var(--text-muted);margin-bottom:8px">Delivery% >58% with rising price today — source: NSE bhavcopy · ${today}</div>
-    <div style="display:grid;grid-template-columns:auto 1fr auto auto auto;gap:4px 8px;font-size:.65rem;color:var(--text-muted);font-weight:700;padding-bottom:5px;border-bottom:1px solid var(--border);margin-bottom:4px">
-      <span>Score</span><span>Symbol</span><span style="text-align:right">Del%</span><span style="text-align:right">1D</span><span style="text-align:right">7d trend</span>
+    <div style="font-size:.68rem;color:var(--text-muted);margin-bottom:8px">Delivery% >55% with MF signal · ${STATE.foData?.meta?.date||'latest'}</div>
+    <div style="display:grid;grid-template-columns:36px 1fr auto auto auto;gap:4px 8px;font-size:.65rem;color:var(--text-muted);font-weight:700;padding-bottom:5px;border-bottom:1px solid var(--border);margin-bottom:4px">
+      <span>Score</span><span>Symbol</span><span style="text-align:right">Del%</span><span style="text-align:right">1D</span><span style="text-align:right">7d</span>
     </div>
-    ${spikes.slice(0,12).map(sp=>{
-      const scoreColor=sp.score>=70?'var(--green)':sp.score>=50?'var(--amber)':'var(--text-muted)';
-      const d1up=sp.d1>=0;
-      const hist7=sp.history.slice(-7);
-      const trend7=hist7.length>=2?(hist7[hist7.length-1].delPct-hist7[0].delPct).toFixed(1):null;
-      const trendColor=trend7>0?'var(--green)':trend7<0?'var(--red)':'var(--text-muted)';
-      return`<div onclick="showDelModal('${sp.sym}')" style="display:grid;grid-template-columns:auto 1fr auto auto auto;gap:4px 8px;align-items:center;padding:6px 0;border-bottom:1px solid rgba(128,128,128,.08);cursor:pointer">
-        <div style="width:28px;height:28px;border-radius:50%;background:rgba(0,229,153,.1);border:1.5px solid ${scoreColor};display:flex;align-items:center;justify-content:center;font-size:.68rem;font-weight:800;color:${scoreColor}">${sp.score}</div>
+    ${spikes.slice(0,15).map(sp=>{
+      const sc=sp.score>=70?'var(--green)':sp.score>=50?'var(--amber)':'var(--text-muted)';
+      const du=sp.d1>=0;
+      const h7=sp.history.slice(-7);
+      const t7=h7.length>=2?(h7[h7.length-1].delPct-h7[0].delPct).toFixed(1):null;
+      return`<div onclick="showDelModal('${sp.sym}')" style="display:grid;grid-template-columns:36px 1fr auto auto auto;gap:4px 8px;align-items:center;padding:6px 0;border-bottom:1px solid rgba(128,128,128,.07);cursor:pointer">
+        <div style="width:32px;height:32px;border-radius:50%;background:rgba(0,229,153,.08);border:1.5px solid ${sc};display:flex;align-items:center;justify-content:center;font-size:.65rem;font-weight:800;color:${sc}">${sp.score}</div>
         <div>
-          <div style="font-weight:700;font-family:'Space Mono',monospace;font-size:.8rem">${sp.sym} ${livePriceChip(sp.sym,true)}</div>
-          <div style="font-size:.65rem;color:var(--text-muted)">Vol: ${sp.vol>=1e7?(sp.vol/1e7).toFixed(2)+'Cr':(sp.vol/1e5).toFixed(1)+'L'} shares</div>
+          <div style="font-weight:700;font-family:'Space Mono',monospace;font-size:.78rem">${sp.sym} ${livePriceChip(sp.sym,true)}</div>
+          <div style="font-size:.62rem;color:var(--text-muted)">${sp.vol>=1e7?(sp.vol/1e7).toFixed(1)+'Cr':(sp.vol/1e5).toFixed(1)+'L'} shares</div>
         </div>
-        <div style="text-align:right;font-weight:700;font-size:.8rem;color:${sp.delPct>=75?'var(--green)':sp.delPct>=65?'var(--amber)':'var(--text)'}">${sp.delPct.toFixed(1)}%</div>
-        <div style="text-align:right;font-size:.75rem;color:${d1up?'var(--green)':'var(--red)'}">${d1up?'▲':'▼'}${Math.abs(sp.d1).toFixed(2)}%</div>
-        <div style="text-align:right;font-size:.72rem;color:${trendColor}">${trend7!==null?(trend7>0?'↑':trend7<0?'↓':'→')+Math.abs(trend7)+'pp':'—'}</div>
+        <div style="text-align:right;font-weight:700;font-size:.78rem;color:${sp.delPct>=75?'var(--green)':sp.delPct>=65?'var(--amber)':'var(--text)'}">${sp.delPct.toFixed(1)}%</div>
+        <div style="text-align:right;font-size:.72rem;color:${du?'var(--green)':'var(--red)'}">${du?'▲':'▼'}${Math.abs(sp.d1).toFixed(2)}%</div>
+        <div style="text-align:right;font-size:.7rem;color:${t7>0?'var(--green)':t7<0?'var(--red)':'var(--text-muted)'}">${t7!==null?(t7>0?'↑':'↓')+Math.abs(t7)+'pp':'—'}</div>
       </div>`;
     }).join('')}
-    <div style="margin-top:8px;font-size:.68rem;color:var(--text-muted)">💡 Tap any stock to see 30-day delivery history · Score = delivery conviction (0–100)</div>`;
+    <div style="margin-top:8px;font-size:.65rem;color:var(--text-muted)">💡 Tap any stock for delivery history · Score 0–100</div>`;
   }
 
   else if(STATE.delTab==='week'){
-    // 7-day history table for all tracked symbols (sorted by avg delivery% desc)
-    const allSyms=Object.keys(DEL_HISTORY);
-    if(!allSyms.length){tc.innerHTML=`<div style="font-size:.75rem;color:var(--text-muted)">History will build up as daily data is loaded. Come back tomorrow.</div>`;return;}
-    // Get last 7 unique dates across all history
+    const allSyms=Object.keys(DEL_HISTORY).filter(s=>DEL_HISTORY[s].length>1);
+    if(!allSyms.length){tc.innerHTML=`<div style="font-size:.75rem;color:var(--text-muted)">History builds up as foData.json is updated daily by your workflow.</div>`;return;}
     const allDates=[...new Set(allSyms.flatMap(s=>DEL_HISTORY[s].map(r=>r.date)))].sort().slice(-7);
     const rows=allSyms.map(sym=>{
-      const h=DEL_HISTORY[sym]||[];
+      const h=DEL_HISTORY[sym];
       const vals=allDates.map(d=>{const r=h.find(x=>x.date===d);return r?r.delPct:null;});
-      const avg=vals.filter(v=>v!==null).reduce((a,b)=>a+b,0)/(vals.filter(v=>v!==null).length||1);
-      return{sym,vals,avg};
+      const filled=vals.filter(v=>v!==null);
+      return{sym,vals,avg:filled.reduce((a,b)=>a+b,0)/(filled.length||1)};
     }).filter(r=>r.avg>=50).sort((a,b)=>b.avg-a.avg);
-    tc.innerHTML=`
-    <div style="overflow-x:auto;scrollbar-width:thin">
-    <table style="width:100%;border-collapse:collapse;font-size:.68rem;min-width:360px">
+    if(!rows.length){tc.innerHTML=`<div style="font-size:.75rem;color:var(--text-muted)">No stocks with avg delivery ≥50% in history yet.</div>`;return;}
+    tc.innerHTML=`<div style="overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse;font-size:.68rem;min-width:340px">
       <thead><tr style="border-bottom:1px solid var(--border)">
-        <th style="text-align:left;padding:5px 4px;font-weight:700;color:var(--text-muted)">Stock</th>
-        ${allDates.map(d=>`<th style="text-align:right;padding:5px 4px;font-weight:600;color:var(--text-muted);font-size:.62rem">${d.slice(5).replace('-','/')}</th>`).join('')}
-        <th style="text-align:right;padding:5px 4px;font-weight:700;color:var(--accent)">Avg</th>
+        <th style="text-align:left;padding:5px 4px;color:var(--text-muted)">Stock</th>
+        ${allDates.map(d=>`<th style="text-align:right;padding:5px 4px;color:var(--text-muted);font-size:.62rem">${d.slice(5).replace('-','/')}</th>`).join('')}
+        <th style="text-align:right;padding:5px 4px;color:var(--accent)">Avg</th>
       </tr></thead>
-      <tbody>
-      ${rows.slice(0,20).map(r=>`<tr style="border-bottom:1px solid rgba(128,128,128,.06);cursor:pointer" onclick="showDelModal('${r.sym}')">
+      <tbody>${rows.slice(0,20).map(r=>`<tr style="border-bottom:1px solid rgba(128,128,128,.06);cursor:pointer" onclick="showDelModal('${r.sym}')">
         <td style="padding:5px 4px;font-weight:700;font-family:'Space Mono',monospace">${r.sym}</td>
-        ${r.vals.map(v=>v===null?`<td style="text-align:right;padding:5px 4px;color:var(--text-muted)">—</td>`:`<td style="text-align:right;padding:5px 4px;font-weight:600;color:${v>=75?'var(--green)':v>=60?'var(--amber)':'var(--text-muted)'}">${v.toFixed(0)}%</td>`).join('')}
+        ${r.vals.map(v=>v===null?`<td style="text-align:right;padding:5px 4px;color:var(--border)">—</td>`:`<td style="text-align:right;padding:5px 4px;font-weight:600;color:${v>=75?'var(--green)':v>=60?'var(--amber)':'var(--text-muted)'}">${v.toFixed(0)}%</td>`).join('')}
         <td style="text-align:right;padding:5px 4px;font-weight:800;color:var(--accent)">${r.avg.toFixed(0)}%</td>
-      </tr>`).join('')}
-      </tbody>
+      </tr>`).join('')}</tbody>
     </table></div>
-    <div style="margin-top:8px;font-size:.68rem;color:var(--text-muted)">Showing stocks with avg delivery ≥50% over last 7 days. Tap for full 30-day history.</div>`;
+    <div style="margin-top:6px;font-size:.65rem;color:var(--text-muted)">Tap a row for full history · Updates each time foData.json is pushed.</div>`;
   }
 
   else if(STATE.delTab==='score'){
     const allSyms=Object.keys(DEL_HISTORY);
-    if(!allSyms.length){tc.innerHTML=`<div style="font-size:.75rem;color:var(--text-muted)">Scores will appear once delivery history is loaded.</div>`;return;}
+    if(!allSyms.length){tc.innerHTML=`<div style="font-size:.75rem;color:var(--text-muted)">Scores appear once delivery history is ingested from foData.</div>`;return;}
     const scored=allSyms.map(sym=>({sym,score:calcDelScore(sym),arr:DEL_HISTORY[sym]}))
-      .filter(r=>r.score>=30).sort((a,b)=>b.score-a.score);
+      .filter(r=>r.score>=20).sort((a,b)=>b.score-a.score).slice(0,15);
+    if(!scored.length){tc.innerHTML=`<div style="font-size:.75rem;color:var(--text-muted)">No stocks with score ≥20 yet.</div>`;return;}
     tc.innerHTML=`
-    <div style="font-size:.68rem;color:var(--text-muted);margin-bottom:10px">Delivery Conviction Score = avg del% (40pts) + consecutive days >60% (30pts) + rising trend (20pts) + today spike (10pts)</div>
-    ${scored.slice(0,15).map((r,i)=>{
-      const scoreColor=r.score>=70?'var(--green)':r.score>=50?'var(--amber)':'var(--text-muted)';
+    <div style="font-size:.65rem;color:var(--text-muted);margin-bottom:8px">Score = avg del%×0.55 (40) + consecutive days >60% (30) + slope (20) + today spike (10)</div>
+    ${scored.map((r,i)=>{
+      const sc=r.score>=70?'var(--green)':r.score>=50?'var(--amber)':'var(--text-muted)';
       const last=r.arr[r.arr.length-1]||{};
-      const hist7=r.arr.slice(-7);
-      const sparkW=80,sparkH=24;
-      const vals=hist7.map(d=>d.delPct);
-      const sMin=Math.min(...vals),sMax=Math.max(...vals),sRng=sMax-sMin||1;
-      const pts=vals.map((v,i)=>`${(i/(Math.max(vals.length-1,1))*sparkW).toFixed(1)},${(sparkH-(v-sMin)/sRng*sparkH).toFixed(1)}`).join(' ');
-      return`<div onclick="showDelModal('${r.sym}')" style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid rgba(128,128,128,.08);cursor:pointer">
-        <span style="font-size:.72rem;color:var(--text-muted);min-width:18px">#${i+1}</span>
-        <div style="width:36px;height:36px;border-radius:50%;background:rgba(0,229,153,.08);border:2px solid ${scoreColor};display:flex;align-items:center;justify-content:center;font-size:.78rem;font-weight:800;color:${scoreColor};flex-shrink:0">${r.score}</div>
+      const h7=r.arr.slice(-7),vals=h7.map(d=>d.delPct);
+      const sMin=Math.min(...vals),sRng=Math.max(...vals)-sMin||1;
+      const pts=vals.map((v,i)=>`${(i/(Math.max(vals.length-1,1))*70).toFixed(1)},${(20-(v-sMin)/sRng*18).toFixed(1)}`).join(' ');
+      return`<div onclick="showDelModal('${r.sym}')" style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid rgba(128,128,128,.07);cursor:pointer">
+        <span style="font-size:.65rem;color:var(--text-muted);min-width:16px">#${i+1}</span>
+        <div style="width:32px;height:32px;border-radius:50%;border:2px solid ${sc};display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:800;color:${sc};flex-shrink:0">${r.score}</div>
         <div style="flex:1;min-width:0">
-          <div style="font-weight:700;font-family:'Space Mono',monospace;font-size:.8rem">${r.sym} ${livePriceChip(r.sym,true)}</div>
-          <div style="font-size:.63rem;color:var(--text-muted)">${r.arr.length} days · latest ${last.delPct?.toFixed(1)||'—'}% del · ${last.date||'—'}</div>
+          <div style="font-weight:700;font-family:'Space Mono',monospace;font-size:.78rem">${r.sym}</div>
+          <div style="font-size:.62rem;color:var(--text-muted)">${r.arr.length}d · latest ${last.delPct?.toFixed(1)||'—'}%</div>
         </div>
-        <svg viewBox="0 0 ${sparkW} ${sparkH}" width="${sparkW}" height="${sparkH}" style="flex-shrink:0;overflow:visible">
-          <polyline points="${pts}" fill="none" stroke="${scoreColor}" stroke-width="1.5" stroke-linejoin="round"/>
-        </svg>
+        ${vals.length>=2?`<svg viewBox="0 0 70 22" width="70" height="22" style="flex-shrink:0"><polyline points="${pts}" fill="none" stroke="${sc}" stroke-width="1.5" stroke-linejoin="round"/></svg>`:''}
       </div>`;
-    }).join('')}
-    ${scored.length===0?`<div style="font-size:.75rem;color:var(--text-muted)">No stocks with score ≥30 yet — load more days of data.</div>`:''}`;
+    }).join('')}`;
   }
 }
 
-// Modal: full 30-day delivery history chart for a single stock
+// Tap-to-expand modal for a single stock's delivery history
 function showDelModal(sym){
   document.getElementById('delModal')?.remove();
   const arr=DEL_HISTORY[sym]||[];
-  if(!arr.length){showToast('No delivery history for '+sym);return;}
-  const last30=arr.slice(-22);
   const score=calcDelScore(sym);
-  const W=320,PL=30,PR=8,PT=8,PB=24,IW=W-PL-PR,IH=90,H=IH+PT+PB;
-  const N=last30.length;
-  const vals=last30.map(d=>d.delPct);
-  const minV=Math.min(...vals),maxV=Math.max(...vals),rng=maxV-minV||1;
-  const xOf=i=>PL+i/(Math.max(N-1,1))*IW;
-  const yOf=v=>PT+IH-(v-minV)/rng*IH;
   const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  function fmtD(ds){const d=new Date(ds+'T00:00:00');return d.getDate()+' '+months[d.getMonth()];}
+  function fmtD(ds){try{const d=new Date(ds+'T00:00:00');return d.getDate()+' '+months[d.getMonth()];}catch(e){return ds;}}
 
-  let svg=`<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block">`;
-  // 60% reference line
-  if(minV<60&&maxV>60){const y=yOf(60);svg+=`<line x1="${PL}" y1="${y.toFixed(1)}" x2="${W-PR}" y2="${y.toFixed(1)}" stroke="rgba(255,184,48,.4)" stroke-width="1" stroke-dasharray="3,2"/><text x="${PL-2}" y="${(y+3).toFixed(1)}" text-anchor="end" font-size="6.5" fill="rgba(255,184,48,.7)">60%</text>`;}
-  // Fill area
-  const pts=last30.map((d,i)=>`${xOf(i).toFixed(1)},${yOf(d.delPct).toFixed(1)}`).join(' ');
-  const bot=last30.map((_,i)=>`${xOf(i).toFixed(1)},${(PT+IH).toFixed(1)}`).reverse().join(' ');
-  svg+=`<polygon points="${pts} ${bot}" fill="rgba(0,229,153,0.12)"/>`;
-  svg+=`<polyline points="${pts}" fill="none" stroke="var(--green)" stroke-width="2" stroke-linejoin="round"/>`;
-  last30.forEach((d,i)=>{svg+=`<circle cx="${xOf(i).toFixed(1)}" cy="${yOf(d.delPct).toFixed(1)}" r="2.5" fill="${d.delPct>=70?'var(--green)':d.delPct>=55?'var(--amber)':'var(--text-muted)'}" stroke="var(--bg)" stroke-width="1"/>`;});
-  // X labels: first, mid, last
-  [0,Math.floor(N/2),N-1].forEach(i=>{if(last30[i])svg+=`<text x="${xOf(i).toFixed(1)}" y="${(PT+IH+PB-2).toFixed(1)}" text-anchor="middle" font-size="7" fill="rgba(139,154,180,.8)">${fmtD(last30[i].date)}</text>`;});
-  svg+='</svg>';
+  let chartHtml=`<div style="font-size:.72rem;color:var(--text-muted);padding:10px 0">No delivery history yet — data builds up as your GitHub Actions workflow pushes foData.json daily.</div>`;
+
+  if(arr.length>=2){
+    const W=300,PL=28,PR=8,PT=8,PB=22,IW=W-PL-PR,IH=80,H=IH+PT+PB,N=arr.length;
+    const vals=arr.map(d=>d.delPct),minV=Math.min(...vals),maxV=Math.max(...vals),rng=maxV-minV||1;
+    const xOf=i=>PL+i/(N-1)*IW,yOf=v=>PT+IH-(v-minV)/rng*IH;
+    let svg=`<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block">`;
+    if(minV<60&&maxV>60){const y=yOf(60);svg+=`<line x1="${PL}" y1="${y.toFixed(1)}" x2="${W-PR}" y2="${y.toFixed(1)}" stroke="rgba(255,184,48,.35)" stroke-width="1" stroke-dasharray="3,2"/><text x="${PL-2}" y="${(y+3).toFixed(1)}" text-anchor="end" font-size="6" fill="rgba(255,184,48,.7)">60%</text>`;}
+    const pts=arr.map((d,i)=>`${xOf(i).toFixed(1)},${yOf(d.delPct).toFixed(1)}`).join(' ');
+    const bot=arr.map((_,i)=>`${xOf(i).toFixed(1)},${(PT+IH).toFixed(1)}`).reverse().join(' ');
+    svg+=`<polygon points="${pts} ${bot}" fill="rgba(0,229,153,.1)"/>`;
+    svg+=`<polyline points="${pts}" fill="none" stroke="var(--green)" stroke-width="2" stroke-linejoin="round"/>`;
+    arr.forEach((d,i)=>svg+=`<circle cx="${xOf(i).toFixed(1)}" cy="${yOf(d.delPct).toFixed(1)}" r="2.5" fill="${d.delPct>=70?'var(--green)':d.delPct>=55?'var(--amber)':'var(--text-muted)'}" stroke="var(--bg)" stroke-width="1"/>`);
+    [0,Math.floor(N/2),N-1].forEach(i=>{if(arr[i])svg+=`<text x="${xOf(i).toFixed(1)}" y="${(PT+IH+PB-2).toFixed(1)}" text-anchor="middle" font-size="6.5" fill="rgba(139,154,180,.8)">${fmtD(arr[i].date)}</text>`;});
+    svg+='</svg>';
+    const avg=(vals.reduce((a,b)=>a+b,0)/vals.length).toFixed(1);
+    const trend=(vals[vals.length-1]-vals[0]>=0?'↑':'↓')+Math.abs(vals[vals.length-1]-vals[0]).toFixed(1)+'pp';
+    chartHtml=`${svg}
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:5px;margin:10px 0">
+      ${[['Avg',avg+'%'],['Peak',Math.max(...vals).toFixed(1)+'%'],['Latest',vals[vals.length-1].toFixed(1)+'%'],['Trend',trend]].map(([l,v])=>`<div style="background:var(--surface2);border-radius:6px;padding:5px;text-align:center;border:1px solid var(--border)"><div style="font-size:.58rem;color:var(--text-muted)">${l}</div><div style="font-size:.78rem;font-weight:700">${v}</div></div>`).join('')}
+    </div>
+    <div style="max-height:150px;overflow-y:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:.67rem">
+        <thead><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:3px 4px;color:var(--text-muted)">Date</th><th style="text-align:right;padding:3px 4px;color:var(--text-muted)">Del%</th><th style="text-align:right;padding:3px 4px;color:var(--text-muted)">Volume</th><th style="text-align:right;padding:3px 4px;color:var(--text-muted)">Close</th></tr></thead>
+        <tbody>${[...arr].reverse().map(r=>`<tr style="border-bottom:1px solid rgba(128,128,128,.05)"><td style="padding:3px 4px">${fmtD(r.date)}</td><td style="padding:3px 4px;text-align:right;font-weight:700;color:${r.delPct>=70?'var(--green)':r.delPct>=55?'var(--amber)':'var(--text)'}">${r.delPct.toFixed(1)}%</td><td style="padding:3px 4px;text-align:right;color:var(--text-muted)">${r.vol>=1e7?(r.vol/1e7).toFixed(1)+'Cr':(r.vol/1e5).toFixed(1)+'L'}</td><td style="padding:3px 4px;text-align:right">${r.close?'₹'+r.close:'—'}</td></tr>`).join('')}</tbody>
+      </table>
+    </div>`;
+  }
 
   const modal=document.createElement('div');
   modal.id='delModal';
-  modal.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:999;display:flex;align-items:flex-end;justify-content:center;padding:0';
-  const scoreColor=score>=70?'var(--green)':score>=50?'var(--amber)':'var(--text-muted)';
-  modal.innerHTML=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px 14px 0 0;padding:18px 16px 24px;width:100%;max-width:480px;max-height:80vh;overflow-y:auto">
+  modal.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:999;display:flex;align-items:flex-end;justify-content:center';
+  const sc=score>=70?'var(--green)':score>=50?'var(--amber)':'var(--text-muted)';
+  modal.innerHTML=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px 14px 0 0;padding:16px;width:100%;max-width:460px;max-height:80vh;overflow-y:auto">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-      <div>
-        <div style="font-size:1rem;font-weight:800;font-family:'Space Mono',monospace">${sym}</div>
-        <div style="font-size:.72rem;color:var(--text-muted)">${arr.length} trading days of delivery data</div>
-      </div>
-      <div style="display:flex;align-items:center;gap:10px">
-        <div style="text-align:center;padding:6px 10px;border-radius:8px;background:rgba(0,229,153,.08);border:1.5px solid ${scoreColor}">
-          <div style="font-size:1.2rem;font-weight:800;color:${scoreColor}">${score}</div>
-          <div style="font-size:.6rem;color:var(--text-muted)">Score</div>
+      <div><div style="font-size:.95rem;font-weight:800;font-family:'Space Mono',monospace">${sym}</div>
+        <div style="font-size:.68rem;color:var(--text-muted)">${arr.length} days tracked · delivery history</div></div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <div style="text-align:center;padding:5px 9px;border-radius:7px;border:1.5px solid ${sc}">
+          <div style="font-size:1.1rem;font-weight:800;color:${sc}">${score}</div>
+          <div style="font-size:.55rem;color:var(--text-muted)">Conviction</div>
         </div>
-        <button onclick="document.getElementById('delModal').remove()" style="background:none;border:none;color:var(--text-muted);font-size:1.3rem;cursor:pointer">✕</button>
+        <button onclick="document.getElementById('delModal').remove()" style="background:none;border:none;color:var(--text-muted);font-size:1.3rem;cursor:pointer;padding:4px">✕</button>
       </div>
     </div>
-    <div style="font-size:.72rem;font-weight:600;color:var(--text-muted);margin-bottom:6px">📦 Delivery % — Last ${last30.length} Trading Days</div>
-    ${svg}
-    <div style="margin-top:12px">
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;text-align:center;margin-bottom:10px">
-        ${[['Avg Del%',(vals.reduce((a,b)=>a+b,0)/vals.length).toFixed(1)+'%'],['Peak',Math.max(...vals).toFixed(1)+'%'],['Today',vals[vals.length-1].toFixed(1)+'%'],['Trend',(vals[vals.length-1]-vals[0]>=0?'↑':' ↓')+(Math.abs(vals[vals.length-1]-vals[0]).toFixed(1))+'pp']].map(([l,v])=>`<div style="background:var(--surface2);border-radius:7px;padding:6px 4px;border:1px solid var(--border)"><div style="font-size:.6rem;color:var(--text-muted)">${l}</div><div style="font-size:.82rem;font-weight:700">${v}</div></div>`).join('')}
-      </div>
-      <div style="max-height:180px;overflow-y:auto;scrollbar-width:thin">
-        <table style="width:100%;border-collapse:collapse;font-size:.7rem">
-          <thead><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:4px;color:var(--text-muted)">Date</th><th style="text-align:right;padding:4px;color:var(--text-muted)">Del%</th><th style="text-align:right;padding:4px;color:var(--text-muted)">Volume</th><th style="text-align:right;padding:4px;color:var(--text-muted)">Close</th></tr></thead>
-          <tbody>${[...last30].reverse().map(r=>`<tr style="border-bottom:1px solid rgba(128,128,128,.06)"><td style="padding:4px">${fmtD(r.date)}</td><td style="padding:4px;text-align:right;font-weight:700;color:${r.delPct>=70?'var(--green)':r.delPct>=55?'var(--amber)':'var(--text)'}">${r.delPct.toFixed(1)}%</td><td style="padding:4px;text-align:right;color:var(--text-muted)">${r.vol>=1e7?(r.vol/1e7).toFixed(1)+'Cr':(r.vol/1e5).toFixed(1)+'L'}</td><td style="padding:4px;text-align:right">₹${r.close||'—'}</td></tr>`).join('')}</tbody>
-        </table>
-      </div>
-    </div>
-    <div style="margin-top:10px;font-size:.68rem;color:var(--text-muted)">💡 Delivery score >70 = institutions consistently buying, not just day-traders. Source: NSE bhavcopy.</div>
+    ${chartHtml}
+    <div style="margin-top:8px;font-size:.65rem;color:var(--text-muted)">Source: foData.json pushed by GitHub Actions · Score 0–100 = delivery conviction</div>
   </div>`;
   modal.addEventListener('click',e=>{if(e.target===modal)modal.remove();});
   document.body.appendChild(modal);
@@ -3350,26 +3251,26 @@ function checkExitSignals(){
 }
 
 function init(){
-  loadPrefs();loadAlerts();
+  loadPrefs();loadAlerts();loadDelHistory();
   document.querySelectorAll('.theme-btn').forEach(b=>b.addEventListener('click',()=>applyTheme(b.dataset.theme)));
   document.querySelectorAll('.fs-btn').forEach(b=>b.addEventListener('click',()=>applyFs(parseInt(b.dataset.fs))));
   document.querySelectorAll('.nav-tab').forEach(b=>b.addEventListener('click',()=>switchTab(b.dataset.tab)));
   initPillTabs();initSearch();
   renderMarket();renderIntelligence();renderPortfolio();renderGuide();
   fetchFOData().then(async()=>{
-    fetchTrends();
     fetchNifty();
-    await fetchHistoryForSparklines();
-    await fetchPCRData();
-    renderIntelligence();
-    renderFiiDivergenceAlert();
+    renderFiiDiiChart();
+    ingestFoDelivery();
     renderDeliverySpikes();
+    renderFiiDivergenceAlert();
+    // Non-blocking sparkline and PCR fetches — fire and forget
+    fetchHistoryForSparklines().catch(()=>{});
+    fetchPCRData().catch(()=>{});
+    renderIntelligence();
   });
-  // Fetch live MF holdings from mfdata.in (free API, no auth)
-  // Runs after initial render so UI is not blocked
-  setTimeout(()=>fetchLiveHoldings(),1500);
-  // Fetch live FII/DII and delivery data from NSE (no auth, works on deployment)
-  setTimeout(()=>{fetchLiveFiiDii().then(()=>renderFiiDiiChart());fetchLiveDelivery();},800);
+  // mfapi.in NAV fetch — parallel, non-blocking, single run
+  setTimeout(()=>fetchLiveHoldings(),2000);
+  // Nifty refresh every 60s — non-blocking
   setInterval(()=>{fetchNifty();checkPriceAlerts();checkExitSignals();},60000);
 }
 document.addEventListener('DOMContentLoaded',init);
