@@ -1229,11 +1229,14 @@ function renderFiiDiiChart(){
   // If still no rows, show clean actionable message (no fetch attempt)
   if(!rows.length){
     c.innerHTML=`<div style="padding:14px;background:var(--surface2);border-radius:8px;border:1px solid var(--border)">
-      <div style="font-size:.8rem;font-weight:600;margin-bottom:6px">📡 FII/DII Chart — Connect your workflow</div>
+      <div style="font-size:.8rem;font-weight:600;margin-bottom:6px">📡 FII/DII Chart — awaiting data</div>
       <div style="font-size:.72rem;color:var(--text-muted);line-height:1.7">
-        Push <code style="background:var(--bg);padding:1px 4px;border-radius:3px">fiiDiiHistory</code> array to <code style="background:var(--bg);padding:1px 4px;border-radius:3px">foData.json</code> from your GitHub Actions workflow.<br>
-        Format: <code style="background:var(--bg);padding:1px 4px;border-radius:3px">[{"date":"2026-05-01","fii":1240,"dii":830}, ...]</code><br>
-        Source: <a href="https://www.nseindia.com/market-data/fii-dii-trend" target="_blank" style="color:var(--accent)">NSE FII/DII page</a> — parse server-side in your workflow, not in the browser.
+        <strong style="color:var(--text)">Option A — Manual upload (recommended after market hrs):</strong><br>
+        Drop <code style="background:var(--bg);padding:1px 4px;border-radius:3px">FIIDII_DDMMYYYY.csv</code> into <code style="background:var(--bg);padding:1px 4px;border-radius:3px">data/uploads/</code> in your GitHub data repo, then trigger this workflow.<br>
+        Columns: <code style="background:var(--bg);padding:1px 4px;border-radius:3px">Date, FII_Buy, FII_Sell, DII_Buy, DII_Sell</code> (all values in ₹Cr).<br><br>
+        <strong style="color:var(--text)">Option B — Auto-fetch:</strong><br>
+        The GitHub Actions workflow fetches FII/DII automatically at 7PM IST via NSE API and pushes <code style="background:var(--bg);padding:1px 4px;border-radius:3px">fiiDiiHistory</code> to <code style="background:var(--bg);padding:1px 4px;border-radius:3px">fno_signals.json</code>.<br>
+        Source: <a href="https://www.nseindia.com/market-data/fii-dii-trend" target="_blank" style="color:var(--accent)">NSE FII/DII page</a>
       </div>
     </div>`;
     return;
@@ -1279,16 +1282,18 @@ function renderFiiDiiChart(){
   svg+='</svg>';
 
   const summaryRows=rows.slice(-5).map(r=>{
-    const fup=r.fii>=0;
-    return`<div style="flex:1;min-width:52px;background:var(--surface2);border-radius:5px;padding:4px;text-align:center;border:1px solid var(--border)">
+    const fup=r.fii>=0,dup=r.dii>=0;
+    const fmtCr=v=>{const a=Math.abs(v);return(v>=0?'+':'-')+(a>=1000?(a/1000).toFixed(1)+'k':Math.round(a))+'Cr';};
+    return`<div style="flex:1;min-width:58px;background:var(--surface2);border-radius:5px;padding:4px;text-align:center;border:1px solid var(--border)">
       <div style="font-size:7px;color:var(--text-muted);margin-bottom:2px">${fmtDate(r.date)}</div>
-      <div style="font-size:8.5px;font-weight:700;color:${fup?'var(--green)':'var(--red)'}">${fup?'+':''}${(r.fii/100).toFixed(0)}Cr</div>
-      <div style="font-size:8.5px;font-weight:700;color:var(--blue)">+${(r.dii/100).toFixed(0)}Cr</div>
+      <div style="font-size:8.5px;font-weight:700;color:${fup?'var(--green)':'var(--red)'}" title="FII: &#8377;${r.fii.toLocaleString('en-IN')} Cr">${fmtCr(r.fii)}</div>
+      <div style="font-size:8.5px;font-weight:700;color:${dup?'var(--blue)':'var(--red)'}" title="DII: &#8377;${r.dii.toLocaleString('en-IN')} Cr">${fmtCr(r.dii)}</div>
     </div>`;
   }).join('');
 
-  const src=STATE.foData?.fiiDiiHistory?.length>=2?'● GitHub Actions':STATE.foData?.fiiDii?'⚡ 1-day':'🌐 NSE live';
-  const srcCol=STATE.foData?.fiiDiiHistory?.length>=2?'var(--green)':'var(--amber)';
+  const isManual=STATE.foData?.meta?.source==='manual_upload'||STATE.foData?.fiiDii?.source==='manual_upload';
+  const src=isManual?'📁 Manual Upload':STATE.foData?.fiiDiiHistory?.length>=2?'● GitHub Actions':STATE.foData?.fiiDii?'⚡ 1-day':'🌐 NSE live';
+  const srcCol=isManual?'var(--blue)':STATE.foData?.fiiDiiHistory?.length>=2?'var(--green)':'var(--amber)';
   c.innerHTML=`
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
       <div style="display:flex;gap:14px">
@@ -2209,21 +2214,97 @@ function toggleExpand(id,btn){
 ═══════════════════════════════════════════ */
 function updateFreshness(){
   if(!STATE.foData)return;
-  const meta=STATE.foData.meta||{},date=meta.date||meta.latestDate||STATE.foData.date;
-  const ageH=meta.updatedAt?Math.round((Date.now()-new Date(meta.updatedAt).getTime())/3600000):null;
-  if(date){document.getElementById('foDate').textContent=new Date(date).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'2-digit'});}
+  const meta=STATE.foData.meta||{};
+  const isManual=meta.source==='manual_upload'||STATE.foData?.fiiDii?.source==='manual_upload';
+
+  // Resolve data date from meta (prefer ISO date field)
+  const rawDate=meta.date||meta.latestDate||STATE.foData.date||'';
+  const dataDate=rawDate?new Date(rawDate):null;
+
+  // Display date label in freshness strip
+  const dateLabel=dataDate?dataDate.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'2-digit'}):'—';
+  const foDateEl=document.getElementById('foDate');
+  if(foDateEl) foDateEl.textContent=dateLabel+(isManual?' 📁':'');
+
+  // ── Trading-date staleness (not wall-clock hours) ─────────────────
+  // Logic: data is "current" if it covers the latest completed trading day.
+  // A trading day is Mon–Fri. We look backward from today to find the most
+  // recent completed trading session (market closes ~3:30 PM IST = 10:00 UTC).
+  // If today is a trading day and it's before 10:00 UTC, yesterday is the latest.
+  function latestTradingDate(){
+    const now=new Date();
+    const d=new Date(now);
+    // If before 10:00 UTC today, last session was yesterday
+    if(now.getUTCHours()<10) d.setUTCDate(d.getUTCDate()-1);
+    // Roll back over weekends
+    while(d.getDay()===0||d.getDay()===6) d.setUTCDate(d.getUTCDate()-1);
+    d.setUTCHours(0,0,0,0);
+    return d;
+  }
+
+  function tradingDaysBetween(from,to){
+    // Count Mon-Fri days between two dates (exclusive of from, inclusive of to)
+    if(!from||!to) return 99;
+    let count=0;
+    const cur=new Date(from); cur.setUTCDate(cur.getUTCDate()+1);
+    while(cur<=to){
+      if(cur.getDay()!==0&&cur.getDay()!==6) count++;
+      cur.setUTCDate(cur.getUTCDate()+1);
+    }
+    return count;
+  }
+
+  const latestTD=latestTradingDate();
+  const dataDt=dataDate?(new Date(dataDate.toISOString().slice(0,10))):null;
+  if(dataDt) dataDt.setUTCHours(0,0,0,0);
+
+  // missedDays = how many trading days the data is behind
+  const missedDays=dataDt?tradingDaysBetween(dataDt,latestTD):99;
+
+  // Dot colour in freshness strip: green if 0 missed, amber if 1, red if 2+
   const dot=document.getElementById('foDot');
-  if(dot&&ageH!==null)dot.className='fresh-dot '+(ageH<24?'fresh-green':ageH<72?'fresh-amber':'fresh-red');
-  const histCount=STATE.foData.historyCount||STATE.foData.daysAvailable||0;
+  if(dot) dot.className='fresh-dot '+(missedDays<=0?'fresh-green':missedDays===1?'fresh-amber':'fresh-red');
+
+  // Trends dot
+  const histCount=STATE.foData.historyCount||STATE.foData.daysAvailable||
+                  (STATE.foData.fiiDiiHistory||[]).length||0;
   const tLabel=document.getElementById('trendsLabel'),tDot=document.getElementById('trendsDot');
-  if(tLabel&&tDot){if(histCount>=3){tLabel.textContent=histCount+'d';tDot.className='fresh-dot fresh-green';}else if(histCount>=1){tLabel.textContent=histCount+'d';tDot.className='fresh-dot fresh-amber';}else{tLabel.textContent='No data';tDot.className='fresh-dot fresh-red';}}
+  if(tLabel&&tDot){
+    if(histCount>=3){tLabel.textContent=histCount+'d';tDot.className='fresh-dot fresh-green';}
+    else if(histCount>=1){tLabel.textContent=histCount+'d';tDot.className='fresh-dot fresh-amber';}
+    else{tLabel.textContent='No data';tDot.className='fresh-dot fresh-red';}
+  }
+
+  // ── Banner ────────────────────────────────────────────────────────
   let banner=document.getElementById('staleBanner');
-  if(!banner){banner=document.createElement('div');banner.id='staleBanner';banner.style.cssText='padding:6px 16px;font-size:.75rem;font-weight:600;text-align:center;transition:background .3s;';const strip=document.querySelector('.freshness-strip');if(strip)strip.after(banner);}
-  const dateLabel=date?new Date(date).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'2-digit'}):'—';
-  if(ageH===null){banner.style.background='rgba(255,184,48,.08)';banner.style.color='var(--amber)';banner.textContent='⏱ F&O data age unknown';}
-  else if(ageH<24){banner.style.background='rgba(0,229,153,.06)';banner.style.color='var(--green)';banner.textContent=`✓ F&O data current — ${dateLabel} · ${Math.round(ageH)}h ago`;}
-  else if(ageH<72){banner.style.background='rgba(255,184,48,.08)';banner.style.color='var(--amber)';banner.textContent=`⚠ F&O data is ${Math.round(ageH)}h old (${dateLabel}) — signals may be stale`;}
-  else{banner.style.background='rgba(255,69,96,.1)';banner.style.color='var(--red)';banner.textContent=`🔴 F&O data is ${Math.round(ageH/24)}d old (${dateLabel}) — admin upload required`;}
+  if(!banner){
+    banner=document.createElement('div');
+    banner.id='staleBanner';
+    banner.style.cssText='padding:6px 16px;font-size:.75rem;font-weight:600;text-align:center;transition:background .3s;';
+    const strip=document.querySelector('.freshness-strip');
+    if(strip) strip.after(banner);
+  }
+
+  if(!dataDate){
+    banner.style.background='rgba(255,184,48,.08)';banner.style.color='var(--amber)';
+    banner.textContent='⏱ F&O data date unknown';
+  } else if(missedDays<=0){
+    // Data covers today's (or the latest) trading session — always green
+    const src=isManual?'📁 manual upload':'⚡ auto-fetch';
+    banner.style.background='rgba(0,229,153,.06)';banner.style.color='var(--green)';
+    banner.textContent=`✓ F&O signals current — ${dateLabel} · ${src}`;
+  } else if(missedDays===1){
+    // Missing exactly 1 trading day — normal for post-market upload viewed next morning/day
+    const src=isManual?'📁 manual upload':'GitHub Actions';
+    banner.style.background='rgba(0,229,153,.06)';banner.style.color='var(--green)';
+    banner.textContent=`✓ F&O signals current — ${dateLabel} · ${src}`;
+  } else if(missedDays===2){
+    banner.style.background='rgba(255,184,48,.08)';banner.style.color='var(--amber)';
+    banner.textContent=`⚠ F&O data from ${dateLabel} — upload today's FOVOLT + fii-dii CSVs`;
+  } else {
+    banner.style.background='rgba(255,69,96,.1)';banner.style.color='var(--red)';
+    banner.textContent=`🔴 F&O data is ${missedDays} trading days old (${dateLabel}) — upload required`;
+  }
 }
 
 /* ═══════════════════════════════════════════
