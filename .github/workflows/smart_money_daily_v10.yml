@@ -54,7 +54,345 @@ jobs:
       - name: Install dependencies
         run: pip install requests pandas
 
+      # ── Process manually uploaded CSVs (FOVOLT + FII-DII) ───────────────────
+      # Upload files to data/uploads/ in the data repo before triggering workflow.
+      # File naming:
+      #   FOVOLT:  FOVOLT_DDMMYYYY.csv      (NSE F&O Volatility archive download)
+      #   FII-DII: fii-dii_DDMMYYYY.csv     (NSE FII-DII Trend download — exact name)
+      #            Also accepts: FIIDII_DDMMYYYY.csv or fiidii_DDMMYYYY.csv
+      # After processing, files are archived to data/uploads/processed/
+      # If valid uploads are found, NSE auto-fetch is skipped automatically.
+      - name: Process manual CSV uploads (FOVOLT + FIIDII)
+        id: process_uploads
+        run: |
+          python3 << 'PYEOF'
+          import csv, io, glob, os, json, math, shutil
+          from datetime import datetime, date, timedelta
+
+          uploads_dir  = 'data-repo/data/uploads'
+          archive_dir  = 'data-repo/data/uploads/processed'
+          os.makedirs(archive_dir, exist_ok=True)
+
+          INDEX_SYMS = {'NIFTY','BANKNIFTY','SENSEX','FINNIFTY','NIFTYNXT50',
+                        'MIDCPNIFTY','BANKEX','SX40','SENSEX50'}
+
+          # ── Find the newest FOVOLT and FII-DII files ─────────────
+          # FOVOLT filename:  FOVOLT_DDMMYYYY.csv
+          # FII-DII filename: fii-dii_DDMMYYYY.csv  (NSE download naming)
+          #                   Also accepts FIIDII_*.csv or fiidii_*.csv variants
+          fovolt_files = sorted(glob.glob(f'{uploads_dir}/FOVOLT_*.csv'))
+          fiidii_files = sorted(
+              glob.glob(f'{uploads_dir}/fii-dii_*.csv') +
+              glob.glob(f'{uploads_dir}/FIIDII_*.csv')  +
+              glob.glob(f'{uploads_dir}/fiidii_*.csv')
+          )
+
+          if not fovolt_files and not fiidii_files:
+              print("No manual upload CSVs found — NSE auto-fetch will run normally.")
+              with open('/tmp/upload_processed.env', 'w') as f:
+                  f.write('UPLOADS_FOUND=false\n')
+              raise SystemExit(0)
+
+          signals     = {}
+          fii_dii_raw = {}
+          fiidii_rows = []   # per-day rows for fiiDiiHistory chart
+          stock_count = 0
+
+          # ── Parse FOVOLT CSV ──────────────────────────────────────
+          if fovolt_files:
+              fovolt_path = fovolt_files[-1]   # newest
+              print(f"Processing FOVOLT: {os.path.basename(fovolt_path)}")
+              with open(fovolt_path, newline='', encoding='utf-8-sig') as fh:
+                  content = fh.read()
+              reader = csv.reader(io.StringIO(content))
+              raw_header = next(reader, None)
+              print(f"  FOVOLT header: {raw_header[:9] if raw_header else 'EMPTY'}")
+
+              for row in reader:
+                  try:
+                      if len(row) < 9: continue
+                      sym = row[1].strip().upper()
+                      if not sym or sym in INDEX_SYMS: continue
+
+                      def _f(v):
+                          try: return float(str(v).replace(',','').strip())
+                          except: return None
+
+                      cl      = _f(row[2])   # Underlying spot close
+                      pr      = _f(row[3])   # Prev day spot close
+                      log_ret = _f(row[4])   # Log return
+                      vol_ann = _f(row[7])   # Annualised IV
+                      fut_cl  = _f(row[8])   # Futures close
+
+                      if cl is None or cl == 0: continue
+
+                      try:
+                          d1 = round((math.exp(log_ret) - 1) * 100, 2) if log_ret else 0.0
+                      except:
+                          d1 = round(((cl - pr) / pr * 100), 2) if pr else 0.0
+
+                      try:
+                          prem = round((fut_cl - cl) / cl * 100, 3) if fut_cl and cl else 0.0
+                      except:
+                          prem = 0.0
+
+                      vol   = round(vol_ann, 1) if vol_ann else 0.0
+                      raw   = (d1 / 3.0) + (prem * 0.5)
+                      score = round(max(-5.0, min(5.0, raw)), 2)
+                      label = ('Strong Bullish' if score >= 3   else
+                               'Bullish'        if score >= 1.5 else
+                               'Mild Bullish'   if score >= 0.5 else
+                               'Strong Bearish' if score <= -3  else
+                               'Bearish'        if score <= -1.5 else
+                               'Mild Bearish'   if score <= -0.5 else 'Neutral')
+
+                      signals[sym] = {
+                          'score': score, 'label': label, 'cl': cl, 'pr': pr,
+                          'd1': str(d1), 'd2': str(d1),
+                          'prem': str(prem), 'vol': str(vol)
+                      }
+                      stock_count += 1
+                  except: continue
+
+              print(f"  Parsed {stock_count} stocks from FOVOLT")
+              for chk in ['SUNPHARMA','RELIANCE','HDFCBANK']:
+                  if chk in signals:
+                      s = signals[chk]
+                      print(f"  CHECK {chk}: cl={s['cl']}  prem={s['prem']}  d1={s['d1']}")
+
+              # Archive the processed file
+              shutil.move(fovolt_path, os.path.join(archive_dir, os.path.basename(fovolt_path)))
+              print(f"  Archived {os.path.basename(fovolt_path)} → uploads/processed/")
+
+          # ── Parse FII-DII CSV ─────────────────────────────────────
+          # Real NSE FII-DII download format (fii-dii_DDMMYYYY.csv):
+          #   Headers contain embedded newlines inside quotes — e.g.:
+          #   "CATEGORY \n","DATE \n","BUY VALUE \n(₹ Crores)","SELL VALUE \n(₹ Crores)","NET VALUE \n(₹ Crores)"
+          #   "DII","04-May-2026","19,516.11","14,751.95","4,764.16"
+          #   "FII/FPI","04-May-2026","19,660.47","16,824.85","2,835.62"
+          #
+          # Strategy: collapse \n inside quoted fields → space, then parse with csv.DictReader.
+          # Key normalisation strips spaces, ₹, (, ) → 'buyvaluecrores', 'sellvaluecrores', etc.
+          if fiidii_files:
+              fiidii_path = fiidii_files[-1]
+              print(f"Processing FII-DII: {os.path.basename(fiidii_path)}")
+              with open(fiidii_path, newline='', encoding='utf-8-sig') as fh:
+                  raw_content = fh.read()
+
+              # Collapse \n that appear INSIDE quoted fields (multi-line headers)
+              def collapse_quoted_newlines(text):
+                  result = []
+                  in_quote = False
+                  for c in text:
+                      if c == '"':
+                          in_quote = not in_quote
+                          result.append(c)
+                      elif c == '\n' and in_quote:
+                          result.append(' ')   # newline inside quote → space
+                      else:
+                          result.append(c)
+                  return ''.join(result)
+
+              cleaned = collapse_quoted_newlines(raw_content)
+              import re as _re
+              reader = csv.DictReader(io.StringIO(cleaned))
+              rows_raw = list(reader)
+              print(f"  FII-DII fieldnames: {reader.fieldnames}")
+              print(f"  FII-DII rows: {len(rows_raw)}")
+
+              # Normalise keys: lowercase, remove everything except a-z0-9
+              def clean_key(k):
+                  if k is None: return ''
+                  return _re.sub(r'[^a-z0-9]', '', k.lower().replace('₹', ''))
+
+              fii_buy = fii_sell = fii_net_val = 0.0
+              dii_buy = dii_sell = dii_net_val = 0.0
+              latest_date_str = None
+
+              for row in rows_raw:
+                  nrow = {clean_key(k): str(v).strip().strip('"') for k, v in row.items() if k}
+
+                  def fval(*keys):
+                      for k in keys:
+                          v = nrow.get(k)
+                          if v:
+                              try: return float(v.replace(',','').strip())
+                              except: pass
+                      return 0.0
+
+                  # Category: strip everything non-alpha
+                  category = _re.sub(r'[^A-Z]', '', nrow.get('category', '').upper())
+
+                  # Date parsing
+                  date_raw = nrow.get('date', '').strip()
+                  if date_raw and not latest_date_str:
+                      for fmt_str in ('%d-%b-%Y', '%d-%B-%Y', '%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y'):
+                          try:
+                              latest_date_str = datetime.strptime(date_raw, fmt_str).strftime('%Y-%m-%d')
+                              break
+                          except: continue
+
+                  buy = fval('buyvaluecrores', 'buyvalue', 'buy')
+                  sell = fval('sellvaluecrores', 'sellvalue', 'sell')
+                  net  = fval('netvaluecrores', 'netvalue', 'net')
+
+                  if 'FII' in category:
+                      fii_buy, fii_sell = buy, sell
+                      fii_net_val = round(buy - sell, 2) if buy or sell else round(net, 2)
+                  elif 'DII' in category:
+                      dii_buy, dii_sell = buy, sell
+                      dii_net_val = round(buy - sell, 2) if buy or sell else round(net, 2)
+
+              fii_dii_raw = {
+                  'fii':     fii_net_val,
+                  'dii':     dii_net_val,
+                  'fiiBuy':  fii_buy,   'fiiSell': fii_sell,
+                  'diiBuy':  dii_buy,   'diiSell': dii_sell,
+                  'date':    latest_date_str or datetime.utcnow().strftime('%Y-%m-%d'),
+                  'source':  'manual_upload'
+              }
+              if latest_date_str:
+                  fiidii_rows.append({
+                      'date': latest_date_str,
+                      'fii':  fii_net_val,
+                      'dii':  dii_net_val
+                  })
+              print(f"  FII net: ₹{fii_net_val:,.2f} Cr  |  DII net: ₹{dii_net_val:,.2f} Cr")
+              print(f"  Date: {fii_dii_raw['date']}")
+
+              # Archive
+              shutil.move(fiidii_path, os.path.join(archive_dir, os.path.basename(fiidii_path)))
+              print(f"  Archived {os.path.basename(fiidii_path)} → uploads/processed/")
+
+          # ── Merge with existing fno_signals.json ─────────────────
+          # Load existing data so we preserve bulk/block/insider/pcr/history
+          existing = {}
+          fno_path = 'data-repo/data/fno_signals.json'
+          if os.path.exists(fno_path):
+              try:
+                  with open(fno_path) as fh:
+                      existing = json.load(fh)
+                  print(f"  Loaded existing fno_signals.json ({len(existing.get('signals',{}))} stocks)")
+              except Exception as e:
+                  print(f"  Could not load existing: {e}")
+
+          # Determine fetch date from filename or today
+          upload_date_iso = datetime.utcnow().strftime('%Y-%m-%d')
+          if fovolt_files:
+              bname = os.path.basename(fovolt_files[-1])  # FOVOLT_DDMMYYYY.csv
+              try:
+                  ds_part = bname.replace('FOVOLT_','').replace('.csv','')  # DDMMYYYY
+                  if len(ds_part) == 8:
+                      upload_date_iso = f"{ds_part[4:8]}-{ds_part[2:4]}-{ds_part[0:2]}"
+              except: pass
+          elif fiidii_files and fiidii_rows:
+              upload_date_iso = fiidii_rows[-1]['date']
+
+          fetch_date_str = datetime.strptime(upload_date_iso,'%Y-%m-%d').strftime('%d-%b-%Y')
+          print(f"  Upload date resolved: {upload_date_iso} ({fetch_date_str})")
+
+          # Build 5-day FII/DII history
+          import glob as _glob
+          hist_files = sorted(_glob.glob('data-repo/data/history/*.json'))[-5:]
+          five_day = []
+          for hf in hist_files:
+              try:
+                  with open(hf) as fh: hd = json.load(fh)
+                  d = hd.get('fiiDii',{})
+                  if d:
+                      day_label = os.path.basename(hf).replace('.json','')
+                      dl = datetime.strptime(day_label,'%Y-%m-%d').strftime('%a')
+                      five_day.append({'date': day_label, 'd': dl,
+                                       'fii': d.get('fii',0), 'dii': d.get('dii',0)})
+              except: continue
+
+          # If FIIDII upload had multiple daily rows, merge them into history
+          if fiidii_rows:
+              # Deduplicate: only add rows not already in five_day
+              existing_dates = {r['date'] for r in five_day}
+              for r in fiidii_rows:
+                  if r['date'] not in existing_dates:
+                      dl = datetime.strptime(r['date'],'%Y-%m-%d').strftime('%a')
+                      five_day.append({'date': r['date'], 'd': dl,
+                                       'fii': r['fii'], 'dii': r['dii']})
+              five_day = sorted(five_day, key=lambda x: x['date'])[-10:]
+
+          # If FIIDII upload had today's data, also add it (if not duplicated)
+          if fii_dii_raw:
+              today_date = fii_dii_raw.get('date', upload_date_iso)
+              if not any(r['date'] == today_date for r in five_day):
+                  dl = datetime.strptime(today_date,'%Y-%m-%d').strftime('%a')
+                  five_day.append({'date': today_date, 'd': dl,
+                                   'fii': fii_dii_raw.get('fii',0),
+                                   'dii': fii_dii_raw.get('dii',0)})
+              five_day = sorted(five_day, key=lambda x: x['date'])[-10:]
+
+          # Use signals from upload if present, else carry from existing
+          final_signals = signals if signals else existing.get('signals', {})
+          final_count   = len(final_signals)
+
+          # Use fii_dii from upload if present, else keep existing
+          final_fii_dii = fii_dii_raw if fii_dii_raw else existing.get('fiiDii', {})
+
+          output = {
+              'signals':       final_signals,
+              'fiiDii':        final_fii_dii,
+              'fiiDiiHistory': five_day[-10:],
+              'bulkDeals':     existing.get('bulkDeals', []),
+              'blockDeals':    existing.get('blockDeals', []),
+              'insiderData':   existing.get('insiderData', []),
+              'pcr':           existing.get('pcr', {}),
+              'meta': {
+                  'date':              upload_date_iso,
+                  'latestDate':        fetch_date_str,
+                  'updatedAt':         datetime.utcnow().isoformat() + 'Z',
+                  'stockCount':        final_count,
+                  'carriedForwardFrom': None,
+                  'files':             [fetch_date_str],
+                  'version':           'V10',
+                  'source':            'manual_upload'
+              }
+          }
+
+          os.makedirs('data-repo/data/history', exist_ok=True)
+          with open(fno_path, 'w') as fh:
+              json.dump(output, fh, separators=(',',':'))
+          print(f"Written fno_signals.json ({final_count} stocks, source=manual_upload)")
+
+          hist_path = f'data-repo/data/history/{upload_date_iso}.json'
+          with open(hist_path, 'w') as fh:
+              json.dump(output, fh, separators=(',',':'))
+          print(f"Written {hist_path}")
+
+          # Update index.json
+          all_hist = sorted([os.path.basename(f).replace('.json','')
+                             for f in _glob.glob('data-repo/data/history/*.json')
+                             if '.gitkeep' not in f])
+          with open('data-repo/data/index.json', 'w') as fh:
+              json.dump({'dates': all_hist[-30:],
+                         'lastUpdated': datetime.utcnow().isoformat()+'Z',
+                         'totalUploads': len(all_hist),
+                         'latestDate': upload_date_iso,
+                         'latestStockCount': final_count,
+                         'version': 'V10'}, fh, indent=2)
+          print(f"Updated index.json ({len(all_hist)} dates)")
+
+          # Signal to next step that uploads were processed → skip NSE fetch
+          with open('/tmp/upload_processed.env', 'w') as f:
+              f.write('UPLOADS_FOUND=true\n')
+          PYEOF
+
+      - name: Load upload flag
+        id: upload_flag
+        run: |
+          if [ -f /tmp/upload_processed.env ]; then
+            cat /tmp/upload_processed.env >> $GITHUB_ENV
+          else
+            echo "UPLOADS_FOUND=false" >> $GITHUB_ENV
+          fi
+
       - name: Fetch NSE data + compute signals (V10)
+        if: env.UPLOADS_FOUND != 'true'
         env:
           DATE_OVERRIDE: ${{ github.event.inputs.date_override }}
           SKIP_NSE: ${{ github.event.inputs.skip_nse_fetch }}
