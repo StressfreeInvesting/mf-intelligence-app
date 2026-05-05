@@ -136,27 +136,84 @@ jobs:
               time.sleep(2)
 
               if fovolt:
-                  INDEX_SYMS = {'NIFTY','BANKNIFTY','SENSEX','FINNIFTY','NIFTYNXT50','MIDCPNIFTY','BANKEX'}
-                  reader = csv.DictReader(io.StringIO(fovolt))
+                  INDEX_SYMS = {'NIFTY','BANKNIFTY','SENSEX','FINNIFTY','NIFTYNXT50','MIDCPNIFTY','BANKEX',
+                                'SX40','SENSEX50'}
+                  import math as _math
+
+                  # ── Print header so we can see the real column names in logs ──
+                  lines = fovolt.strip().splitlines()
+                  print(f"  FOVOLT header: {lines[0][:200] if lines else 'EMPTY'}")
+
+                  # ── Read by POSITION (immune to NSE renaming columns) ─────────
+                  # FOVOLT column layout (0-indexed, confirmed from NSE archive):
+                  #   0  Date
+                  #   1  Symbol
+                  #   2  Underlying Value (A)  ← SPOT close        ✅ → cl
+                  #   3  Underlying Value (B)  ← Prev day spot     ✅ → pr
+                  #   4  Log Returns (Underlying)                   → d1
+                  #   5  Previous Day Volatility (Underlying)
+                  #   6  Current Day Daily Volatility (Underlying)
+                  #   7  Annualised Volatility (Underlying)         → vol
+                  #   8  Futures Price (G)     ← near-month futures ❌ NOT spot
+                  #
+                  # OLD BUG: row.get('Closing Price') / row.get('CLOSE') matched
+                  # nothing in FOVOLT, so the code silently got 0 or fell through
+                  # to a futures-price column — giving ₹1,717 instead of ₹1,823.
+                  reader = csv.reader(io.StringIO(fovolt))
+                  raw_header = next(reader)   # consume header row
+
                   for row in reader:
                       try:
-                          sym = str(row.get('Symbol', row.get('SYMBOL','')).strip().upper())
+                          if len(row) < 9: continue
+                          sym = row[1].strip().upper()
                           if not sym or sym in INDEX_SYMS: continue
-                          cl   = float(row.get('Closing Price', row.get('CLOSE', 0)) or 0)
-                          pr   = float(row.get('Prev Close',   row.get('PREVCLOSE', cl)) or cl)
-                          vol  = float(row.get('Daily Volatility', row.get('DAILYVOL', 0)) or 0)
-                          d1   = round(((cl-pr)/pr*100),2) if pr else 0
-                          prem = round(d1/100*0.3,4)
-                          raw  = (d1/3.0) + (vol/50.0)
+
+                          def _f(v):
+                              try: return float(str(v).replace(',','').strip())
+                              except: return None
+
+                          cl      = _f(row[2])   # Underlying spot close  ✅ FIXED
+                          pr      = _f(row[3])   # Prev day spot close
+                          log_ret = _f(row[4])   # Log return (underlying)
+                          vol_ann = _f(row[7])   # Annualised IV (underlying)
+                          fut_cl  = _f(row[8])   # Futures close (basis calc only)
+
+                          if cl is None or cl == 0: continue
+
+                          # d1: convert log return → simple % move
+                          try:
+                              d1 = round((_math.exp(log_ret) - 1) * 100, 2) if log_ret else 0.0
+                          except:
+                              d1 = round(((cl - pr) / pr * 100), 2) if pr else 0.0
+
+                          # prem: futures basis % vs spot
+                          try:
+                              prem = round((fut_cl - cl) / cl * 100, 3) if fut_cl and cl else 0.0
+                          except:
+                              prem = 0.0
+
+                          vol = round(vol_ann, 1) if vol_ann else 0.0
+
+                          raw   = (d1 / 3.0) + (prem * 0.5)
                           score = round(max(-5.0, min(5.0, raw)), 2)
-                          label = ('Strong Bullish' if score>=3 else 'Bullish' if score>=1.5 else
-                                   'Mild Bullish' if score>=0.5 else 'Strong Bearish' if score<=-3 else
-                                   'Bearish' if score<=-1.5 else 'Mild Bearish' if score<=-0.5 else 'Neutral')
+                          label = ('Strong Bullish' if score >= 3   else
+                                   'Bullish'        if score >= 1.5 else
+                                   'Mild Bullish'   if score >= 0.5 else
+                                   'Strong Bearish' if score <= -3  else
+                                   'Bearish'        if score <= -1.5 else
+                                   'Mild Bearish'   if score <= -0.5 else 'Neutral')
+
                           signals[sym] = {'score':score,'label':label,'cl':cl,'pr':pr,
-                                          'd1':str(d1),'d2':str(d1),'prem':str(prem),'vol':str(round(vol,1))}
+                                          'd1':str(d1),'d2':str(d1),'prem':str(prem),'vol':str(vol)}
                           stock_count += 1
                       except: continue
+
                   print(f"  Parsed {stock_count} stocks")
+                  # Spot-check in Actions log — after fix SUNPHARMA should show ~1823, not 1717
+                  for _chk in ['SUNPHARMA','RELIANCE','HDFCBANK']:
+                      if _chk in signals:
+                          s = signals[_chk]
+                          print(f"  CHECK {_chk}: cl={s['cl']}  prem={s['prem']}  d1={s['d1']}")
 
               # ── FII/DII flow ──────────────────────────────────────
               print("Fetching FII/DII flow...")
