@@ -1,159 +1,338 @@
-name: Test FOVOLT Download (27 Mar 2026)
+name: Fetch F&O Signals (FOVOLT → fno_signals.json)
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Writes to: data/fno_signals.json  in mf-intelligence-data repo.
+#  Runs Mon–Fri at 18:30 IST (13:00 UTC). NSE publishes FOVOLT by ~18:15 IST.
+#
+#  ╔══════════════════════════════════════════════════════════════════╗
+#  ║  ROOT CAUSE OF ₹1,717 vs ₹1,823 BUG (SUNPHARMA example)        ║
+#  ║                                                                  ║
+#  ║  FOVOLT CSV columns (0-indexed):                                 ║
+#  ║    col[2]  = Underlying Close Price  → ₹1,823  ✅  SPOT PRICE   ║
+#  ║    col[8]  = Futures Close Price     → ₹1,717  ❌  FUTURES      ║
+#  ║                                                                  ║
+#  ║  Old workflow read col[8] as "cl".                               ║
+#  ║  This workflow reads col[2] as "cl".                             ║
+#  ║  Affects EVERY stock shown in the app.                           ║
+#  ╚══════════════════════════════════════════════════════════════════╝
+# ─────────────────────────────────────────────────────────────────────────────
 
 on:
+  schedule:
+    - cron: "00 13 * * 1-5"       # Mon–Fri 18:30 IST (13:00 UTC)
   workflow_dispatch:
+    inputs:
+      trade_date:
+        description: "Date to fetch (DD-Mon-YYYY e.g. 05-May-2026). Blank = today."
+        required: false
+        default: ""
 
 jobs:
-  test-download:
+  fetch-fovolt:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
-      - name: Set up Python
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install requests
+        run: pip install requests pytz
 
-      - name: Test NSE FOVOLT download via reports API
+      - name: Download FOVOLT and write fno_signals.json
+        env:
+          TRADE_DATE_INPUT: ${{ github.event.inputs.trade_date }}
         run: |
           python3 << 'PYEOF'
-          import requests, time, sys, json
+          import requests, time, sys, os, json, csv, io, math
+          from datetime import datetime, timezone
+          import pytz
 
-          NSE_BASE = "https://www.nseindia.com"
+          # ═══════════════════════════════════════════════════════════════
+          #  FOVOLT COLUMN MAP  (0-indexed, confirmed from NSE CSV header)
+          #
+          #   0  Date
+          #   1  Symbol
+          #   2  Underlying Close Price     ← SPOT close  ✅  → "cl"
+          #   3  Underlying Prev Day Close                    → "pr"
+          #   4  Underlying Log Returns     ← 1-day log ret  → "d1"
+          #   5  Prev Day Underlying Volatility
+          #   6  Current Day Underlying Daily Volatility
+          #   7  Underlying Annualised Volatility             → "vol"
+          #   8  Futures Close Price        ← near-month FUT ❌  NOT "cl"
+          #   9  Futures Prev Day Close
+          #  10  Futures Log Returns
+          #  11  Prev Day Futures Volatility
+          #  12  Current Day Futures Daily Volatility
+          #  13  Futures Annualised Volatility
+          #  14  Applicable Daily Volatility
+          #  15  Applicable Annualised Volatility
+          # ═══════════════════════════════════════════════════════════════
 
-          # Browser-like headers — critical for NSE
-          HEADERS = {
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-              "Accept-Language": "en-US,en;q=0.9",
-              "Accept-Encoding": "gzip, deflate, br",
-              "Connection": "keep-alive",
-              "Upgrade-Insecure-Requests": "1",
-          }
+          COL_SYM     = 1
+          COL_CL      = 2   # ← FIXED (old code used 8 = futures close)
+          COL_PR      = 3   # previous day underlying close  → "pr"
+          COL_LOGRET  = 4   # log return underlying          → "d1"
+          COL_VOL_ANN = 7   # underlying annualised IV       → "vol"
+          COL_FUT_CL  = 8   # futures close (used only for "prem" calc)
 
-          session = requests.Session()
-          session.headers.update(HEADERS)
+          IST = pytz.timezone("Asia/Kolkata")
 
-          # ── Step 1: Get session cookies ──
-          print("Step 1: Establishing NSE session...")
-          r = session.get(NSE_BASE, timeout=20)
-          print(f"  Homepage: HTTP {r.status_code} | cookies: {list(session.cookies.keys())}")
-          time.sleep(2)
-
-          # ── Step 2: Hit the derivatives reports page ──
-          print("Step 2: Loading derivatives reports page...")
-          session.headers.update({
-              "Referer": NSE_BASE + "/",
-              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-          })
-          r2 = session.get(NSE_BASE + "/all-reports-derivatives", timeout=20)
-          print(f"  Derivatives page: HTTP {r2.status_code}")
-          time.sleep(2)
-
-          # ── Step 3: Use the NSE reports API (same as JavaScript download button) ──
-          print("Step 3: Calling NSE /api/reports endpoint...")
-          session.headers.update({
-              "Referer": NSE_BASE + "/all-reports-derivatives",
-              "Accept": "application/json, text/plain, */*",
-              "X-Requested-With": "XMLHttpRequest",
-          })
-
-          # NSE reports API — this is what the JS button calls
-          # archives param is URL-encoded JSON
-          import urllib.parse
-          archives = json.dumps([{
-              "name": "F&O - Daily Volatility (csv)",
-              "type": "archives",
-              "category": "derivatives",
-              "section": "equity"
-          }])
-
-          params = {
-              "archives": archives,
-              "date": "27-Mar-2026",
-              "type": "equity",
-              "mode": "single"
-          }
-
-          api_url = NSE_BASE + "/api/reports"
-          print(f"  URL: {api_url}")
-          print(f"  Params: {params}")
-
-          r3 = session.get(api_url, params=params, timeout=30)
-          print(f"  HTTP {r3.status_code} | size: {len(r3.content):,} bytes")
-          print(f"  Content-Type: {r3.headers.get('Content-Type','unknown')}")
-
-          if r3.status_code == 200:
-              # Check if it returned JSON (with redirect URL) or direct CSV
-              content_type = r3.headers.get("Content-Type", "")
-              if "json" in content_type:
-                  try:
-                      data = r3.json()
-                      print(f"  JSON response: {json.dumps(data)[:300]}")
-                      # If it returns a download URL, fetch that
-                      if isinstance(data, list) and len(data) > 0:
-                          file_url = data[0].get("link") or data[0].get("url") or data[0].get("fileLink")
-                          if file_url:
-                              print(f"\n  Following file URL: {file_url}")
-                              rf = session.get(file_url, timeout=30)
-                              print(f"  File HTTP {rf.status_code} | size: {len(rf.content):,} bytes")
-                              if rf.status_code == 200 and len(rf.content) > 5000:
-                                  sample = rf.content[:300].decode("utf-8", errors="ignore")
-                                  if "," in sample:
-                                      print(f"\n  ✅ CSV FOUND!\n{sample}\n")
-                                      sys.exit(0)
-                  except Exception as e:
-                      print(f"  JSON parse error: {e}")
-              elif "text/csv" in content_type or "application/octet" in content_type:
-                  # Direct CSV response
-                  sample = r3.content[:300].decode("utf-8", errors="ignore")
-                  if "," in sample:
-                      print(f"\n  ✅ DIRECT CSV RETURNED!\n{sample}\n")
-                      rows = r3.content.decode("utf-8", errors="ignore").strip().split("\n")
-                      print(f"  Total rows: {len(rows)}")
-                      sys.exit(0)
-              else:
-                  # Show raw response
-                  print(f"  Raw response: {r3.content[:500]}")
-          else:
-              print(f"  Response: {r3.content[:300]}")
-
-          # ── Step 4: Try direct archive URLs as fallback ──
-          print("\nStep 4: Trying direct archive URLs...")
-          direct_urls = [
-              "https://archives.nseindia.com/content/fo/FOVOLT_27032026.csv",
-              "https://www1.nseindia.com/archives/nsccl/volt/FOVOLT_27032026.csv",
-              f"{NSE_BASE}/archieves/nsccl/volt/FOVOLT_27032026.csv",
-              f"{NSE_BASE}/archieves/fo/FOVOLT_27032026.csv",
-          ]
-
-          session.headers.update({
-              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-              "X-Requested-With": "",
-          })
-
-          for url in direct_urls:
-              print(f"\n  Trying: {url}")
+          # ── Resolve trade date ──────────────────────────────────────
+          raw = os.environ.get("TRADE_DATE_INPUT", "").strip()
+          if raw:
               try:
-                  r = session.get(url, timeout=20, allow_redirects=True)
-                  print(f"  HTTP {r.status_code} | {len(r.content):,} bytes")
-                  if r.status_code == 200 and len(r.content) > 10000:
-                      sample = r.content[:300].decode("utf-8", errors="ignore")
-                      if "," in sample:
-                          print(f"  ✅ CSV FOUND!\n{sample}")
-                          sys.exit(0)
-                  if r.history:
-                      print(f"  Redirected to: {r.url}")
+                  dt = datetime.strptime(raw, "%d-%b-%Y")
+              except ValueError:
+                  print(f"❌ Bad date '{raw}'. Use DD-Mon-YYYY e.g. 05-May-2026")
+                  sys.exit(1)
+          else:
+              dt = datetime.now(IST)
+
+          if dt.weekday() >= 5 and not raw:
+              print(f"⏭  {dt.strftime('%A')} — market closed.")
+              sys.exit(0)
+
+          date_file  = dt.strftime("%d%m%Y")     # DDMMYYYY  → FOVOLT filename
+          date_label = dt.strftime("%d-%b-%Y")   # DD-Mon-YYYY → meta.latestDate
+          date_iso   = dt.strftime("%Y-%m-%d")   # YYYY-MM-DD  → meta.date
+          filename   = f"FOVOLT_{date_file}.csv"
+          print(f"Target: {filename}  ({date_label})")
+
+          # ── NSE session bootstrap ───────────────────────────────────
+          NSE = "https://www.nseindia.com"
+          sess = requests.Session()
+          sess.headers.update({
+              "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                             "AppleWebKit/537.36 (KHTML, like Gecko) "
+                             "Chrome/122.0.0.0 Safari/537.36"),
+              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+              "Accept-Language": "en-US,en;q=0.9",
+              "Referer": NSE + "/",
+          })
+
+          print("Step 1: Bootstrap NSE session …")
+          r = sess.get(NSE, timeout=20)
+          print(f"  HTTP {r.status_code} | cookies: {list(sess.cookies.keys())}")
+          time.sleep(2)
+
+          print("Step 2: Warm up derivatives page …")
+          sess.get(NSE + "/all-reports-derivatives", timeout=20)
+          time.sleep(1)
+
+          # ── Fetch CSV ───────────────────────────────────────────────
+          URLS = [
+              f"{NSE}/content/fo/{filename}",
+              f"https://nsearchives.nseindia.com/content/fo/{filename}",
+          ]
+          raw_csv = None
+          src_url = None
+          for url in URLS:
+              print(f"\nStep 3: {url}")
+              try:
+                  resp = sess.get(url,
+                                  headers={"Referer": NSE + "/all-reports-derivatives"},
+                                  timeout=25)
+                  print(f"  HTTP {resp.status_code} | {len(resp.content):,} bytes")
+                  if resp.status_code == 200 and len(resp.content) > 5_000:
+                      raw_csv = resp.content
+                      src_url = url
+                      break
+                  print(f"  Preview: {resp.content[:200]}")
               except Exception as e:
                   print(f"  Error: {e}")
 
-          print("\n❌ All methods failed.")
-          print("\nThe NSE download uses a complex JS-based session.")
-          print("RECOMMENDATION: Use the FOVOLT file you download manually,")
-          print("upload it to a GitHub release or Cloudinary, then the script")
-          print("can fetch from there instead.")
-          sys.exit(1)
+          if raw_csv is None:
+              print(f"\n❌ FOVOLT not available for {date_label}. NSE usually publishes by 18:15 IST.")
+              sys.exit(1)
+
+          print(f"\n✅ Downloaded: {src_url}")
+
+          # ── Parse CSV ───────────────────────────────────────────────
+          text   = raw_csv.decode("utf-8", errors="ignore")
+          reader = csv.reader(io.StringIO(text))
+          header = next(reader)
+          print(f"Columns: {header}")
+
+          def flt(v, decimals=2):
+              try:
+                  return round(float(str(v).replace(",", "").strip()), decimals)
+              except:
+                  return None
+
+          signals  = {}
+          skipped  = 0
+          verified = []   # for spot-check printout
+
+          for row in reader:
+              if len(row) < 16:
+                  skipped += 1
+                  continue
+
+              sym = row[COL_SYM].strip().upper()
+              if not sym:
+                  continue
+
+              # ── Core price fields ──────────────────────────────────
+              cl      = flt(row[COL_CL])      # spot close  ← FIXED
+              pr      = flt(row[COL_PR])      # prev day spot close
+              log_ret = flt(row[COL_LOGRET], 6)
+              vol_ann = flt(row[COL_VOL_ANN], 1)
+              fut_cl  = flt(row[COL_FUT_CL])  # futures close (basis calc only)
+
+              if cl is None:
+                  skipped += 1
+                  continue
+
+              # ── d1: 1-day % move from log return ──────────────────
+              # log return = ln(today/yesterday). Convert back to simple %.
+              try:
+                  d1 = str(round((math.exp(log_ret) - 1) * 100, 2)) if log_ret else "0.00"
+              except:
+                  d1 = "0.00"
+
+              # ── prem: futures basis % vs spot ─────────────────────
+              try:
+                  prem = str(round((fut_cl - cl) / cl * 100, 3)) if fut_cl and cl else "0.000"
+              except:
+                  prem = "0.000"
+
+              # ── vol: annualised IV (string, 1 decimal — matches schema) ──
+              vol = str(vol_ann) if vol_ann is not None else "0.0"
+
+              # ── score: signal score (-3 to +3) ────────────────────
+              # Mirrors the logic in the existing production file.
+              # Basis premium → bullish tilt. High IV → risk penalty.
+              try:
+                  basis_f = float(prem)
+              except:
+                  basis_f = 0.0
+              try:
+                  vol_f = float(vol)
+              except:
+                  vol_f = 0.0
+
+              score = 0.0
+              if basis_f > 0.5:
+                  score += min(basis_f * 1.5, 2.5)
+              elif basis_f < -0.5:
+                  score += max(basis_f * 1.5, -2.5)
+              else:
+                  score += basis_f * 0.5          # small basis, small effect
+
+              try:
+                  d1_f = float(d1)
+              except:
+                  d1_f = 0.0
+              score += d1_f * 0.25                # price momentum contribution
+
+              if vol_f > 50:
+                  score -= (vol_f - 50) / 25.0    # vol penalty above 50%
+
+              score = round(max(-5.0, min(5.0, score)), 2)
+
+              # ── label: matches production schema labels ────────────
+              if   score >=  2.0: label = "Strong Bullish"
+              elif score >=  1.0: label = "Bullish"
+              elif score >=  0.3: label = "Mild Bullish"
+              elif score > -0.3:  label = "Neutral"
+              elif score > -1.0:  label = "Mild Bearish"
+              elif score > -2.0:  label = "Bearish"
+              else:               label = "Strong Bearish"
+
+              # ── Build signal — EXACT schema match to production ────
+              # Production schema (from fno_signals.json):
+              #   score, label, cl, pr, d1, d2, prem, vol
+              # d2 mirrors d1 in production (same value — kept for compatibility)
+              signals[sym] = {
+                  "score" : score,
+                  "label" : label,
+                  "cl"    : cl,      # ← SPOT close (FIXED from futures close)
+                  "pr"    : pr,      # prev day spot close
+                  "d1"    : d1,      # 1-day % move (string, matches production)
+                  "d2"    : d1,      # mirrors d1 (schema compatibility)
+                  "prem"  : prem,    # futures basis % (string, matches production)
+                  "vol"   : vol,     # annualised IV % (string, matches production)
+              }
+
+              # Collect a few key symbols for spot-check
+              if sym in ("SUNPHARMA", "RELIANCE", "HDFCBANK", "INFY", "TCS", "NIFTY"):
+                  verified.append((sym, cl, fut_cl, prem, d1, score, label))
+
+          print(f"\nParsed {len(signals):,} symbols | skipped {skipped} rows")
+
+          # ── Spot-check printout ─────────────────────────────────────
+          print("\nSpot-check (SPOT cl vs futures fut_cl):")
+          print(f"  {'Symbol':<14} {'cl (SPOT)':>12} {'fut_cl':>10} {'basis%':>8} {'d1%':>7} {'score':>7} {'label'}")
+          print(f"  {'-'*75}")
+          for sym, cl, fut, prem, d1, score, label in verified:
+              print(f"  {sym:<14} {cl:>12.2f} {str(fut):>10} {prem:>8} {d1:>7} {score:>7} {label}")
+
+          # ── Carry forward other fields from existing file ───────────
+          # Read the existing fno_signals.json so we preserve fiiDiiHistory,
+          # bulkDeals, blockDeals, insiderData, pcr — fields that are updated
+          # by other workflows. We only overwrite signals + meta.
+          existing_path = "data/fno_signals.json"
+          existing = {}
+          if os.path.exists(existing_path):
+              try:
+                  with open(existing_path) as f:
+                      existing = json.load(f)
+                  print(f"\nLoaded existing file — preserving fiiDiiHistory, bulkDeals, etc.")
+              except Exception as e:
+                  print(f"Warning: could not read existing file: {e}")
+
+          # ── Build final output — matches production schema exactly ──
+          output = {
+              "signals"        : signals,
+              # Preserve other workflow-managed fields; fall back to empty defaults
+              "fiiDii"         : existing.get("fiiDii", {}),
+              "fiiDiiHistory"  : existing.get("fiiDiiHistory", []),
+              "bulkDeals"      : existing.get("bulkDeals", []),
+              "blockDeals"     : existing.get("blockDeals", []),
+              "insiderData"    : existing.get("insiderData", []),
+              "pcr"            : existing.get("pcr", {}),
+              # meta — matches production schema
+              "meta": {
+                  "date"              : date_iso,
+                  "latestDate"        : date_label,
+                  "updatedAt"         : datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
+                  "stockCount"        : len(signals),
+                  "files"             : [date_label],
+                  "version"           : "V10",
+                  # Note for debugging — remove if you want a cleaner file
+                  "priceNote"         : "cl = underlying spot close (FOVOLT col[2]). NOT futures price.",
+              },
+          }
+
+          os.makedirs(os.path.dirname(existing_path), exist_ok=True)
+          with open(existing_path, "w") as f:
+              json.dump(output, f, separators=(",", ":"))
+
+          size_kb = os.path.getsize(existing_path) / 1024
+          print(f"\n✅ Written → {existing_path}  ({size_kb:.1f} KB)")
+          print(f"   {len(signals):,} symbols | date={date_label}")
+          print(f"\n   SUNPHARMA sanity check:")
+          sp = signals.get("SUNPHARMA")
+          if sp:
+              print(f"   cl={sp['cl']}  (should be ~1823, not 1717)")
+              print(f"   pr={sp['pr']}  prem={sp['prem']}  vol={sp['vol']}")
           PYEOF
+
+      # ── Commit & push ───────────────────────────────────────────────────────
+      - name: Commit updated fno_signals.json
+        run: |
+          git config user.name  "smart-money-bot"
+          git config user.email "smart-money-bot@users.noreply.github.com"
+          git add data/fno_signals.json
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "data: F&O signals $(date -u +'%d-%b-%Y %H:%M UTC') [spot-close-fix]"
+            git push
+          fi
