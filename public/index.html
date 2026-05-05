@@ -2263,7 +2263,7 @@ function updateFreshness(){
 
   // Dot colour in freshness strip: green if 0 missed, amber if 1, red if 2+
   const dot=document.getElementById('foDot');
-  if(dot) dot.className='fresh-dot '+(missedDays<=0?'fresh-green':missedDays===1?'fresh-amber':'fresh-red');
+  if(dot) dot.className='fresh-dot '+(missedDays<=0||(missedDays===1&&isManual)?'fresh-green':missedDays===1?'fresh-amber':'fresh-red');
 
   // Trends dot
   const histCount=STATE.foData.historyCount||STATE.foData.daysAvailable||
