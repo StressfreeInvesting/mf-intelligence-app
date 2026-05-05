@@ -313,11 +313,35 @@ button{cursor:pointer;font-family:inherit}
 .outcome-time{background:rgba(59,158,255,.12);color:var(--blue)}
 .outcome-manual{background:var(--border);color:var(--text-muted)}
 .fund-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;margin-bottom:16px}
-.fund-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px;text-align:center;transition:border-color .15s}
-.fund-card:hover{border-color:var(--accent)}
+.fund-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px;text-align:center;transition:border-color .15s,box-shadow .15s;cursor:pointer}
+.fund-card:hover{border-color:var(--accent);box-shadow:0 0 0 2px rgba(0,229,153,.12)}
+.fund-card:active{transform:scale(.97)}
 .fund-card-name{font-size:.7rem;font-weight:600;color:var(--text);margin-bottom:4px}
 .fund-card-count{font-size:1.1rem;font-weight:700;color:var(--accent)}
 .fund-card-label{font-size:.62rem;color:var(--text-muted)}
+.fund-card-tap{font-size:.58rem;color:var(--accent);margin-top:3px;opacity:.7}
+/* Fund Holdings Modal */
+.fh-modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:990;display:flex;align-items:flex-end;justify-content:center}
+@media(min-width:600px){.fh-modal-backdrop{align-items:center}}
+.fh-modal{background:var(--surface);border:1px solid var(--border);border-radius:16px 16px 0 0;padding:0;width:100%;max-width:560px;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 -4px 40px rgba(0,0,0,.6)}
+@media(min-width:600px){.fh-modal{border-radius:14px;max-height:82vh}}
+.fh-modal-header{display:flex;align-items:center;gap:10px;padding:14px 16px 10px;border-bottom:1px solid var(--border);flex-shrink:0}
+.fh-modal-title{font-size:.95rem;font-weight:700;flex:1}
+.fh-modal-close{background:none;border:none;color:var(--text-muted);font-size:1.2rem;cursor:pointer;padding:2px 6px;border-radius:6px}
+.fh-modal-close:hover{color:var(--text);background:var(--surface2)}
+.fh-modal-body{overflow-y:auto;padding:12px 16px 20px;flex:1}
+.fh-fund-select{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.fh-fund-pill{padding:4px 10px;border-radius:20px;border:1px solid var(--border);background:var(--surface2);color:var(--text-muted);font-size:.7rem;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap}
+.fh-fund-pill.active{background:var(--accent);color:var(--pill-active-text);border-color:var(--accent)}
+.fh-fund-pill:hover:not(.active){border-color:var(--accent);color:var(--accent)}
+.fh-holdings-grid{display:grid;grid-template-columns:1fr 1fr;gap:3px}
+.fh-row{display:grid;grid-template-columns:20px 1fr auto auto;gap:4px 8px;align-items:center;padding:6px 0;border-bottom:1px solid rgba(128,128,128,.08);font-size:.78rem}
+.fh-rank{font-size:.65rem;color:var(--text-muted);font-family:'Space Mono',monospace}
+.fh-stock{font-weight:700;font-family:'Space Mono',monospace;font-size:.8rem}
+.fh-sec{font-size:.65rem;color:var(--text-muted)}
+.fh-pct{font-family:'Space Mono',monospace;font-size:.75rem;font-weight:700;text-align:right;color:var(--accent)}
+.fh-chg{font-size:.65rem;text-align:right}
+.fh-section-label{font-size:.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.07em;margin:10px 0 4px}
 .lpc{display:inline-flex;align-items:center;padding:2px 7px;border-radius:10px;font-size:.67rem;font-weight:700;font-family:'Space Mono',monospace;white-space:nowrap}
 .lpc-up{background:rgba(0,229,153,.12);color:var(--green)}
 .lpc-dn{background:rgba(255,69,96,.12);color:var(--red)}
@@ -991,11 +1015,15 @@ function disclosureBadge(month){
 }
 function livePriceChip(nameOrSym,compact=false){
   const q=getQ(nameOrSym),fo=getFO(toSym(nameOrSym));
+  const isLive=!!q?.price;
   const price=q?.price??fo?.cl??null,changePct=q?.changePct??(fo?parseFloat(fo.d1):null);
   if(!price)return'';
   const up=(changePct??0)>=0,arrow=up?'▲':'▼',pct=Math.abs(changePct??0).toFixed(2),fmtP=price.toLocaleString('en-IN',{maximumFractionDigits:2});
-  if(compact)return`<span class="lpc ${up?'lpc-up':'lpc-dn'}">₹${fmtP} ${arrow}${pct}%</span>`;
-  return`<span class="lpc-price">₹${fmtP}</span><span class="lpc ${up?'lpc-up':'lpc-dn'}">${arrow}${pct}%</span>`;
+  const srcLabel=isLive
+    ?`<span title="Live market price — refreshed every 60s" style="font-size:.55rem;background:rgba(0,229,153,.15);color:var(--green);border-radius:3px;padding:0 3px;margin-left:2px;font-weight:700;letter-spacing:.04em;vertical-align:middle">LIVE</span>`
+    :`<span title="Last F&O session close price — not a live quote" style="font-size:.55rem;background:rgba(255,184,48,.12);color:var(--amber);border-radius:3px;padding:0 3px;margin-left:2px;font-weight:700;letter-spacing:.04em;vertical-align:middle">F&O cls</span>`;
+  if(compact)return`<span class="lpc ${up?'lpc-up':'lpc-dn'}">₹${fmtP} ${arrow}${pct}%${srcLabel}</span>`;
+  return`<span class="lpc-price">₹${fmtP}</span><span class="lpc ${up?'lpc-up':'lpc-dn'}">${arrow}${pct}%</span>${srcLabel}`;
 }
 
 /* ═══════════════════════════════════════════
@@ -1008,8 +1036,8 @@ function renderMarket(){
   const el=document.getElementById('fundCards');
   if(el){
     const total=Object.keys(HOLDINGS).length;
-    el.innerHTML=Object.entries(houseMap).sort((a,b)=>b[1]-a[1]).map(([h,n])=>`<div class="fund-card"><div class="fund-card-name">${h} MF</div><div class="fund-card-count">${n}</div><div class="fund-card-label">Active picks</div></div>`).join('')+
-    `<div class="fund-card" style="border-style:dashed"><div class="fund-card-name">Total</div><div class="fund-card-count">${total}</div><div class="fund-card-label">Funds tracked</div></div>`;
+    el.innerHTML=Object.entries(houseMap).sort((a,b)=>b[1]-a[1]).map(([h,n])=>`<div class="fund-card" onclick="openFundModal('${h}')" title="Tap to see ${h} MF holdings"><div class="fund-card-name">${h} MF</div><div class="fund-card-count">${n}</div><div class="fund-card-label">Active picks</div><div class="fund-card-tap">👁 View holdings</div></div>`).join('')+
+    `<div class="fund-card" style="border-style:dashed;cursor:default"><div class="fund-card-name">Total</div><div class="fund-card-count">${total}</div><div class="fund-card-label">Funds tracked</div></div>`;
   }
   // Show foData date in market pulse chips
   if(STATE.foData?.meta){
@@ -1025,6 +1053,156 @@ function renderMarket(){
   renderFiiDiiChart();
   renderFiiDivergenceAlert();
   renderDeliverySpikes();
+}
+
+/* ═══════════════════════════════════════════
+   FUND HOLDINGS MODAL
+═══════════════════════════════════════════ */
+function openFundModal(house){
+  // Gather all funds for this house
+  const fundIds=Object.keys(HOLDINGS).filter(fid=>HOLDINGS[fid].house===house);
+  if(!fundIds.length)return;
+  // Remove existing modal
+  document.getElementById('fundHoldingsModal')?.remove();
+  const backdrop=document.createElement('div');
+  backdrop.id='fundHoldingsModal';
+  backdrop.className='fh-modal-backdrop';
+  backdrop.innerHTML=`<div class="fh-modal" id="fhModalInner">
+    <div class="fh-modal-header">
+      <div>
+        <div class="fh-modal-title">🏦 ${house} Mutual Fund</div>
+        <div style="font-size:.68rem;color:var(--text-muted);margin-top:2px">${fundIds.length} fund${fundIds.length>1?'s':''} · Feb 2026 holdings (SEBI disclosed)</div>
+      </div>
+      <button class="fh-modal-close" onclick="document.getElementById('fundHoldingsModal').remove()">✕</button>
+    </div>
+    <div class="fh-modal-body" id="fhModalBody">
+      ${fundIds.length>1?`<div class="fh-fund-select" id="fhFundTabs">
+        ${fundIds.map((fid,i)=>`<button class="fh-fund-pill${i===0?' active':''}" onclick="renderFundHoldings('${fid}',this)">${HOLDINGS[fid].name.replace(house+' ','').replace('Fund','').trim()||HOLDINGS[fid].name}</button>`).join('')}
+        <button class="fh-fund-pill" onclick="renderFundCompare('${fundIds.join(',')}',this)" style="border-color:var(--purple);color:var(--purple)">⚖ Compare</button>
+      </div>`:''}
+      <div id="fhHoldingsContent"></div>
+    </div>
+  </div>`;
+  document.body.appendChild(backdrop);
+  backdrop.addEventListener('click',e=>{if(e.target===backdrop)backdrop.remove();});
+  // Render first fund's holdings
+  renderFundHoldings(fundIds[0]);
+}
+
+function renderFundHoldings(fundId, pillEl){
+  // Update pill active state
+  document.querySelectorAll('.fh-fund-pill').forEach(p=>p.classList.remove('active'));
+  if(pillEl)pillEl.classList.add('active');
+  const fund=HOLDINGS[fundId];if(!fund)return;
+  const container=document.getElementById('fhHoldingsContent');if(!container)return;
+  const janMap={};fund.jan.forEach(h=>janMap[h.s]=h);
+  // Annotate feb holdings with change vs jan
+  const holdings=fund.feb.map(h=>{
+    const j=janMap[h.s];
+    const isNew=!j;
+    const diff=j?+(h.pct-j.pct).toFixed(2):null;
+    return{...h,isNew,diff};
+  }).sort((a,b)=>b.pct-a.pct);
+  // Summary stats
+  const newEntries=holdings.filter(h=>h.isNew).length;
+  const increased=holdings.filter(h=>!h.isNew&&h.diff>0.1).length;
+  const exited=fund.jan.filter(j=>!fund.feb.find(b=>b.s===j.s));
+  const navStr=fund.latestNav?`<span style="color:var(--text-muted);font-size:.68rem">NAV ₹${fund.latestNav.toLocaleString('en-IN',{maximumFractionDigits:2})} (${fund.navDate||'recent'})</span>`:'';
+  container.innerHTML=`
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;padding:8px 10px;background:var(--surface2);border-radius:8px;border:1px solid var(--border)">
+      <div style="text-align:center;min-width:60px"><div style="font-size:.62rem;color:var(--text-muted)">AUM</div><div style="font-size:.8rem;font-weight:700;color:var(--accent)">₹${((fund.aum||0)/100).toFixed(0)}k Cr</div></div>
+      <div style="text-align:center;min-width:60px"><div style="font-size:.62rem;color:var(--text-muted)">Holdings</div><div style="font-size:.8rem;font-weight:700">${holdings.length}</div></div>
+      <div style="text-align:center;min-width:60px"><div style="font-size:.62rem;color:var(--green)">New</div><div style="font-size:.8rem;font-weight:700;color:var(--green)">${newEntries}</div></div>
+      <div style="text-align:center;min-width:60px"><div style="font-size:.62rem;color:var(--blue)">Increased</div><div style="font-size:.8rem;font-weight:700;color:var(--blue)">${increased}</div></div>
+      <div style="text-align:center;min-width:60px"><div style="font-size:.62rem;color:var(--red)">Exited</div><div style="font-size:.8rem;font-weight:700;color:var(--red)">${exited.length}</div></div>
+      ${navStr?`<div style="display:flex;align-items:center;margin-left:auto">${navStr}</div>`:''}
+    </div>
+    <div style="display:grid;grid-template-columns:18px 1fr auto 56px 52px;gap:3px 8px;font-size:.6rem;color:var(--text-muted);font-weight:700;padding:4px 0 6px;border-bottom:1px solid var(--border);text-transform:uppercase;letter-spacing:.05em">
+      <span>#</span><span>Stock</span><span>Sector</span><span style="text-align:right">Alloc %</span><span style="text-align:right">Δ Jan</span>
+    </div>
+    ${holdings.map((h,i)=>{
+      const diffColor=h.isNew?'var(--green)':h.diff>0.05?'var(--green)':h.diff<-0.05?'var(--red)':'var(--text-muted)';
+      const diffLabel=h.isNew?'NEW':h.diff!=null?(h.diff>=0?'+':'')+h.diff.toFixed(2)+'%':'—';
+      const pBar=Math.min(100,Math.round(h.pct/holdings[0].pct*100));
+      const cmp=livePriceChip(h.s,true);
+      return`<div style="display:grid;grid-template-columns:18px 1fr auto 56px 52px;gap:3px 8px;align-items:center;padding:6px 0;border-bottom:1px solid rgba(128,128,128,.06)${h.isNew?';background:rgba(0,229,153,.03)':''}">
+        <span style="font-size:.65rem;color:var(--text-muted);font-family:'Space Mono',monospace">${i+1}</span>
+        <div style="min-width:0">
+          <div style="font-weight:700;font-family:'Space Mono',monospace;font-size:.8rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${h.s}</div>
+          <div style="display:flex;align-items:center;gap:4px;margin-top:2px">${cmp||'<span style="font-size:.62rem;color:var(--text-muted)">—</span>'}</div>
+          <div style="height:2px;background:var(--border);border-radius:1px;margin-top:3px;width:${pBar}%;background:var(--accent);opacity:.5"></div>
+        </div>
+        <div style="font-size:.65rem;color:var(--text-muted);white-space:nowrap">${h.sec||'—'}</div>
+        <div style="font-family:'Space Mono',monospace;font-size:.75rem;font-weight:700;text-align:right;color:var(--accent)">${h.pct.toFixed(2)}%</div>
+        <div style="font-size:.72rem;font-weight:700;text-align:right;color:${diffColor}">${diffLabel}</div>
+      </div>`;
+    }).join('')}
+    ${exited.length?`<div class="fh-section-label" style="color:var(--red)">↓ Exited This Month (${exited.length})</div>
+      ${exited.map(h=>`<div style="display:grid;grid-template-columns:18px 1fr auto 56px 52px;gap:3px 8px;align-items:center;padding:5px 0;border-bottom:1px solid rgba(128,128,128,.06);opacity:.7">
+        <span></span>
+        <div><span style="font-weight:700;font-family:'Space Mono',monospace;font-size:.78rem;text-decoration:line-through;color:var(--red)">${h.s}</span></div>
+        <div style="font-size:.65rem;color:var(--text-muted)">${h.sec||'—'}</div>
+        <div style="font-family:'Space Mono',monospace;font-size:.72rem;text-align:right;color:var(--red)">${h.pct.toFixed(2)}%</div>
+        <div style="font-size:.72rem;text-align:right;color:var(--red)">SOLD</div>
+      </div>`).join('')}`:''
+    }
+    <div style="margin-top:12px;padding:8px 10px;background:var(--surface2);border-radius:6px;border:1px solid var(--border);font-size:.68rem;color:var(--text-muted)">
+      ⚠ <strong style="color:var(--amber)">Alloc % ≠ buy price.</strong> These are portfolio weight percentages from the Feb 2026 SEBI disclosure.
+      The CMP shown next to each stock is today's price (or last F&O close), <em>not</em> what the fund paid.
+    </div>`;
+}
+
+function renderFundCompare(fundIdsStr, pillEl){
+  document.querySelectorAll('.fh-fund-pill').forEach(p=>p.classList.remove('active'));
+  if(pillEl)pillEl.classList.add('active');
+  const fundIds=fundIdsStr.split(',');
+  const container=document.getElementById('fhHoldingsContent');if(!container)return;
+  // Collect all stocks held by any fund in this house
+  const stockMap={};
+  fundIds.forEach(fid=>{
+    const f=HOLDINGS[fid];if(!f)return;
+    f.feb.forEach(h=>{
+      if(!stockMap[h.s])stockMap[h.s]={sec:h.sec,funds:{}};
+      stockMap[h.s].funds[fid]=h.pct;
+    });
+  });
+  const stocks=Object.keys(stockMap).sort((a,b)=>{
+    const aSum=fundIds.reduce((s,fid)=>s+(stockMap[a].funds[fid]||0),0);
+    const bSum=fundIds.reduce((s,fid)=>s+(stockMap[b].funds[fid]||0),0);
+    return bSum-aSum;
+  });
+  const shortNames=fundIds.map(fid=>HOLDINGS[fid].name.split(' ').slice(-2).join(' '));
+  container.innerHTML=`
+    <div style="font-size:.68rem;color:var(--text-muted);margin-bottom:10px">All ${stocks.length} stocks held by any ${HOLDINGS[fundIds[0]].house} fund. Blank = not held.</div>
+    <div style="overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse;font-size:.72rem">
+      <thead>
+        <tr style="border-bottom:1px solid var(--border)">
+          <th style="text-align:left;padding:4px 6px;color:var(--text-muted);font-weight:700;font-size:.62rem">Stock</th>
+          ${fundIds.map((fid,i)=>`<th style="text-align:right;padding:4px 6px;color:var(--text-muted);font-weight:700;font-size:.58rem;min-width:52px">${shortNames[i]}</th>`).join('')}
+        </tr>
+      </thead>
+      <tbody>
+        ${stocks.map(s=>{
+          const heldCount=fundIds.filter(fid=>stockMap[s].funds[fid]).length;
+          const allHold=heldCount===fundIds.length;
+          return`<tr style="border-bottom:1px solid rgba(128,128,128,.06)${allHold?';background:rgba(0,229,153,.04)':''}">
+            <td style="padding:5px 6px">
+              <div style="font-weight:700;font-family:'Space Mono',monospace">${s}</div>
+              <div style="font-size:.6rem;color:var(--text-muted)">${stockMap[s].sec||''}</div>
+            </td>
+            ${fundIds.map(fid=>{
+              const pct=stockMap[s].funds[fid];
+              return pct?`<td style="text-align:right;padding:5px 6px;font-family:'Space Mono',monospace;font-weight:700;color:var(--accent)">${pct.toFixed(2)}%</td>`
+                :`<td style="text-align:right;padding:5px 6px;color:var(--border)">—</td>`;
+            }).join('')}
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table></div>
+    <div style="margin-top:10px;font-size:.68rem;color:var(--text-muted);padding:6px 8px;background:var(--surface2);border-radius:6px;border:1px solid var(--border)">
+      <span style="color:var(--green)">Green rows</span> = held by all funds in this house · Values are allocation % of each fund's AUM
+    </div>`;
 }
 
 function renderFiiDiiChart(){
@@ -1314,14 +1492,20 @@ function renderIntelMF(tab){
     const conf=confluenceBadge(prob?.sources||0);
     const isWatched=STATE.watchlist.has(stock),isReducing=tab==='reducing',isExit=tab==='exits';
     const fundLabel=Array.isArray(item.funds)?item.funds.map(f=>typeof f==='string'?f:f.fund||f.house||'').join(' · '):(item.fund||'');
+    // Build CMP row — always shown at the bottom of the card for context
+    const cmpChip=livePriceChip(stock,true);
+    const cmpRow=cmpChip?`<div style="margin-top:7px;padding-top:7px;border-top:1px dashed var(--border);display:flex;align-items:center;gap:6px;font-size:.68rem;color:var(--text-muted)">
+      <span title="Current market price — NOT the fund's purchase price">📊 CMP:</span>${cmpChip}
+      <span style="color:var(--border)">|</span><span style="font-size:.62rem;font-style:italic;color:var(--text-muted)">Fund's buy price ≠ CMP</span>
+    </div>`:''
     let rightCol='';
-    if(isReducing){const diff=(parseFloat(item.from)-parseFloat(item.to)).toFixed(1);rightCol=`<div><div class="card-col-label">Allocation Change</div><div class="card-col-val" style="color:var(--red)">${item.from}% → ${item.to}%</div><div style="font-size:.68rem;color:var(--red);margin-top:3px">-${diff}% trimmed</div></div>`;}
-    else if(isExit){rightCol=`<div><div class="card-col-label">Was Held At</div><div class="card-col-val" style="color:var(--red)">${item.pct}%</div></div>`;}
-    else{const change=item.diff?parseFloat(item.diff):(item.pct||0),aum=item.v?`₹${Math.round(item.v).toLocaleString()} Cr`:'—';rightCol=`<div><div class="card-col-label">Alloc Change</div><div class="card-col-val" style="color:${change>=0?'var(--green)':'var(--red)'}">${change>=0?'+':''}${parseFloat(change).toFixed(2)}%</div><div class="card-col-label" style="margin-top:8px">AUM Weight</div><div class="card-col-val">${aum}</div></div>`;}
+    if(isReducing){const diff=(parseFloat(item.from)-parseFloat(item.to)).toFixed(1);rightCol=`<div><div class="card-col-label">Alloc Change</div><div class="card-col-val" style="color:var(--red)">${item.from}% → ${item.to}%</div><div style="font-size:.68rem;color:var(--red);margin-top:3px">-${diff}% trimmed</div></div>`;}
+    else if(isExit){rightCol=`<div><div class="card-col-label" title="% of fund AUM it held — not a price">Was Held At (alloc %)</div><div class="card-col-val" style="color:var(--red)">${item.pct}% of AUM</div></div>`;}
+    else{const change=item.diff?parseFloat(item.diff):(item.pct||0),aum=item.v?`₹${Math.round(item.v).toLocaleString()} Cr`:'—';rightCol=`<div><div class="card-col-label" title="Change in fund's allocation % — not a price">Alloc Δ (% AUM)</div><div class="card-col-val" style="color:${change>=0?'var(--green)':'var(--red)'}">${change>=0?'+':''}${parseFloat(change).toFixed(2)}%</div><div class="card-col-label" style="margin-top:8px">₹ Deployed</div><div class="card-col-val">${aum}</div></div>`;}
     const probBadge=prob&&prob.total>=75?`<span class="badge badge-green" style="font-family:'Space Mono',monospace">P:${prob.total}</span>`:prob&&prob.total>=60?`<span class="badge badge-amber" style="font-family:'Space Mono',monospace">P:${prob.total}</span>`:'';
     return`<div class="card"><div class="card-accent ${isExit||isReducing?'red':''}"></div>
       <div class="card-header">
-        <div class="card-title">${stock} ${livePriceChip(stock,true)}</div>
+        <div class="card-title">${stock}</div>
         <span class="badge badge-sector">${item.sec||''}</span>${disc}${conf}${probBadge}
         <div class="card-header-actions">
           <button class="hbtn-link" onclick="window.open('${nseEquity(sym)}','_blank')">↗ NSE</button>
@@ -1331,6 +1515,7 @@ function renderIntelMF(tab){
         </div>
       </div>
       <div class="card-grid"><div><div class="card-col-label">${isExit?'Exited by':isReducing?'Reducing:':'Buying fund'}</div><div class="card-col-val" style="font-size:.8rem">${fundLabel}</div></div>${rightCol}</div>
+      ${cmpRow}
     </div>`;
   }).join('');
 }
@@ -3222,6 +3407,54 @@ function renderGuide(){
       <strong style="color:var(--text)">F&O Signals</strong> — Auto-fetched each trading day via GitHub Actions workflow. If today's data is unavailable, last valid day's signals are shown with an amber banner.<br>
       <strong style="color:var(--text)">Nifty / BankNifty</strong> — Live, refreshed every 60 seconds during market hours.<br>
       <div style="margin-top:6px;padding:6px 10px;background:var(--surface2);border-radius:6px;border:1px solid var(--border)">If you see an amber "F&O signals unavailable" banner, the data is from the previous trading day. Rankings still work — F&O momentum scores will be slightly stale but MF conviction and trend scores are unaffected.</div>
+    </div>
+  </div>
+
+  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">UNDERSTANDING PRICES — AVOID CONFUSION</div>
+  <div class="card" style="margin-bottom:12px">
+    <div style="font-size:.78rem;font-weight:700;margin-bottom:10px;color:var(--amber)">⚠ There are 3 different types of prices in this app. They mean very different things.</div>
+    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.9">
+
+      <div style="padding:8px 10px;background:rgba(0,229,153,.06);border:1px solid rgba(0,229,153,.2);border-radius:8px;margin-bottom:8px">
+        <div style="font-weight:700;color:var(--green);margin-bottom:3px">① Live CMP — labelled <span style="background:rgba(0,229,153,.15);padding:0 4px;border-radius:3px;font-size:.65rem">LIVE</span></div>
+        <div>The current market price, refreshed every 60 seconds during market hours. This is what you'd pay if you buy right now. Shown next to stock names in most cards when your Vercel/NSE connection is active.</div>
+      </div>
+
+      <div style="padding:8px 10px;background:rgba(255,184,48,.06);border:1px solid rgba(255,184,48,.2);border-radius:8px;margin-bottom:8px">
+        <div style="font-weight:700;color:var(--amber);margin-bottom:3px">② F&O Session Close — labelled <span style="background:rgba(255,184,48,.12);padding:0 4px;border-radius:3px;font-size:.65rem">F&O cls</span></div>
+        <div>The closing price from the last F&O data upload (via GitHub Actions). Used when live quotes aren't available. It is the previous session's close, <strong style="color:var(--text)">not today's live price.</strong> Can be hours or days old depending on when data was last pushed.</div>
+      </div>
+
+      <div style="padding:8px 10px;background:rgba(255,69,96,.06);border:1px solid rgba(255,69,96,.2);border-radius:8px;margin-bottom:8px">
+        <div style="font-weight:700;color:var(--red);margin-bottom:3px">③ MF Allocation % — <em>not a price at all</em></div>
+        <div>In Intelligence → MF Buying / New Entry / Exits and in the Fund Holdings modal, you'll see values like <strong style="color:var(--text)">4.2% or ₹1,800 Cr</strong>. These are the <strong style="color:var(--text)">percentage of the fund's AUM</strong> allocated to that stock, and the rupee value of that holding — <strong style="color:var(--red)">NOT the price the fund paid.</strong> SEBI disclosures do not reveal the exact buy price of the fund.</div>
+      </div>
+
+      <div style="padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px">
+        <div style="font-weight:700;color:var(--text);margin-bottom:3px">④ Your Entry Price — in Portfolio tab</div>
+        <div>The price at which <em>you</em> recorded a trade. Shown as "Entry" in open trades. The P&L shown below it is calculated using the F&O session close (or live CMP if available) vs your entry. This is your personal trade record — it has nothing to do with what any fund paid.</div>
+      </div>
+
+    </div>
+    <div style="margin-top:12px;padding:8px 10px;background:var(--surface2);border-radius:6px;border:1px solid var(--border);font-size:.72rem;color:var(--text-muted)">
+      <strong style="color:var(--text)">Quick rule of thumb:</strong> If you see <strong>%</strong> next to a value → it's an allocation weight, not a price. If you see <strong>₹</strong> with a <span style="background:rgba(0,229,153,.15);color:var(--green);padding:0 3px;border-radius:2px;font-size:.65rem">LIVE</span> or <span style="background:rgba(255,184,48,.12);color:var(--amber);padding:0 3px;border-radius:2px;font-size:.65rem">F&O cls</span> badge → it's a market price. If you see ₹ under "Entry" in Portfolio → it's your personal buy price.
+    </div>
+  </div>
+
+  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">HOME TAB — FUND CARDS</div>
+  <div class="card" style="margin-bottom:16px">
+    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.8">
+      <strong style="color:var(--text)">Tap any fund house card</strong> on the Home tab (Fund Coverage section) to open a full holdings breakdown for that house.<br><br>
+      <div style="padding:6px 10px;background:var(--surface2);border-radius:6px;border:1px solid var(--border);margin-bottom:8px">
+        <strong style="color:var(--text)">Inside the holdings modal you'll find:</strong>
+        <div style="margin-top:6px">• Full list of stocks held, sorted by allocation %</div>
+        <div>• Jan→Feb change for each position (NEW / +x% / -x%)</div>
+        <div>• Stocks exited this month (highlighted in red, struck through)</div>
+        <div>• If the house runs multiple funds, use the fund pills to switch between them</div>
+        <div>• ⚖ Compare button — shows all funds side by side for the same house</div>
+        <div>• Live CMP or F&O close next to each holding for quick reference</div>
+      </div>
+      <strong style="color:var(--amber)">Remember:</strong> The allocation % shown inside the modal is the fund's portfolio weight — it is not the purchase price. The fund's actual buy price is not disclosed by SEBI.
     </div>
   </div>`;
 }
