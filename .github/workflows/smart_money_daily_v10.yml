@@ -160,9 +160,11 @@ jobs:
                       s = signals[chk]
                       print(f"  CHECK {chk}: cl={s['cl']}  prem={s['prem']}  d1={s['d1']}")
 
+              # Store basename BEFORE archiving (used later for date extraction)
+              fovolt_basename = os.path.basename(fovolt_path)
               # Archive the processed file
-              shutil.move(fovolt_path, os.path.join(archive_dir, os.path.basename(fovolt_path)))
-              print(f"  Archived {os.path.basename(fovolt_path)} → uploads/processed/")
+              shutil.move(fovolt_path, os.path.join(archive_dir, fovolt_basename))
+              print(f"  Archived {fovolt_basename} → uploads/processed/")
 
           # ── Parse FII-DII CSV ─────────────────────────────────────
           # Real NSE FII-DII download format (fii-dii_DDMMYYYY.csv):
@@ -276,17 +278,22 @@ jobs:
               except Exception as e:
                   print(f"  Could not load existing: {e}")
 
-          # Determine fetch date from filename or today
+          # Determine fetch date — prefer actual date from FII-DII CSV data rows
+          # (these contain the real trading date, e.g. "04-May-2026"), then fall back
+          # to FOVOLT filename date, then today.
           upload_date_iso = datetime.utcnow().strftime('%Y-%m-%d')
-          if fovolt_files:
-              bname = os.path.basename(fovolt_files[-1])  # FOVOLT_DDMMYYYY.csv
+          if fiidii_files and fiidii_rows:
+              # Highest priority: actual date parsed from inside the FII-DII CSV
+              upload_date_iso = fiidii_rows[-1]['date']
+              print(f"  Date from FII-DII CSV rows: {upload_date_iso}")
+          elif fovolt_files and 'fovolt_basename' in dir():
+              # Fallback: parse from FOVOLT filename (FOVOLT_DDMMYYYY.csv)
               try:
-                  ds_part = bname.replace('FOVOLT_','').replace('.csv','')  # DDMMYYYY
+                  ds_part = fovolt_basename.replace('FOVOLT_','').replace('.csv','')  # DDMMYYYY
                   if len(ds_part) == 8:
                       upload_date_iso = f"{ds_part[4:8]}-{ds_part[2:4]}-{ds_part[0:2]}"
+                      print(f"  Date from FOVOLT filename: {upload_date_iso}")
               except: pass
-          elif fiidii_files and fiidii_rows:
-              upload_date_iso = fiidii_rows[-1]['date']
 
           fetch_date_str = datetime.strptime(upload_date_iso,'%Y-%m-%d').strftime('%d-%b-%Y')
           print(f"  Upload date resolved: {upload_date_iso} ({fetch_date_str})")
@@ -358,6 +365,11 @@ jobs:
           with open(fno_path, 'w') as fh:
               json.dump(output, fh, separators=(',',':'))
           print(f"Written fno_signals.json ({final_count} stocks, source=manual_upload)")
+          # Confirm key prices written correctly
+          for chk in ['SUNPHARMA','RELIANCE','HDFCBANK']:
+              if chk in final_signals:
+                  s = final_signals[chk]
+                  print(f"  WRITTEN {chk}: cl={s.get('cl')}  d1={s.get('d1')}")
 
           hist_path = f'data-repo/data/history/{upload_date_iso}.json'
           with open(hist_path, 'w') as fh:
