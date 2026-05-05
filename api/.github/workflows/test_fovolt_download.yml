@@ -1,30 +1,114 @@
-name: Test FOVOLT Download (27 Mar 2026)
+name: Fetch F&O Volatility Data (FOVOLT)
 
+# ─────────────────────────────────────────────────────────────
+#  Runs every trading day at 18:30 IST (13:00 UTC).
+#  NSE typically uploads FOVOLT by ~18:00 IST after market close.
+#  Manual trigger also available for backfill / debugging.
+# ─────────────────────────────────────────────────────────────
 on:
+  schedule:
+    - cron: "00 13 * * 1-5"   # Mon–Fri 18:30 IST
   workflow_dispatch:
+    inputs:
+      trade_date:
+        description: "Date to fetch (DD-Mon-YYYY, e.g. 05-May-2026). Leave blank for today."
+        required: false
+        default: ""
 
 jobs:
-  test-download:
+  fetch-fovolt:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     steps:
-      - name: Set up Python
+      # ── 1. Checkout repo so we can write the JSON output ──────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Python env ──────────────────────────────────────────────────────
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install requests
+        run: pip install requests pytz
 
-      - name: Test NSE FOVOLT download
+      # ── 3. Download + parse FOVOLT ─────────────────────────────────────────
+      - name: Download and parse FOVOLT
+        id: fovolt
+        env:
+          TRADE_DATE_INPUT: ${{ github.event.inputs.trade_date }}
         run: |
           python3 << 'PYEOF'
-          import requests, time, sys
+          import requests, time, sys, os, json, csv, io
+          from datetime import datetime, timezone
+          import pytz
 
+          # ────────────────────────────────────────────────────
+          # FOVOLT column layout (0-indexed)
+          # Reference: NSE archives — fo/FOVOLT_DDMMYYYY.csv
+          #
+          #  0  Date
+          #  1  Symbol
+          #  2  Underlying Close Price (A)        ← SPOT close — USE THIS
+          #  3  Underlying Prev Day Close (B)
+          #  4  Underlying Log Returns
+          #  5  Prev Day Underlying Volatility
+          #  6  Current Day Underlying Daily Vol
+          #  7  Underlying Annualised Volatility   ← annualised IV (underlying)
+          #  8  Futures Close Price (G)            ← FUTURES close (near-month)
+          #  9  Futures Prev Day Close (H)
+          # 10  Futures Log Returns
+          # 11  Prev Day Futures Volatility
+          # 12  Current Day Futures Daily Vol
+          # 13  Futures Annualised Volatility      ← annualised IV (futures)
+          # 14  Applicable Daily Volatility
+          # 15  Applicable Annualised Volatility   ← what NSE shows as "applicable IV"
+          #
+          # BUG THAT WAS FIXED:
+          #   Previous version read col[8] (Futures Close Price) as `cl`.
+          #   This gave the near-month futures price, NOT the equity spot price.
+          #   E.g. for RELIANCE on 27-Mar-2026:
+          #     col[8] → ₹1,717  (March futures, already in last-week roll-down)
+          #     col[2] → ₹1,823  (actual NSE spot close — correct)
+          # ────────────────────────────────────────────────────
+
+          COL_DATE              = 0
+          COL_SYMBOL            = 1
+          COL_UNDERLYING_CLOSE  = 2   # ← correct spot close (was wrongly col[8])
+          COL_UNDERLYING_IV_ANN = 7   # annualised IV of underlying
+          COL_FUTURES_CLOSE     = 8   # kept for reference / F&O basis calc
+          COL_FUTURES_IV_ANN    = 13  # annualised IV of futures
+          COL_APPLICABLE_IV_ANN = 15  # NSE's own "applicable" annualised IV
+
+          IST = pytz.timezone("Asia/Kolkata")
+
+          # ── Resolve trade date ───────────────────────────────────────────
+          date_input = os.environ.get("TRADE_DATE_INPUT", "").strip()
+          if date_input:
+              try:
+                  trade_dt = datetime.strptime(date_input, "%d-%b-%Y")
+              except ValueError:
+                  print(f"❌ Bad date format: '{date_input}'. Use DD-Mon-YYYY e.g. 05-May-2026")
+                  sys.exit(1)
+          else:
+              trade_dt = datetime.now(IST)
+
+          date_str_file = trade_dt.strftime("%d%m%Y")   # DDMMYYYY  → filename
+          date_str_label = trade_dt.strftime("%d-%b-%Y") # DD-Mon-YYYY → display
+
+          filename = f"FOVOLT_{date_str_file}.csv"
+          print(f"Target file : {filename}  ({date_str_label})")
+
+          # ── NSE session bootstrap ────────────────────────────────────────
           NSE_BASE = "https://www.nseindia.com"
           HEADERS = {
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+              "User-Agent": (
+                  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) "
+                  "Chrome/122.0.0.0 Safari/537.36"
+              ),
               "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
               "Accept-Language": "en-US,en;q=0.9",
               "Referer": "https://www.nseindia.com/",
@@ -33,47 +117,185 @@ jobs:
           session = requests.Session()
           session.headers.update(HEADERS)
 
-          print("Step 1: NSE homepage session...")
-          r = session.get(NSE_BASE, timeout=15)
+          print("\nStep 1: Bootstrap NSE homepage session …")
+          r = session.get(NSE_BASE, timeout=20)
           print(f"  HTTP {r.status_code} | cookies: {list(session.cookies.keys())}")
+          time.sleep(2)
+
+          print("Step 2: Warm up derivatives page …")
+          session.get(NSE_BASE + "/all-reports-derivatives", timeout=20)
           time.sleep(1)
 
-          print("Step 2: Derivatives page warmup...")
-          r2 = session.get(NSE_BASE + "/all-reports-derivatives", timeout=15)
-          print(f"  HTTP {r2.status_code}")
-          time.sleep(1)
-
-          print("Step 3: Download FOVOLT_27032026.csv...")
-          urls = [
-              "https://www.nseindia.com/content/fo/FOVOLT_27032026.csv",
-              "https://nsearchives.nseindia.com/content/fo/FOVOLT_27032026.csv",
+          # ── Try both CDN URLs ────────────────────────────────────────────
+          URLS = [
+              f"https://www.nseindia.com/content/fo/{filename}",
+              f"https://nsearchives.nseindia.com/content/fo/{filename}",
           ]
 
-          success = False
-          for url in urls:
-              print(f"  Trying: {url}")
+          raw_content = None
+          used_url = None
+
+          print(f"\nStep 3: Fetching {filename} …")
+          for url in URLS:
+              print(f"  → {url}")
               try:
-                  r3 = session.get(url, headers={"Referer": NSE_BASE + "/all-reports-derivatives"}, timeout=20)
-                  print(f"  HTTP {r3.status_code} | size: {len(r3.content):,} bytes")
-                  if r3.status_code == 200 and len(r3.content) > 5000:
-                      sample = r3.content[:500].decode("utf-8", errors="ignore")
-                      print(f"\n  First 500 chars of file:\n{sample}\n")
-                      # Count rows
-                      rows = r3.content.decode("utf-8", errors="ignore").strip().split("\n")
-                      print(f"  Total rows (including header): {len(rows)}")
-                      print(f"  ✅ SUCCESS — file downloaded correctly!")
-                      success = True
+                  resp = session.get(
+                      url,
+                      headers={"Referer": NSE_BASE + "/all-reports-derivatives"},
+                      timeout=25,
+                  )
+                  print(f"     HTTP {resp.status_code} | size: {len(resp.content):,} bytes")
+
+                  if resp.status_code == 200 and len(resp.content) > 5_000:
+                      raw_content = resp.content
+                      used_url = url
                       break
                   else:
-                      print(f"  Response preview: {r3.content[:200]}")
-              except Exception as e:
-                  print(f"  Error: {e}")
+                      preview = resp.content[:200].decode("utf-8", errors="replace")
+                      print(f"     Preview: {preview}")
 
-          if not success:
-              print("\n❌ All URLs failed.")
-              print("Possible reasons:")
-              print("  1. NSE hasn't archived 27-Mar-2026 yet")
-              print("  2. URL structure is different")
-              print("  3. Need different cookies/headers")
+              except Exception as exc:
+                  print(f"     Error: {exc}")
+
+          if raw_content is None:
+              print("\n❌ Could not download FOVOLT from either URL.")
+              print("Possible causes:")
+              print(f"  • NSE has not yet published {filename} (try after 18:15 IST)")
+              print("  • URL structure changed — check NSE derivatives archive page")
+              print("  • Cookies / session headers insufficient")
               sys.exit(1)
+
+          print(f"\n✅ Downloaded from: {used_url}")
+
+          # ── Parse CSV ────────────────────────────────────────────────────
+          text = raw_content.decode("utf-8", errors="ignore")
+          reader = csv.reader(io.StringIO(text))
+          header = next(reader)  # skip header row
+          print(f"\nCSV header: {header}")
+          print(f"  col[{COL_UNDERLYING_CLOSE}] = '{header[COL_UNDERLYING_CLOSE]}' ← spot close (correct)")
+          print(f"  col[{COL_FUTURES_CLOSE}]  = '{header[COL_FUTURES_CLOSE]}' ← futures close (NOT used as price)")
+
+          signals = {}
+          skipped  = 0
+
+          for row in reader:
+              if len(row) < 16:
+                  skipped += 1
+                  continue
+
+              sym = row[COL_SYMBOL].strip().upper()
+              if not sym:
+                  continue
+
+              def safe_float(val, default=None):
+                  try:
+                      return float(str(val).replace(",", "").strip())
+                  except (ValueError, TypeError):
+                      return default
+
+              underlying_close  = safe_float(row[COL_UNDERLYING_CLOSE])   # spot close ← FIXED
+              futures_close     = safe_float(row[COL_FUTURES_CLOSE])        # near-month futures close
+              underlying_iv_ann = safe_float(row[COL_UNDERLYING_IV_ANN])
+              futures_iv_ann    = safe_float(row[COL_FUTURES_IV_ANN])
+              applicable_iv_ann = safe_float(row[COL_APPLICABLE_IV_ANN])
+
+              if underlying_close is None:
+                  skipped += 1
+                  continue
+
+              # F&O basis: premium/discount of futures vs spot (%)
+              basis_pct = None
+              if futures_close and underlying_close:
+                  basis_pct = round((futures_close - underlying_close) / underlying_close * 100, 4)
+
+              signals[sym] = {
+                  # ── Price ──────────────────────────────────────────────
+                  "cl"              : round(underlying_close, 2),   # spot close — shown as "F&O cls" in UI
+                  "fut_cl"          : round(futures_close, 2) if futures_close else None,
+                  "basis_pct"       : basis_pct,                    # futures premium/discount vs spot
+
+                  # ── Volatility ─────────────────────────────────────────
+                  "iv_und_ann"      : round(underlying_iv_ann, 4) if underlying_iv_ann else None,
+                  "iv_fut_ann"      : round(futures_iv_ann, 4) if futures_iv_ann else None,
+                  "iv_applicable"   : round(applicable_iv_ann, 4) if applicable_iv_ann else None,
+
+                  # ── Signal score (placeholder — extend with your own logic) ──
+                  # Score range: roughly -3 (very bearish) to +3 (very bullish)
+                  # Positive basis + low IV → mild bullish; negative basis + high IV → bearish
+                  "score"           : _compute_signal_score(basis_pct, applicable_iv_ann),
+              }
+
+          def _compute_signal_score(basis_pct, iv_ann):
+              """
+              Simple heuristic signal score.  Replace with your own model.
+                basis_pct  >  0.3%  → futures premium (bullish tilt)   +1
+                basis_pct  < -0.3%  → futures discount (bearish tilt)   -1
+                iv_ann     > 50%    → elevated vol (risk)               -0.5 per 10% above 50
+              Returns float in approx range [-3, +3].
+              """
+              score = 0.0
+              if basis_pct is not None:
+                  if basis_pct > 0.3:
+                      score += min(basis_pct / 0.3, 2.0)   # cap at +2
+                  elif basis_pct < -0.3:
+                      score += max(basis_pct / 0.3, -2.0)  # cap at -2
+              if iv_ann is not None and iv_ann > 50:
+                  score -= (iv_ann - 50) / 20.0             # -0.5 per 10% excess vol; cap not applied here
+              return round(max(-3.0, min(3.0, score)), 2)
+
+          print(f"\nParsed {len(signals):,} symbols  |  skipped {skipped} rows")
+          if skipped > 0:
+              print(f"  (skipped rows had < 16 columns or missing underlying close)")
+
+          # ── Spot-check a few well-known symbols ─────────────────────────
+          CHECK = ["RELIANCE", "HDFCBANK", "INFY", "TCS", "NIFTY"]
+          print("\nSpot-check:")
+          for s in CHECK:
+              if s in signals:
+                  d = signals[s]
+                  print(
+                      f"  {s:15s}  spot_cl={d['cl']:>10.2f}  fut_cl={str(d.get('fut_cl','')):>10}  "
+                      f"basis={str(d.get('basis_pct','')):>7}%  iv={d.get('iv_applicable','')}  score={d['score']}"
+                  )
+
+          # ── Build output JSON ────────────────────────────────────────────
+          output = {
+              "date"         : date_str_label,
+              "generated_at" : datetime.now(timezone.utc).isoformat(),
+              "source_url"   : used_url,
+              "symbol_count" : len(signals),
+              # ── PRICE NOTE (for UI / debugging) ──────────────────────────
+              # "cl" in each signal is the UNDERLYING (SPOT) close from FOVOLT col[2].
+              # It is NOT the futures close price.
+              # The MF Intelligence UI labels this as "F&O cls" because it comes
+              # from the F&O dataset — but it IS the spot equity price, not futures.
+              "price_note"   : (
+                  "cl = Underlying spot close (FOVOLT col 2 / col A). "
+                  "fut_cl = Near-month futures close (FOVOLT col 8 / col G). "
+                  "These are different prices — do not confuse them."
+              ),
+              "signals"      : signals,
+          }
+
+          out_path = "public/fo_signals.json"
+          os.makedirs(os.path.dirname(out_path), exist_ok=True)
+          with open(out_path, "w") as f:
+              json.dump(output, f, separators=(",", ":"))
+
+          size_kb = os.path.getsize(out_path) / 1024
+          print(f"\n✅ Written → {out_path}  ({size_kb:.1f} KB)")
+          print(f"   {len(signals):,} symbols  |  date={date_str_label}")
           PYEOF
+
+      # ── 4. Commit & push updated JSON ─────────────────────────────────────
+      - name: Commit F&O signals JSON
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add public/fo_signals.json
+          if git diff --cached --quiet; then
+            echo "No changes to commit (file unchanged)."
+          else
+            git commit -m "chore: F&O signals update $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git push
+          fi
