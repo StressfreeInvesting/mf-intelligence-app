@@ -405,7 +405,6 @@ button{cursor:pointer;font-family:inherit}
 .portfolio-inner{padding-top:2px}
 
 /* ── LIVE DOT ── */
-.live-dot{width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;margin-right:4px;animation:pulse 2s infinite}
 @media(min-width:600px){.main{padding:20px 24px}}
 @media(max-width:400px){.index-tiles{grid-template-columns:1fr}}
 
@@ -495,8 +494,7 @@ button{cursor:pointer;font-family:inherit}
     <div class="header-top-row">
       <div class="logo">MF<span>Intelligence</span> <span style="font-size:.6rem;color:var(--text-muted);font-weight:400;font-family:'Space Mono',monospace">V10</span></div>
       <div class="header-right">
-        <span class="live-dot"></span>
-        <span id="quotesAge" class="quotes-age"></span>
+        <span id="foDataBadge" style="font-size:.62rem;color:var(--text-muted);font-family:'Space Mono',monospace;white-space:nowrap"></span>
         <button id="refreshBtn" class="theme-btn" onclick="manualRefresh(this)" title="Refresh data from GitHub">↺ Refresh</button>
         
       </div>
@@ -824,7 +822,7 @@ const NMAP={"ICICI Bank":"ICICIBANK","HDFC Bank":"HDFCBANK","SBI":"SBIN","Axis B
 const INDEX_SYMS=new Set(["NIFTY","BANKNIFTY","SENSEX","FINNIFTY","NIFTYNXT50","MIDCPNIFTY","BANKEX","SX40","SENSEX50"]);
 
 function toSym(name){return NMAP[name]||name.toUpperCase().replace(/\s+/g,'');}
-function getQ(n){return STATE.quotes[toSym(n)]||STATE.quotes[n.toUpperCase()]||null;}
+function getQ(n){return null;}// Live quotes disabled — all prices from FOVOLT only
 function getFO(sym){return STATE.foData?.signals?.[sym]||null;}
 function fmt(n){return n!=null?Number(n).toLocaleString('en-IN',{maximumFractionDigits:2}):'—';}
 
@@ -1092,14 +1090,12 @@ function priceTrio(fo, d1){
 }
 
 function livePriceChip(nameOrSym,compact=false){
-  const q=getQ(nameOrSym),fo=getFO(toSym(nameOrSym));
-  const isLive=!!q?.price;
-  const price=q?.price??fo?.cl??null,changePct=q?.changePct??(fo?parseFloat(fo.d1):null);
+  // Price is ALWAYS sourced from FOVOLT fo.cl — never from live quotes
+  const fo=getFO(toSym(nameOrSym));
+  const price=fo?.cl??null,changePct=fo?parseFloat(fo.d1):null;
   if(!price)return'';
   const up=(changePct??0)>=0,arrow=up?'▲':'▼',pct=Math.abs(changePct??0).toFixed(2),fmtP=price.toLocaleString('en-IN',{maximumFractionDigits:2});
-  const srcLabel=isLive
-    ?`<span title="Live market price — refreshed every 60s" style="font-size:.55rem;background:rgba(0,229,153,.15);color:var(--green);border-radius:3px;padding:0 3px;margin-left:2px;font-weight:700;letter-spacing:.04em;vertical-align:middle">LIVE</span>`
-    :`<span title="Last F&O session close price — not a live quote" style="font-size:.55rem;background:rgba(255,184,48,.12);color:var(--amber);border-radius:3px;padding:0 3px;margin-left:2px;font-weight:700;letter-spacing:.04em;vertical-align:middle">F&O cls</span>`;
+  const srcLabel=`<span title="F&O session close — source: FOVOLT file" style="font-size:.55rem;background:rgba(255,184,48,.12);color:var(--amber);border-radius:3px;padding:0 3px;margin-left:2px;font-weight:700;letter-spacing:.04em;vertical-align:middle">F&O cls</span>`;
   if(compact)return`<span class="lpc ${up?'lpc-up':'lpc-dn'}">₹${fmtP} ${arrow}${pct}%${srcLabel}</span>`;
   return`<span class="lpc-price">₹${fmtP}</span><span class="lpc ${up?'lpc-up':'lpc-dn'}">${arrow}${pct}%</span>${srcLabel}`;
 }
@@ -1793,11 +1789,18 @@ function buildPicksUniverse(){
     const oiSig=isLong?'Long Buildup':isShort?'Short Buildup':'Neutral';
     // Signal layer flags
     const hasBulk=bulkSyms.has(sym),hasBlock=blockSyms.has(sym);
-    const volSpike=vol>50,conflict=fo&&fo.score<=-1&&mfScore>=1.5;
+    // Improvement 2: volSpike uses same-day volDelta (precise) instead of raw annualised vol threshold
+    const volDelta=fo?.volDelta??null;
+    const volSpike=volDelta!=null?(volDelta>0.001):(vol>50); // prefer intraday delta; fallback to annualised >50
+    const conflict=fo&&fo.score<=-1&&mfScore>=1.5;
+    // Improvement 1: Basis alert — flag unusual contango (>1%) or backwardation (bullish)
+    const futCl=fo?.futCl??null,spotCl=fo?.cl??null;
+    const basisPct=(futCl&&spotCl&&spotCl>0)?+((futCl-spotCl)/spotCl*100).toFixed(2):null;
+    const basisAlert=basisPct!=null?(basisPct>1?'contango':basisPct<0?'backwardation':null):null;
     // Layer count for badge
-    const layers=(mfScore>0?1:0)+(foScore>0.3?1:0)+(hasBulk||hasBlock?1:0)+(volSpike?1:0);
+    const layers=(mfScore>0?1:0)+(foScore>0.3?1:0)+(hasBulk||hasBlock?1:0)+(volSpike?1:0)+(basisAlert==='backwardation'?1:0);
     const setup=classifySetup(fo,trend),vel=scoreVelocity(trend);
-    items.push({sym,sec,fo,mfPick,trend,prob,mfScore,foScore,d1,oiSig,prem,vol,hasBulk,hasBlock,volSpike,conflict,layers,setup,vel});
+    items.push({sym,sec,fo,mfPick,trend,prob,mfScore,foScore,d1,oiSig,prem,vol,volDelta,hasBulk,hasBlock,volSpike,basisPct,basisAlert,conflict,layers,setup,vel});
   });
   return items;
 }
@@ -1843,7 +1846,7 @@ function renderPicks(){
 }
 
 function renderPickCard(item,idx,mode){
-  const{sym,fo,mfPick,prob,d1,oiSig,prem,mfScore,foScore,volSpike,hasBulk,hasBlock,conflict,layers}=item;
+  const{sym,fo,mfPick,prob,d1,oiSig,prem,mfScore,foScore,volSpike,volDelta,hasBulk,hasBlock,basisPct,basisAlert,conflict,layers}=item;
   const expandId=`pick-exp-${idx}`;
   const isWatched=STATE.watchlist.has(sym),up1d=d1>=0;
   const isLong=oiSig==='Long Buildup',isShort=oiSig==='Short Buildup';
@@ -1857,7 +1860,9 @@ function renderPickCard(item,idx,mode){
     item.setup?`<span class="rank-layer ${item.setup.cls}" title="${item.setup.tip}">${item.setup.type}</span>`:'',
     item.vel&&item.vel.direction!=='flat'?`<span class="rank-layer" style="color:${item.vel.direction==='rising'?'var(--green)':'var(--red)'};background:${item.vel.direction==='rising'?'rgba(0,229,153,.1)':'rgba(255,69,96,.1)'};border:1px solid ${item.vel.direction==='rising'?'rgba(0,229,153,.2)':'rgba(255,69,96,.2)'}">${item.vel.label}</span>`:'',
     fo?.delPct>=60?`<span class="rank-layer layer-held">Del ${fo.delPct}%</span>`:'',
-    volSpike?`<span class="rank-layer layer-new">Vol↑</span>`:'',
+    volSpike?`<span class="rank-layer layer-new" title="${volDelta!=null?'Intraday vol rising: +'+(volDelta*100).toFixed(2)+'%':'Annualised vol spike'}">Vol↑${volDelta!=null?' +'+(volDelta*100).toFixed(2)+'%':''}</span>`:'',
+    basisAlert==='contango'?`<span class="rank-layer" style="color:var(--amber);background:rgba(255,184,48,.1);border:1px solid rgba(255,184,48,.25)" title="Unusual contango: futures ${basisPct>0?'+':''}${basisPct}% above spot — cost-of-carry elevated">Contango ${basisPct}%</span>`:'',
+    basisAlert==='backwardation'?`<span class="rank-layer" style="color:var(--green);background:rgba(0,229,153,.1);border:1px solid rgba(0,229,153,.25)" title="Backwardation: futures below spot — bullish demand signal">◆ Backwardation ${basisPct}%</span>`:'',
     hasBulk?`<span class="rank-layer layer-new">Bulk</span>`:'',
     hasBlock?`<span class="rank-layer layer-new">Block</span>`:'',
     conflict?`<span class="rank-layer layer-decay">⚠ Conflict</span>`:'',
@@ -1880,7 +1885,7 @@ function renderPickCard(item,idx,mode){
       <div class="oi-cell">
         <span class="oi-type-badge ${isLong?'oi-badge-long':isShort?'oi-badge-short':'oi-badge-neutral'}">${isLong?'▲':isShort?'▼':'—'} ${oiSig}</span>
         <span class="oi-stat">Prem <strong style="color:${prem>0?'var(--green)':'var(--red)'}">${prem>0?'+':''}${parseFloat(fo?.prem||0).toFixed(3)}%</strong></span>
-        ${volSpike?`<span class="oi-diverge" style="background:rgba(0,229,153,.1);border-color:rgba(0,229,153,.25);color:var(--green)">Vol↑ ${fo.vol}%</span>`:''}
+        ${volSpike?`<span class="oi-diverge" style="background:rgba(255,69,96,.1);border-color:rgba(255,69,96,.25);color:var(--red)">${volDelta!=null?'Vol↑ +'+(volDelta*100).toFixed(2)+'% Δ':'Vol↑ Ann.IV '+fo.vol+'%'}</span>`:''}
       </div>
       ${priceTrio(fo,d1)}
     </div>`:''}
@@ -1897,6 +1902,9 @@ function renderPickCard(item,idx,mode){
       ${prob.hasInsiderBuy?'<div class="expand-line"><span class="expand-label" style="color:var(--amber)">🔍 Insider buy detected this month</span></div>':''}
       <div class="expand-line"><span class="expand-label">Trend Consistency (${prob.breakdown.consistency.daysTracked}d)</span><span class="expand-val">${prob.breakdown.consistency.score}/25</span></div>
       <div class="expand-line"><span class="expand-label">Entry Timing${prob.breakdown.timing.volSpike?' + Vol Spike bonus':''}</span><span class="expand-val">${prob.breakdown.timing.score}/25</span></div>
+      ${basisAlert==='contango'?`<div class="expand-line"><span class="expand-label" style="color:var(--amber)">⚠ Basis: Unusual contango ${basisPct}% — elevated cost-of-carry, watch for roll decay</span></div>`:''}
+      ${basisAlert==='backwardation'?`<div class="expand-line"><span class="expand-label" style="color:var(--green)">◆ Basis: Backwardation ${basisPct}% — futures below spot, demand pressure (bullish signal)</span></div>`:''}
+      ${fo&&volDelta!=null?`<div class="expand-line"><span class="expand-label">Intraday Vol Δ</span><span class="expand-val" style="color:${volDelta>0.001?'var(--red)':volDelta<-0.001?'var(--green)':'var(--text-muted)'}">${volDelta>0?'+':''}${(volDelta*100).toFixed(3)}% ${volDelta>0.001?'↑ risk rising':volDelta<-0.001?'↓ risk fading':'~flat'}</span></div>`:''}
       ${conflict?`<div class="expand-line" style="color:var(--red)"><span class="expand-label">⚠ CONFLICT: MF buying (${mfScore.toFixed(1)}) but F&O bearish (${foScore.toFixed(1)}) — do NOT trade without manual review</span></div>`:''}
       ${mfPick?.sig?.length?`<div class="expand-section-title">MF Signal Detail</div>${mfPick.sig.map(s=>`<div class="expand-line"><span class="expand-label" style="color:var(--text)">${s}</span></div>`).join('')}`:''}
       ${hasBulk||hasBlock?`<div class="expand-line"><span class="expand-label" style="color:var(--amber)">🏛 ${hasBulk?'Bulk deal':''}${hasBulk&&hasBlock?' + ':''}${hasBlock?'Block deal':''} detected today</span></div>`:''}
@@ -2267,7 +2275,7 @@ async function manualRefresh(btn){
   try{
     await fetchFOData();
     await fetchTrends();
-    await fetchNifty();
+    // No live price fetch — FOVOLT is the only price source
     renderMarket();
     if(STATE.activeTab==='intelligence')renderIntelligence();
     if(STATE.activeTab==='picks')renderPicks();
@@ -2662,7 +2670,7 @@ function handleManualCSVUpload(file){
     }
     STATE.foData.meta.source=`manual_html_upload_${result.isBhavCopy?'bhavcopy':'fovolt'}`;
     STATE.foData.meta.stockCount=Object.keys(STATE.foData.signals).length;
-    updateFreshness();renderMarket();renderIntelligence();renderPicks();checkExitSignals();
+    updateFreshness();updateFoDataBadge();renderMarket();renderIntelligence();renderPicks();checkExitSignals();
     showToast(`✅ Loaded ${result.stockCount} stocks from ${file.name}${result.tradingDate?' · '+result.tradingDate:''}`);
   };
   reader.readAsText(file);
@@ -2673,11 +2681,11 @@ async function fetchFOData(){
     const cfg=await fetch('/api/config').then(r=>r.json()).catch(()=>null);
     if(cfg?.dataUrl){
       const r=await fetch(cfg.dataUrl+'?t='+Date.now());
-      if(r.ok){STATE.foData=await r.json();updateFreshness();renderMarket();renderIntelligence();renderPicks();checkExitSignals();return;}
+      if(r.ok){STATE.foData=await r.json();updateFreshness();updateFoDataBadge();renderMarket();renderIntelligence();renderPicks();checkExitSignals();return;}
     }
     const r=await fetch('/api/history?type=trends&days=5');
     if(r.ok){STATE.trendsData=await r.json();}
-    updateFreshness();renderMarket();renderIntelligence();renderPicks();checkExitSignals();
+    updateFreshness();updateFoDataBadge();renderMarket();renderIntelligence();renderPicks();checkExitSignals();
   }catch(e){console.warn('FO fetch:',e);}
 }
 
@@ -2759,11 +2767,17 @@ function renderNiftyTile(prefix,d){
   if(lEl)lEl.textContent=d.low?.toLocaleString('en-IN',{maximumFractionDigits:2})||'—';
 }
 
+function updateFoDataBadge(){
+  const el=document.getElementById('foDataBadge');
+  if(!el)return;
+  const date=STATE.foData?.meta?.latestDate||STATE.foData?.meta?.date||null;
+  if(date){el.textContent='F&O: '+date;el.style.color='var(--accent)';}
+  else{el.textContent='No F&O data loaded';el.style.color='var(--amber)';}
+}
 function refreshCurrentTab(){
   const t=STATE.activeTab;
   if(t==='intelligence')renderIntelligence();else if(t==='picks')renderPicks();else if(t==='portfolio')renderPortfolio();else if(t==='market')renderMarket();
-  const ageEl=document.getElementById('quotesAge');
-  if(ageEl&&STATE.quotesAge){const secs=Math.round((Date.now()-new Date(STATE.quotesAge))/1000),label=secs<60?secs+'s ago':Math.round(secs/60)+'m ago';ageEl.textContent='⬤ '+label;ageEl.style.color=secs>120?'var(--amber)':'var(--green)';}
+  updateFoDataBadge();
 }
 
 /* ═══════════════════════════════════════════
@@ -3794,7 +3808,7 @@ function renderGuide(){
 
     </div>
     <div style="margin-top:12px;padding:8px 10px;background:var(--surface2);border-radius:6px;border:1px solid var(--border);font-size:.72rem;color:var(--text-muted)">
-      <strong style="color:var(--text)">Quick rule of thumb:</strong> If you see <strong>%</strong> next to a value → it's an allocation weight, not a price. If you see <strong>₹</strong> with a <span style="background:rgba(0,229,153,.15);color:var(--green);padding:0 3px;border-radius:2px;font-size:.65rem">LIVE</span> or <span style="background:rgba(255,184,48,.12);color:var(--amber);padding:0 3px;border-radius:2px;font-size:.65rem">F&O cls</span> badge → it's a market price. If you see ₹ under "Entry" in Portfolio → it's your personal buy price.
+      <strong style="color:var(--text)">Quick rule of thumb:</strong> If you see <strong>%</strong> next to a value → it's an allocation weight, not a price. If you see <strong>₹</strong> with a <span style="background:rgba(255,184,48,.12);color:var(--amber);padding:0 3px;border-radius:2px;font-size:.65rem">F&amp;O cls</span> badge → it's the FOVOLT session close price (no live quotes used). If you see ₹ under "Entry" in Portfolio → it's your personal buy price.
     </div>
   </div>
 
@@ -3848,7 +3862,7 @@ function init(){
   initPillTabs();initSearch();
   renderMarket();renderIntelligence();renderPortfolio();renderGuide();
   fetchFOData().then(async()=>{
-    fetchNifty();
+    // No live price fetch — all prices come from FOVOLT file
     renderFiiDiiChart();
     ingestFoDelivery();
     renderDeliverySpikes();
@@ -3860,8 +3874,8 @@ function init(){
   });
   // mfapi.in NAV fetch — parallel, non-blocking, single run
   setTimeout(()=>fetchLiveHoldings(),2000);
-  // Nifty refresh every 60s — non-blocking
-  setInterval(()=>{fetchNifty();checkPriceAlerts();checkExitSignals();},60000);
+  // Periodic: only check alerts/exit signals — no live price polling
+  setInterval(()=>{checkPriceAlerts();checkExitSignals();},60000);
 }
 document.addEventListener('DOMContentLoaded',init);
 </script>
