@@ -197,6 +197,22 @@ button{cursor:pointer;font-family:inherit}
 .price-change{font-size:.68rem;font-weight:600;font-family:'Space Mono',monospace;padding:1px 6px;border-radius:10px}
 .price-change.up{background:rgba(0,229,153,.1);color:var(--green)}
 .price-change.down{background:rgba(255,69,96,.1);color:var(--red)}
+/* ── PRICE TRIO (spot / today-fut / prev-fut) ── */
+.price-trio{display:flex;flex-direction:column;align-items:flex-end;gap:3px;min-width:0}
+.price-trio-row{display:flex;align-items:center;gap:5px;font-size:.68rem;white-space:nowrap}
+.price-trio-label{color:var(--text-muted);font-size:.6rem;letter-spacing:.02em;min-width:52px;text-align:right}
+.price-trio-val{font-family:'Space Mono',monospace;font-weight:700;font-size:.73rem;color:var(--text)}
+.price-trio-val.spot{color:var(--accent)}
+.price-trio-val.fut{color:var(--text)}
+.price-trio-val.prevfut{color:var(--text-muted)}
+.price-trio-change{font-size:.62rem;font-weight:600;padding:1px 5px;border-radius:8px}
+.price-trio-change.up{background:rgba(0,229,153,.1);color:var(--green)}
+.price-trio-change.down{background:rgba(255,69,96,.1);color:var(--red)}
+/* ── VOL DELTA BADGE ── */
+.vol-delta{font-size:.62rem;font-weight:700;padding:1px 6px;border-radius:8px;white-space:nowrap}
+.vol-delta.rising{background:rgba(255,69,96,.1);color:var(--red)}
+.vol-delta.falling{background:rgba(0,229,153,.1);color:var(--green)}
+.vol-delta.flat{background:var(--border);color:var(--text-muted)}
 .oi-diverge{font-size:.65rem;font-weight:700;color:var(--amber);background:rgba(255,184,48,.1);padding:2px 7px;border-radius:10px;border:1px solid rgba(255,184,48,.25);white-space:nowrap}
 .oi-confirm{font-size:.65rem;font-weight:700;color:var(--green);background:rgba(0,229,153,.08);padding:2px 7px;border-radius:10px;border:1px solid rgba(0,229,153,.2);white-space:nowrap}
 .card-diverge{border-color:rgba(255,184,48,.3)!important}
@@ -1017,6 +1033,64 @@ function disclosureBadge(month){
   const tip=diff===0?'Current month':withinWindow?'Within SEBI 10-day window':diff===1?'Previous month':`${diff} months old — stale`;
   return`<span style="font-size:.68rem;color:var(--text-muted)" title="${tip}"><span class="fresh-dot ${dotCls}" style="display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:2px;vertical-align:middle"></span>${label}</span>`;
 }
+/* ── priceTrio: renders Spot / Today-Fut / Prev-Fut prices with vol delta ── */
+function priceTrio(fo, d1){
+  if(!fo) return '';
+  const fmt=v=>v!=null&&v>0?'₹'+Number(v).toLocaleString('en-IN',{maximumFractionDigits:2}):'—';
+  const spot    = fo.cl;
+  const futCl   = fo.futCl   ?? null;
+  const prevFut = fo.prevFutCl?? null;
+  const pv      = fo.prevVol  ?? null;
+  const cv      = fo.curVol   ?? null;
+  const vDelta  = fo.volDelta ?? null;
+
+  // spot day change
+  const up1d=(d1??0)>=0;
+  const d1Abs=Math.abs(d1??0).toFixed(2);
+
+  // futures day move
+  let futMove='', futMoveClass='';
+  if(futCl!=null && prevFut!=null && prevFut>0){
+    const fm=+((futCl-prevFut)/prevFut*100).toFixed(2);
+    futMove=(fm>=0?'▲':'▼')+Math.abs(fm).toFixed(2)+'%';
+    futMoveClass=fm>=0?'up':'down';
+  }
+
+  // vol delta badge
+  let volBadge='';
+  if(vDelta!=null){
+    const absV=Math.abs(vDelta*100).toFixed(2);
+    if(Math.abs(vDelta)>0.0005){
+      volBadge=vDelta>0
+        ?`<span class="vol-delta rising" title="Daily vol rose vs prev day: +${absV}%">Vol ▲${absV}%</span>`
+        :`<span class="vol-delta falling" title="Daily vol fell vs prev day: -${absV}%">Vol ▼${absV}%</span>`;
+    } else {
+      volBadge=`<span class="vol-delta flat" title="Daily vol unchanged">Vol ~</span>`;
+    }
+  } else if(fo.vol){
+    // fallback: just show annualised vol
+    volBadge=`<span class="vol-delta flat" title="Annualised IV">IV ${fo.vol}%</span>`;
+  }
+
+  return`<div class="price-trio">
+    <div class="price-trio-row">
+      <span class="price-trio-label">Spot</span>
+      <span class="price-trio-val spot">${fmt(spot)}</span>
+      <span class="price-trio-change ${up1d?'up':'down'}">${up1d?'▲':'▼'}${d1Abs}%</span>
+    </div>
+    ${futCl!=null?`<div class="price-trio-row">
+      <span class="price-trio-label">Fut (today)</span>
+      <span class="price-trio-val fut">${fmt(futCl)}</span>
+      ${futMove?`<span class="price-trio-change ${futMoveClass}">${futMove}</span>`:''}
+    </div>`:''}
+    ${prevFut!=null?`<div class="price-trio-row">
+      <span class="price-trio-label">Fut (prev)</span>
+      <span class="price-trio-val prevfut">${fmt(prevFut)}</span>
+    </div>`:''}
+    ${volBadge?`<div class="price-trio-row" style="margin-top:2px">${volBadge}</div>`:''}
+  </div>`;
+}
+
 function livePriceChip(nameOrSym,compact=false){
   const q=getQ(nameOrSym),fo=getFO(toSym(nameOrSym));
   const isLive=!!q?.price;
@@ -1806,12 +1880,9 @@ function renderPickCard(item,idx,mode){
       <div class="oi-cell">
         <span class="oi-type-badge ${isLong?'oi-badge-long':isShort?'oi-badge-short':'oi-badge-neutral'}">${isLong?'▲':isShort?'▼':'—'} ${oiSig}</span>
         <span class="oi-stat">Prem <strong style="color:${prem>0?'var(--green)':'var(--red)'}">${prem>0?'+':''}${parseFloat(fo?.prem||0).toFixed(3)}%</strong></span>
-        ${volSpike?`<span class="oi-diverge" style="background:rgba(0,229,153,.1);border-color:rgba(0,229,153,.25);color:var(--green)">Vol ${fo.vol}%↑</span>`:''}
+        ${volSpike?`<span class="oi-diverge" style="background:rgba(0,229,153,.1);border-color:rgba(0,229,153,.25);color:var(--green)">Vol↑ ${fo.vol}%</span>`:''}
       </div>
-      <div class="price-cell">
-        <span class="price-cmp">₹${(fo?.cl||0).toLocaleString('en-IN',{maximumFractionDigits:2})}</span>
-        <span class="price-change ${up1d?'up':'down'}">${up1d?'▲':'▼'}${Math.abs(d1).toFixed(2)}% 1D</span>
-      </div>
+      ${priceTrio(fo,d1)}
     </div>`:''}
     <div class="score-bar-wrap">
       <div class="score-label"><span>${mode==='mf'?'MF Conviction':mode==='fo'?'F&O Score':'Probability Score'}</span><span style="color:${probColor};font-weight:700">${mode==='best'||mode==='combined'?prob.total+'/100':scoreVal.toFixed(2)+'/5.0'}</span></div>
@@ -2519,19 +2590,29 @@ function parseBhavCopyFile(text, filename){
         const sym=(row[iSym]||'').replace(/^"|"$/g,'').trim().toUpperCase();
         if(!sym||INDEX_SYMS.has(sym)) continue;
         const _f=v=>{const n=parseFloat(String(v||'').replace(/,/g,'').trim());return isNaN(n)?null:n;};
-        const cl=_f(row[iCl]),pr=_f(row[iPr]),logR=_f(row[iLogr]),volA=_f(row[iVol]),futCl=_f(row[iFut]);
+        const cl=_f(row[iCl]),pr=_f(row[iPr]),logR=_f(row[iLogr]);
+        const pv=row.length>iPrevVol?_f(row[iPrevVol]):null;   // F: prev day daily vol
+        const cv=row.length>iCurVol?_f(row[iCurVol]):null;     // G: curr day daily vol
+        const volA=_f(row[iVol]);                               // H: annualised vol
+        const futCl=_f(row[iFut]);                             // I: today futures close
+        const prevFutCl=row.length>iPrevFut?_f(row[iPrevFut]):null; // J: prev futures close
         if(!cl||cl<=0) continue;
-        // Date from first data col
         if(!tradingDate&&iDate>=0){tradingDate=parseTradingDate((row[iDate]||'').replace(/^"|"$/g,'').trim());}
         let d1=0;
         try{d1=logR?+((Math.exp(logR)-1)*100).toFixed(2):(pr?+((cl-pr)/pr*100).toFixed(2):0);}catch(e){}
         const prem=futCl&&cl?+((futCl-cl)/cl*100).toFixed(3):0;
         const vol=volA?+volA.toFixed(1):0;
+        const volDelta=(cv!=null&&pv!=null)?+(cv-pv).toFixed(3):null;
         const raw=(d1/3.0)+(prem*0.5);
         const score=Math.round(Math.max(-5,Math.min(5,raw))*100)/100;
         const label=score>=3?'Strong Bullish':score>=1.5?'Bullish':score>=0.5?'Mild Bullish':
                     score<=-3?'Strong Bearish':score<=-1.5?'Bearish':score<=-0.5?'Mild Bearish':'Neutral';
-        signals[sym]={score,label,cl,pr,d1:String(d1),d2:String(d1),prem:String(prem),vol:String(vol)};
+        signals[sym]={
+          score,label,cl,pr,
+          futCl:futCl??null,prevFutCl:prevFutCl??null,
+          prevVol:pv??null,curVol:cv??null,volDelta:volDelta??null,
+          d1:String(d1),d2:String(d1),prem:String(prem),vol:String(vol)
+        };
       }catch(e){errors.push(ri);}
     }
     console.log(`FOVOLT parsed: ${Object.keys(signals).length} stocks, date=${tradingDate}`);
