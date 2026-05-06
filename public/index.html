@@ -670,7 +670,7 @@ button{cursor:pointer;font-family:inherit}
 <script>
 /* ═══════════════════════════════════════════
    STATE
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 const STATE={
   foData:null,trendsData:null,trades:[],watchlist:new Set(),
   quotes:{},quotesAge:null,activeTab:'market',intelTab:'ranking',
@@ -681,7 +681,7 @@ const STATE={
 
 /* ═══════════════════════════════════════════
    MF HOLDINGS — real data from V7
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 /* ══════════════════════════════════════════════════════════════
    MF HOLDINGS — 35 TOP PERFORMING EQUITY FUNDS
    Source: SEBI-mandated monthly portfolio disclosures (Feb 2026)
@@ -690,7 +690,7 @@ const STATE={
    v = Math.round(pct/100 * aum) — computed, not hardcoded.
    NOTE: mfdata.in API fetch (fetchLiveHoldings) will OVERRIDE
    this data if successful. Embedded data is the fallback.
-══════════════════════════════════════════════════════════════ */
+/* ══════════════════════════════════════════════════════════════ */
 function cv(pct,aum){return Math.round(pct/100*aum);}
 
 const HOLDINGS={
@@ -828,7 +828,7 @@ function fmt(n){return n!=null?Number(n).toLocaleString('en-IN',{maximumFraction
 
 /* ═══════════════════════════════════════════
    MF ENGINE
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 function computeMFData(){
   const fe=[],ex=[],inc=[],dec=[],sm={};
   Object.keys(HOLDINGS).forEach(fid=>{
@@ -891,7 +891,7 @@ function computeMFPicks(mfData){
    F5  Trend Consistency     0-15  (multi-day trendsData, gracefully optional)
    F6  Entry Timing          0-5   (vol compression × return size)
    Hard filters cap or zero the score before final output.
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 function computeProbScore(stock,mfPick,foSignal,trend){
   const bd={};let total=0;
   const sym=toSym(stock);
@@ -975,7 +975,7 @@ function computeProbScore(stock,mfPick,foSignal,trend){
   // ── F3: Volatility Regime (0-20) ─────────────────────────────────
   // a) Applicable annualised vol level — sweet spot for positional trades (0-8)
   let f3a=0;
-  const volToUse=appAnnV??spotAnnV??parseFloat(foSignal?.vol||0)||null;
+  const volToUse=(appAnnV??spotAnnV??(parseFloat(foSignal?.vol||0)||null));
   if(volToUse!=null){
     if(volToUse>=15&&volToUse<30)f3a=8;      // sweet spot: not dead, not wild
     else if(volToUse>=30&&volToUse<45)f3a=6; // workable — tighter SL needed
@@ -1180,7 +1180,7 @@ function calcTargetSL(entry,fo,trend,prob){
 }
 /* ═══════════════════════════════════════════
    HELPERS
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 function confluenceBadge(sources){
   if(sources>=3)return`<span class="badge badge-green glow">⚡⚡ Triple Lock</span>`;
   if(sources>=2)return`<span class="badge badge-amber">⚡ 2 Signals</span>`;
@@ -1208,7 +1208,7 @@ function priceTrio(fo, d1){
   const vDelta    = fo.volDelta ?? null;
   const futVDelta = fo.futVolDelta??null;
   // Use appAnnVol (col N) as definitive vol — fallback chain: N → L → H
-  const displayVol= fo.appAnnVol??fo.futAnnVol??fo.spotAnnVol??parseFloat(fo.vol||0)||null;
+  const displayVol= fo.appAnnVol??fo.futAnnVol??fo.spotAnnVol??(parseFloat(fo.vol||0)||null);
 
   // spot day change
   const up1d=(d1??0)>=0;
@@ -1286,7 +1286,7 @@ function livePriceChip(nameOrSym,compact=false){
 
 /* ═══════════════════════════════════════════
    MARKET (was HOME)
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 function renderMarket(){
   const mfData=computeMFData();
   const houseMap={};
@@ -1315,7 +1315,7 @@ function renderMarket(){
 
 /* ═══════════════════════════════════════════
    FUND HOLDINGS MODAL
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 function openFundModal(house){
   // Gather all funds for this house
   const fundIds=Object.keys(HOLDINGS).filter(fid=>HOLDINGS[fid].house===house);
@@ -1577,7 +1577,7 @@ function fetchLiveFiiDii(){
 
 /* ═══════════════════════════════════════════
    INTELLIGENCE TAB — dispatcher
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 function renderIntelligence(){
   const tab=STATE.intelTab;
   renderIntelDecisionBar();
@@ -1956,7 +1956,7 @@ function renderIntelSectors(){
 
 /* ═══════════════════════════════════════════
    PICKS TAB — Unified Best Trades Engine
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 function buildPicksUniverse(){
   const mfData=computeMFData(),mfPicks=computeMFPicks(mfData);
   const signals=STATE.foData?.signals||STATE.trendsData?.latestSignals||{};
@@ -2108,7 +2108,7 @@ function renderPickCard(item,idx,mode){
 
 /* ═══════════════════════════════════════════
    PORTFOLIO TAB dispatcher
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 function renderPortfolio(){
   const tab=STATE.portfolioTab,c=document.getElementById('portfolioContent');
   if(tab==='autopilot'){
@@ -2142,7 +2142,7 @@ function renderPortfolio(){
 
 /* ═══════════════════════════════════════════
    AUTO-PILOT ENGINE
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 const AUTO_THRESHOLD=75,AUTO_MAX=5,AUTO_MAX_SEC=2,AUTO_HOLD=15,AUTO_COOL=10;
 
 function runAutoPilot(){
@@ -2250,7 +2250,7 @@ function renderAutoTrades(){
 
 /* ═══════════════════════════════════════════
    WATCHLIST + TRADES
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 function toggleWatch(stock,btn){
   if(STATE.watchlist.has(stock)){STATE.watchlist.delete(stock);if(btn)btn.textContent='☆ Watch';}
   else{STATE.watchlist.add(stock);if(btn)btn.textContent='★ Watching';}
@@ -2395,7 +2395,7 @@ function renderHistoryTrades(){
 
 /* ═══════════════════════════════════════════
    ANALYTICS
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 function renderAnalytics(){
   const panel=STATE.analyticsPanel,container=document.getElementById('analyticsContent');
   ({accuracy:renderAccuracy,oi:renderOI,sector:renderSectorPulse,top:renderTopPerformers,calendar:renderCalendar,corr:renderCorrelation}[panel]||
@@ -2463,7 +2463,7 @@ function renderCorrelation(){
 
 /* ═══════════════════════════════════════════
    MANUAL REFRESH
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 async function manualRefresh(btn){
   if(btn){btn.textContent='↺ …';btn.disabled=true;}
   try{
@@ -2488,7 +2488,7 @@ function toggleExpand(id,btn){
 
 /* ═══════════════════════════════════════════
    FRESHNESS + STALE BANNER
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 function updateFreshness(){
   if(!STATE.foData)return;
   const meta=STATE.foData.meta||{};
@@ -2612,7 +2612,7 @@ function updateFreshness(){
 
 /* ═══════════════════════════════════════════
    DATA FETCHING
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 /* ── renderNiftyFromFOVOLT: populates index tiles from FOVOLT signals ─
    NIFTY and BANKNIFTY rows are present in FOVOLT when NSE includes them.
    Called once after FOVOLT loads. Falls back to a clean offline state.   ── */
@@ -2664,7 +2664,7 @@ function updateDataAgeBadge(){
    2. FOVOLT legacy format (FOVOLT_*.csv)
       Columns: Date, Symbol, UndrlygValue(A)=spot, UndrlygValue(B)=prev, LogRet, ..., AnnVolatility, FutPrice
       Spot close = col[2]       |  Date = col[0]
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 function parseCSVRows(text){
   // Handles quoted fields and \r\n line endings
   const lines=text.replace(/\r\n/g,'\n').replace(/\r/g,'\n').split('\n');
@@ -2883,7 +2883,7 @@ async function fetchTrends(){
    Fetches Feb 2026 portfolio for key funds and
    OVERRIDES HOLDINGS[fundId].feb with live data.
    Only runs once per session to avoid rate limits.
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 const MFDATA_SCHEME_MAP={
   hdfc_flexi:'119598',   // HDFC Flexi Cap - Direct Growth
   ppfas:     '122639',   // Parag Parikh Flexi Cap - Direct Growth
@@ -2962,7 +2962,7 @@ function refreshCurrentTab(){
 
 /* ═══════════════════════════════════════════
    SEARCH
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 function buildCorpus(){
   const corpus=[],mfData=computeMFData();
   computeMFPicks(mfData).forEach(p=>corpus.push({stock:p.stock,type:'MF Pick',score:p.ms.toFixed(1)}));
@@ -2985,7 +2985,7 @@ function handleSearchClick(stock){document.getElementById('globalSearch').value=
 
 /* ═══════════════════════════════════════════
    PERSISTENCE
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 function loadPrefs(){
   const theme=localStorage.getItem('mfi_theme')||'slate',fs=localStorage.getItem('mfi_fs')||'13';
   try{STATE.watchlist=new Set(JSON.parse(localStorage.getItem('mfi_watch')||'[]'));}catch(e){}
@@ -3000,7 +3000,7 @@ function applyFs(sz){document.documentElement.style.setProperty('--fs',sz+'px');
 
 /* ═══════════════════════════════════════════
    TAB ROUTING
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 function switchTab(tab){
   STATE.activeTab=tab;
   document.querySelectorAll('.nav-tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
@@ -3017,11 +3017,11 @@ function initPillTabs(){
 
 /* ═══════════════════════════════════════════
    BOOT
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 
 /* ═══════════════════════════════════════════
    #1 BULK / BLOCK DEALS RENDERER
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 // Synthetic demo data for when real data isn't yet in the pipeline
 const DEMO_BULK_DEALS = [
   {stock:'ICICIBANK',client:'LIC of India',type:'BUY',qty:1250000,price:1318.5,value:164.8,date:'10-Apr-2026'},
@@ -3082,7 +3082,7 @@ function renderIntelDeals(){
 
 /* ═══════════════════════════════════════════
    #2 INSIDER TRADING TRACKER
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 const DEMO_INSIDER=[
   {stock:'BAJFINANCE',person:'Rajeev Jain',role:'CMD',type:'BUY',qty:50000,price:8320,value:41.6,date:'09-Apr-2026',mode:'Market Purchase'},
   {stock:'PERSISTENT',person:'Sandeep Kalra',role:'CEO',type:'BUY',qty:12000,price:5840,value:7.0,date:'08-Apr-2026',mode:'Market Purchase'},
@@ -3130,7 +3130,7 @@ function renderIntelInsider(){
 
 /* ═══════════════════════════════════════════
    #3 PROMOTER PLEDGE ALERTS (in ranking cards)
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 // Pledge data — fetched via workflow from BSE shareholding pattern
 const PLEDGE_DATA = {
   'ADANIPORTS':42,'ADANIENT':35,'ADANIGREEN':68,'ADANIPOWER':51,
@@ -3148,7 +3148,7 @@ function pledgeFlag(sym,msBuySignal){
 
 /* ═══════════════════════════════════════════
    #4 PRICE ALERTS — Browser Notification API
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 function loadAlerts(){
   try{STATE.priceAlerts=JSON.parse(localStorage.getItem('mfi_alerts')||'[]');}catch(e){}
 }
@@ -3250,7 +3250,7 @@ function requestNotifPerm(){
 
 /* ═══════════════════════════════════════════
    #5 SCORE HISTORY SPARKLINES
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 function buildSparkline(scores,width=80,height=22){
   if(!scores||scores.length<2)return'';
   const vals=scores.map(Number).filter(v=>!isNaN(v));
@@ -3301,7 +3301,7 @@ function getSparkline(sym){
 
 /* ═══════════════════════════════════════════
    #6 FII vs DII DIVERGENCE ALERT
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 function renderFiiDivergenceAlert(){
   const el=document.getElementById('fiiDivergenceAlert');if(!el)return;
   const fd=STATE.foData?.fiiDii||null;
@@ -3330,7 +3330,7 @@ function renderFiiDivergenceAlert(){
 
 /* ═══════════════════════════════════════════
    #7 SECTOR ROTATION HEATMAP
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 function renderIntelHeatmap(){
   const container=document.getElementById('intelContent');
   const mfData=computeMFData();
@@ -3380,7 +3380,7 @@ function renderIntelHeatmap(){
 
 /* ═══════════════════════════════════════════
    #8 MF CONVICTION TREND (Month-on-Month)
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 // Adds trend arrows and month-dot indicators to existing ranking cards
 function getConvTrend(stock){
   // Compare jan vs feb house count from HOLDINGS
@@ -3399,7 +3399,7 @@ function getConvTrend(stock){
 
 /* ═══════════════════════════════════════════
    #9 FOLLOW THE FUND MANAGER
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 const FUND_MANAGERS=[
   {name:'Prashant Jain',fund:'HDFC Flexi Cap',fundId:'hdfc_flexi',house:'HDFC',track:'20+ year track record · Value-oriented · Contrarian calls',icon:'🏆'},
   {name:'Sankaran Naren',fund:'ICICI Pru Bluechip',fundId:'icici_blue',house:'ICICI',track:'Deep value, macro-aware · Sector rotation specialist',icon:'⚡'},
@@ -3459,7 +3459,7 @@ function renderIntelManagers(){
 
 /* ═══════════════════════════════════════════
    #10 DELIVERY VOLUME SPIKE (in Market Pulse)
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 /* ═══════════════════════════════════════════
    #10 DELIVERY VOLUME SPIKE — Home Tab
    ─────────────────────────────────────────
@@ -3473,7 +3473,7 @@ function renderIntelManagers(){
 
    DEL_HISTORY: in-memory only (sessionStorage for current session, size-capped).
    Populated from foData.signals each time foData loads.
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 
 // In-memory delivery history — session only, never large
 const DEL_HISTORY={};
@@ -3738,7 +3738,7 @@ function showDelModal(sym){
 
 /* ═══════════════════════════════════════════
    #11 PCR PER STOCK
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 // PCR data from foData.pcr or fetched from NSE option chain
 function getPCR(sym){
   const pcr=STATE.foData?.pcr?.[sym]||STATE.pcrData?.[sym]||null;
@@ -3762,7 +3762,7 @@ async function fetchPCRData(){
 
 /* ═══════════════════════════════════════════
    #12 WEEKLY DIGEST PANEL
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 function renderDigestPanel(){
   const container=document.getElementById('portfolioContent');
   const mfData=computeMFData(),mfPicks=computeMFPicks(mfData);
@@ -3837,7 +3837,7 @@ function downloadDigest(){
 
 /* ═══════════════════════════════════════════
    GUIDE TAB
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 function renderGuide(){
   const c=document.getElementById('guideContent');
   if(!c)return;
@@ -4067,7 +4067,7 @@ function renderGuide(){
 
 /* ═══════════════════════════════════════════
    EXIT SIGNAL CHECKER
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════ */
 function checkExitSignals(){
   const signals=STATE.foData?.signals||{},mfData=computeMFData();
   const exits=new Set(mfData.ex.map(e=>toSym(e.stock)));
