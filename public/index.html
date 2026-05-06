@@ -882,69 +882,206 @@ function computeMFPicks(mfData){
 }
 
 /* ═══════════════════════════════════════════
-   4-FACTOR PROBABILITY SCORER
+   6-FACTOR FOVOLT PROBABILITY SCORER  v2
+   All 16 FOVOLT columns now feed into scoring.
+   F1  MF Confluence        0-20
+   F2  Futures Structure     0-20  (basis + fut momentum + fut vol expansion)
+   F3  Volatility Regime     0-20  (appAnnVol level + compression + spot/fut vol spread)
+   F4  Return Quality        0-20  (spot/fut return alignment + return quality)
+   F5  Trend Consistency     0-15  (multi-day trendsData, gracefully optional)
+   F6  Entry Timing          0-5   (vol compression × return size)
+   Hard filters cap or zero the score before final output.
 ═══════════════════════════════════════════ */
 function computeProbScore(stock,mfPick,foSignal,trend){
   const bd={};let total=0;
-  // Insider check
-  const insiders=STATE.foData?.insiderData||[];
   const sym=toSym(stock);
+
+  // ── Insider check ────────────────────────────────────────────────
+  const insiders=STATE.foData?.insiderData||[];
   const hasInsiderBuy=insiders.some(i=>(toSym(i.sym||i.name||'')||'').includes(sym.slice(0,4))&&(i.type||'').toLowerCase().includes('buy'));
-  const hasMF=mfPick&&mfPick.ms>=2.0,hasFO=foSignal&&foSignal.score>=1.5,hasTrend=trend&&trend.positionalStrength==="Strong";
-  const sources=(hasMF?1:0)+(hasFO?1:0)+(hasTrend?1:0)+(hasInsiderBuy?1:0);
-  // F1: Confluence — 4 possible sources now (MF, F&O, Trend, Insider)
-  const f1=sources>=4?25:sources>=3?22:sources===2?18:hasMF?14:8;
-  bd.confluence={score:f1,max:25,sources,hasMF,hasFO,hasTrend,hasInsiderBuy};total+=f1;
-  // F2: F&O Momentum + Delivery % conviction
-  let f2=0;
+
+  // ── Convenience aliases from foSignal ───────────────────────────
+  const d1       = foSignal ? parseFloat(foSignal.d1)||0   : 0;
+  const prem     = foSignal ? parseFloat(foSignal.prem)||0  : 0;
+  const futD1    = foSignal?.futD1    ?? null;   // futures 1-day return %
+  const spotAnnV = foSignal?.spotAnnVol?? null;  // col H: spot annualised vol
+  const futAnnV  = foSignal?.futAnnVol ?? null;  // col L: futures annualised vol
+  const appAnnV  = foSignal?.appAnnVol ?? null;  // col N: APPLICABLE annualised vol (key number)
+  const pv       = foSignal?.prevVol   ?? null;  // col F: prev day spot daily vol
+  const cv       = foSignal?.curVol    ?? null;  // col G: curr day spot daily vol
+  const pvFut    = foSignal?.prevFutVol?? null;  // col J: prev day futures daily vol
+  const cvFut    = foSignal?.curFutVol ?? null;  // col K: curr day futures daily vol
+  const volDelta = foSignal?.volDelta  ?? null;  // G-F computed
+  const futVolDelta=foSignal?.futVolDelta??null;  // K-J computed
+
+  // ════════════════════════════════════════
+  // HARD FILTER 1: Spot-Futures Divergence
+  // Spot up >0.5% but futures down >0.3% = institutions not buying the move
+  // ════════════════════════════════════════
+  const hardDiverge = foSignal && d1>0.5 && futD1!=null && futD1<-0.3;
+  // HARD FILTER 2: Futures vol significantly below spot vol = F&O market not confirming
+  const futVolDiscount = foSignal && spotAnnV!=null && futAnnV!=null && futAnnV < spotAnnV*0.80;
+
+  // ── F1: MF Confluence (0-20) ─────────────────────────────────────
+  const hasMF     = mfPick && mfPick.ms>=2.0;
+  const hasFO     = foSignal && foSignal.score>=1.5;
+  const hasTrend  = trend && trend.positionalStrength==='Strong';
+  const sources   = (hasMF?1:0)+(hasFO?1:0)+(hasTrend?1:0)+(hasInsiderBuy?1:0);
+  let f1=sources>=4?20:sources>=3?17:sources===2?13:hasMF?9:hasFO?6:3;
+  bd.confluence={score:f1,max:20,sources,hasMF,hasFO,hasTrend,hasInsiderBuy};
+  total+=f1;
+
+  // ── F2: Futures Structure (0-20) ─────────────────────────────────
+  // a) Basis quality (0-8)
+  let f2a=0;
   if(foSignal){
-    f2=Math.min(22,Math.max(0,foSignal.score*2.5));
-    const d1=parseFloat(foSignal.d1)||0,prem=parseFloat(foSignal.prem)||0;
-    if(prem>0.05&&d1>0)f2=Math.min(25,f2+3);
-    if(foSignal.score>1&&d1<-1)f2=Math.max(0,f2-5);
-    // Delivery % — high delivery = institutional conviction
-    const delPct=parseFloat(foSignal.delPct||0);
-    if(delPct>=60)f2=Math.min(25,f2+4);
-    else if(delPct>=45)f2=Math.min(25,f2+2);
-    else if(delPct<20&&foSignal.score>0.5)f2=Math.max(0,f2-3);// speculative spike
+    if(prem>1.5)f2a=5;                       // excessive contango = roll risk, cap
+    else if(prem>0.30&&d1>0)f2a=8;           // healthy contango + spot confirming
+    else if(prem>0.10&&d1>0)f2a=6;           // mild bullish carry
+    else if(prem>=-0.10&&prem<=0.10)f2a=4;   // at-cost, neutral
+    else if(prem<-0.30)f2a=1;                // deep backwardation = bearish carry
+    else f2a=2;
   }
-  f2=Math.round(f2);bd.momentum={score:f2,max:25,foScore:foSignal?.score||0,delPct:parseFloat(foSignal?.delPct||0)};total+=f2;
-  // F3: Trend consistency with score velocity
-  let f3=0;
+  // b) Futures momentum (0-7)
+  let f2b=0;
+  if(foSignal){
+    if(futD1!=null){
+      if(futD1>1.0&&d1>0)f2b=7;              // futures leading spot — strong
+      else if(futD1>0.5)f2b=5;
+      else if(futD1>=-0.5)f2b=3;
+      else if(futD1<0&&d1>0)f2b=1;           // divergence warning
+    } else {
+      // No futures log return — use foSignal.score as proxy
+      f2b=Math.min(6,Math.max(0,Math.round(foSignal.score*1.5)));
+    }
+  }
+  // c) Futures vol expansion signal (0-5)
+  let f2c=3; // neutral default when data absent
+  if(futVolDelta!=null){
+    if(futVolDelta>0&&d1>0)f2c=5;            // vol rising on up-day = momentum
+    else if(futVolDelta>0&&d1<=0)f2c=2;      // vol rising on down-day = fear
+    else if(futVolDelta<0&&d1>0)f2c=3;       // soft up move, lower conviction
+    else f2c=2;
+  } else if(volDelta!=null){
+    // Fallback to spot vol delta
+    if(volDelta>0&&d1>0)f2c=4;
+    else if(volDelta<0&&d1>0)f2c=3;
+    else f2c=2;
+  }
+  const f2=Math.round(Math.min(20,f2a+f2b+f2c));
+  bd.futuresStructure={score:f2,max:20,basis:prem,futD1:futD1??null,futVolDelta:futVolDelta??null,f2a,f2b,f2c};
+  total+=f2;
+
+  // ── F3: Volatility Regime (0-20) ─────────────────────────────────
+  // a) Applicable annualised vol level — sweet spot for positional trades (0-8)
+  let f3a=0;
+  const volToUse=appAnnV??spotAnnV??parseFloat(foSignal?.vol||0)||null;
+  if(volToUse!=null){
+    if(volToUse>=15&&volToUse<30)f3a=8;      // sweet spot: not dead, not wild
+    else if(volToUse>=30&&volToUse<45)f3a=6; // workable — tighter SL needed
+    else if(volToUse>=10&&volToUse<15)f3a=5; // low vol — needs catalyst
+    else if(volToUse>=45&&volToUse<60)f3a=4; // high — speculative only
+    else if(volToUse<10)f3a=2;               // dead
+    else f3a=2;                               // >60%: gap-risk, avoid positional
+  } else f3a=4; // no data — neutral
+  // b) Daily vol compression/expansion today vs yesterday (0-8)
+  let f3b=4; // neutral default
+  if(cv!=null&&pv!=null&&pv>0){
+    const ratio=cv/pv;
+    if(ratio<0.80)f3b=8;                     // strong compression = coiling spring
+    else if(ratio<0.92)f3b=6;               // mild compression
+    else if(ratio<=1.05)f3b=4;              // stable
+    else if(ratio<=1.20)f3b=3;              // expanding — potential breakout
+    else f3b=1;                              // sharp expansion = chasing risk
+  } else if(cvFut!=null&&pvFut!=null&&pvFut>0){
+    // Fallback to futures vol compression
+    const ratio=cvFut/pvFut;
+    if(ratio<0.85)f3b=7;
+    else if(ratio<0.95)f3b=5;
+    else if(ratio<=1.08)f3b=4;
+    else f3b=2;
+  }
+  // c) Spot vs futures vol spread — F&O confirming spot (0-4)
+  let f3c=2; // neutral default
+  if(spotAnnV!=null&&futAnnV!=null&&spotAnnV>0){
+    const spreadRatio=futAnnV/spotAnnV;
+    if(spreadRatio>=1.0)f3c=4;              // futures vol ≥ spot = F&O fully confirming
+    else if(spreadRatio>=0.90)f3c=2;        // slight lag
+    else f3c=0;                             // F&O not confirming — discount score
+  }
+  const f3=Math.round(Math.min(20,f3a+f3b+f3c));
+  bd.volRegime={score:f3,max:20,appAnnVol:appAnnV,spotAnnVol:spotAnnV,futAnnVol:futAnnV,compression:cv!=null&&pv!=null&&pv>0?+(cv/pv).toFixed(3):null,f3a,f3b,f3c};
+  total+=f3;
+
+  // ── F4: Return Quality (0-20) ─────────────────────────────────────
+  // a) Spot return quality — ideal = mild positive (not gap-up or negative) (0-8)
+  let f4a=0;
+  if(foSignal){
+    if(d1>=-1.0&&d1<=1.5)f4a=8;            // perfect: positive or tiny pullback
+    else if(d1>1.5&&d1<=3.0)f4a=6;         // strong move — valid
+    else if(d1>3.0)f4a=3;                   // overextended — chasing risk
+    else if(d1>=-2.5&&d1<-1.0)f4a=6;       // healthy pullback in uptrend
+    else f4a=2;                             // sharp drop
+  }
+  // b) Spot-futures return alignment (0-8)
+  let f4b=4; // neutral when futures return absent
+  if(foSignal&&futD1!=null){
+    if(futD1>0&&d1>0&&futD1>d1)f4b=8;      // futures leading spot = institutions positioning ahead
+    else if(futD1>0&&d1>0)f4b=6;           // both up, aligned
+    else if(futD1>0&&Math.abs(d1)<0.3)f4b=4;// futures up, spot flat — watch
+    else if(d1>0&&Math.abs(futD1)<0.3)f4b=3;// spot up, futures flat
+    else if(d1>0&&futD1<-0.3)f4b=0;        // DIVERGENCE — hard penalise
+    else if(futD1<0&&d1<0)f4b=1;           // both down
+  } else if(foSignal){
+    // No futD1 — use premium as proxy for alignment
+    f4b=prem>0.05&&d1>0?5:prem<-0.05&&d1>0?2:4;
+  }
+  // c) Return convergence — spot and futures should move similarly (0-4)
+  let f4c=2;
+  if(foSignal&&futD1!=null){
+    const diff=Math.abs(d1-futD1);
+    if(diff<0.3)f4c=4;
+    else if(diff<0.8)f4c=2;
+    else f4c=0;
+  }
+  const f4=Math.round(Math.min(20,f4a+f4b+f4c));
+  bd.returnQuality={score:f4,max:20,spotReturn:d1,futReturn:futD1??null,aligned:futD1!=null?(futD1>0&&d1>0):null,f4a,f4b,f4c};
+  total+=f4;
+
+  // ── F5: Trend Consistency (0-15) ─────────────────────────────────
+  let f5=5; // graceful neutral — no penalty for missing multi-day data
   if(trend&&trend.daysTracked>=3){
     const c=trend.consistencyPct;
-    f3=c>=90?25:c>=70?18:c>=55?12:c>=40?6:0;
-    if(trend.momentum==="improving")f3=Math.min(25,f3+3);
-    if(trend.momentum==="declining")f3=Math.max(0,f3-4);
-    // Score velocity: rising trend gets bonus
+    f5=c>=90?15:c>=70?11:c>=55?7:c>=40?3:1;
+    if(trend.momentum==='improving')f5=Math.min(15,f5+2);
+    if(trend.momentum==='declining')f5=Math.max(0,f5-3);
     const sv=scoreVelocity(trend);
-    if(sv&&sv.direction==='rising')f3=Math.min(25,f3+2);
-    else if(sv&&sv.direction==='falling')f3=Math.max(0,f3-2);
-  }else if(trend&&trend.daysTracked>=1)f3=5;
-  f3=Math.round(f3);bd.consistency={score:f3,max:25,consistencyPct:trend?.consistencyPct||0,daysTracked:trend?.daysTracked||0,momentum:trend?.momentum||"unknown"};total+=f3;
-  // F4: Entry Timing — improved with pullback and consolidation detection
-  let f4=hasMF?18:12;
+    if(sv&&sv.direction==='rising')f5=Math.min(15,f5+2);
+    else if(sv&&sv.direction==='falling')f5=Math.max(0,f5-2);
+  } else if(trend&&trend.daysTracked>=1) f5=4;
+  f5=Math.round(f5);
+  bd.consistency={score:f5,max:15,consistencyPct:trend?.consistencyPct||0,daysTracked:trend?.daysTracked||0,momentum:trend?.momentum||'unknown'};
+  total+=f5;
+
+  // ── F6: Entry Timing Refinement (0-5) ────────────────────────────
+  // Best entry = vol compressing AND spot mildly up (coiling spring about to release)
+  let f6=2; // neutral
   if(foSignal){
-    const d1=parseFloat(foSignal.d1)||0;
-    if(d1>=-1&&d1<=2)f4=20;else if(d1>2&&d1<=3)f4=14;else if(d1>3)f4=8;else if(d1<-2)f4=5;
-    const nd=trend?.periodReturn||0;
-    if(nd>20)f4=Math.max(0,f4-8);// already ran a lot — late entry
-    else if(nd>10)f4=Math.max(0,f4-4);
-    else if(nd<0)f4=Math.min(25,f4+4);// pullback = better entry
-    else if(nd<5&&nd>=0)f4=Math.min(25,f4+2);
-    // Tight consolidation bonus (last 3 days low volatility = coiling)
-    const recent=(trend?.scoreSeries||[]).slice(-3);
-    if(recent.length===3&&recent.every(d=>Math.abs(d.score)<0.5))f4=Math.min(25,f4+3);
+    const compressing=cv!=null&&pv!=null&&pv>0&&(cv/pv)<0.92;
+    const mildlyUp=d1>=0&&d1<=1.5;
+    const buildingBase=d1>=-1.0&&d1<0;
+    const stronglyUp=d1>3.0;
+    if(compressing&&mildlyUp)f6=5;
+    else if(compressing&&buildingBase)f6=4;
+    else if(compressing)f6=3;
+    else if(mildlyUp)f6=3;
+    else if(stronglyUp)f6=1;
+    else f6=2;
   }
-  f4=Math.round(Math.min(25,Math.max(0,f4)));
-  let volBonus=0;
-  if(foSignal&&parseFloat(foSignal.vol||0)>50){
-    volBonus=Math.min(5,Math.round((parseFloat(foSignal.vol)-50)/10));
-    bd.volSpike=true;
-  }
-  bd.timing={score:f4,max:25,d1:parseFloat(foSignal?.d1)||0,periodReturn:trend?.periodReturn||null,volSpike:bd.volSpike||false};
-  total+=f4;
-  // PCR guard — put-call ratio adjustment
+  bd.timing={score:f6,max:5,d1,compressing:cv!=null&&pv!=null&&pv>0?(cv/pv<0.92):false};
+  total+=f6;
+
+  // ── PCR adjustment (bonus/penalty, not a factor) ──────────────────
   const pcr=getPCR(sym)||getPCR(stock)||null;
   let pcrAdj=0;
   if(pcr!==null){
@@ -954,8 +1091,26 @@ function computeProbScore(stock,mfPick,foSignal,trend){
     else if(pcr<0.8)pcrAdj=-3;
   }
   bd.pcr={score:pcrAdj,value:pcr};
-  let finalTotal=Math.min(100,Math.round(total+volBonus+pcrAdj));
-  if(mfPick&&mfPick.ms>=3&&finalTotal<40)finalTotal=40;
+
+  // ── Apply hard filters ────────────────────────────────────────────
+  let finalTotal=Math.min(100,Math.round(total+pcrAdj));
+  if(hardDiverge){
+    finalTotal=Math.min(finalTotal,25);
+    bd.hardFilter='Spot-Futures Divergence';
+  } else if(futVolDiscount){
+    finalTotal=Math.min(finalTotal,45);
+    bd.hardFilter='Futures vol not confirming spot';
+  }
+  // Delivery % bonus (if available) — institutional conviction signal
+  const delPct=parseFloat(foSignal?.delPct||0);
+  if(delPct>=60)finalTotal=Math.min(100,finalTotal+4);
+  else if(delPct>=45)finalTotal=Math.min(100,finalTotal+2);
+  else if(delPct<20&&foSignal&&foSignal.score>0.5)finalTotal=Math.max(0,finalTotal-3);
+  // MF floor — strong MF conviction should never score below 35
+  if(mfPick&&mfPick.ms>=3&&finalTotal<35)finalTotal=35;
+  // Insider buy bonus
+  if(hasInsiderBuy)finalTotal=Math.min(100,finalTotal+3);
+  finalTotal=Math.round(finalTotal);
   return{total:finalTotal,breakdown:bd,sources,hasInsiderBuy};
 }
 
@@ -969,15 +1124,20 @@ function scoreVelocity(trend){
   return{delta,direction:delta>0.3?'rising':delta<-0.3?'falling':'flat',label:delta>0.3?'↑ Rising':delta<-0.3?'↓ Falling':'→ Flat'};
 }
 
-// Setup type classifier
+// Setup type classifier — uses full FOVOLT vol regime
 function classifySetup(fo,trend){
-  if(!fo)return null;
-  const d1=parseFloat(fo.d1||0),vol=parseFloat(fo.vol||0),prem=parseFloat(fo.prem||0);
+  if(!fo) return null;
+  const d1=parseFloat(fo.d1||0);
+  const vol=fo.appAnnVol??fo.spotAnnVol??parseFloat(fo.vol||0); // prefer appAnnVol (col N)
+  const prem=parseFloat(fo.prem||0);
   const mom=trend?.momentum||'',conPct=trend?.consistencyPct||0;
-  if(vol>60&&d1>1&&prem>0.05)return{type:'Breakout',cls:'layer-fo',tip:'High volume + premium expansion'};
-  if(d1<-0.5&&d1>-3&&fo.score>0.5&&conPct>60)return{type:'Pullback',cls:'layer-new',tip:'Dip in uptrend — watch for bounce entry'};
-  if(Math.abs(d1)<0.5&&vol<30&&mom==='stable')return{type:'Compression',cls:'layer-held',tip:'Range tightening — coil before the move'};
-  if(fo.score>0.3&&conPct>55&&vol>40)return{type:'Accumulation',cls:'layer-mf',tip:'Steady OI buildup — institutional entry'};
+  // Compression check using daily vol ratio (cols G/F)
+  const pv=fo.prevVol,cv=fo.curVol;
+  const compressing=pv!=null&&cv!=null&&pv>0&&(cv/pv)<0.92;
+  if(vol>50&&d1>1&&prem>0.05)return{type:'Breakout',cls:'layer-fo',tip:'High vol + premium expansion — enter on confirmation'};
+  if(d1<-0.5&&d1>-3&&fo.score>0.5&&conPct>60)return{type:'Pullback',cls:'layer-new',tip:'Dip in uptrend — best risk:reward entry'};
+  if(compressing&&Math.abs(d1)<0.8&&vol<35)return{type:'Compression',cls:'layer-held',tip:'Daily vol tightening — coil before the move'};
+  if(fo.score>0.3&&conPct>55&&vol>30)return{type:'Accumulation',cls:'layer-mf',tip:'Steady OI buildup — institutional entry phase'};
   return null;
 }
 
@@ -1004,14 +1164,19 @@ function calcPositionSize(entry,sl,capital,riskPct){
 }
 
 // Dynamic SL/Target based on vol and prob
+// Uses Applicable Annualised Vol (col N) — the NSE margin-relevant vol number.
+// Falls back to spot annualised vol (col H) then a conservative default.
 function calcTargetSL(entry,fo,trend,prob){
-  const vol=parseFloat(fo?.vol||25)/100;
-  const slPct=vol<0.3?0.15:vol<0.5?0.20:0.25;
+  const rawVol=fo?.appAnnVol??fo?.spotAnnVol??parseFloat(fo?.vol||25);
+  const vol=rawVol/100;
+  // SL width: tighter for low-vol names, wider for high-vol (avoids whipsaws)
+  const slPct=vol<0.20?0.12:vol<0.35?0.17:vol<0.50?0.22:0.27;
   const sl=+(entry*(1-slPct)).toFixed(2);
-  const tgtMult=(prob&&prob.total>=80)?0.5:(prob&&prob.total>=65)?0.4:0.3;
+  // Target multiplier: higher prob = wider target allowed
+  const tgtMult=(prob&&prob.total>=80)?0.55:(prob&&prob.total>=65)?0.42:0.32;
   const target=+(entry*(1+vol*tgtMult)).toFixed(2);
   const rr=+((target-entry)/(entry-sl)).toFixed(1);
-  return{sl,target,rr,valid:rr>=1.5};
+  return{sl,target,rr,valid:rr>=1.5,volUsed:+(rawVol).toFixed(1)};
 }
 /* ═══════════════════════════════════════════
    HELPERS
@@ -1031,16 +1196,19 @@ function disclosureBadge(month){
   const tip=diff===0?'Current month':withinWindow?'Within SEBI 10-day window':diff===1?'Previous month':`${diff} months old — stale`;
   return`<span style="font-size:.68rem;color:var(--text-muted)" title="${tip}"><span class="fresh-dot ${dotCls}" style="display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:2px;vertical-align:middle"></span>${label}</span>`;
 }
-/* ── priceTrio: renders Spot / Today-Fut / Prev-Fut prices with vol delta ── */
+/* ── priceTrio: renders Spot / Today-Fut / Prev-Fut prices with full vol context ── */
 function priceTrio(fo, d1){
   if(!fo) return '';
   const fmt=v=>v!=null&&v>0?'₹'+Number(v).toLocaleString('en-IN',{maximumFractionDigits:2}):'—';
-  const spot    = fo.cl;
-  const futCl   = fo.futCl   ?? null;
-  const prevFut = fo.prevFutCl?? null;
-  const pv      = fo.prevVol  ?? null;
-  const cv      = fo.curVol   ?? null;
-  const vDelta  = fo.volDelta ?? null;
+  const spot      = fo.cl;
+  const futCl     = fo.futCl    ?? null;
+  const prevFut   = fo.prevFutCl?? null;
+  const pv        = fo.prevVol  ?? null;
+  const cv        = fo.curVol   ?? null;
+  const vDelta    = fo.volDelta ?? null;
+  const futVDelta = fo.futVolDelta??null;
+  // Use appAnnVol (col N) as definitive vol — fallback chain: N → L → H
+  const displayVol= fo.appAnnVol??fo.futAnnVol??fo.spotAnnVol??parseFloat(fo.vol||0)||null;
 
   // spot day change
   const up1d=(d1??0)>=0;
@@ -1048,26 +1216,38 @@ function priceTrio(fo, d1){
 
   // futures day move
   let futMove='', futMoveClass='';
-  if(futCl!=null && prevFut!=null && prevFut>0){
+  if(fo.futD1!=null){
+    const fm=fo.futD1;
+    futMove=(fm>=0?'▲':'▼')+Math.abs(fm).toFixed(2)+'%';
+    futMoveClass=fm>=0?'up':'down';
+  } else if(futCl!=null && prevFut!=null && prevFut>0){
     const fm=+((futCl-prevFut)/prevFut*100).toFixed(2);
     futMove=(fm>=0?'▲':'▼')+Math.abs(fm).toFixed(2)+'%';
     futMoveClass=fm>=0?'up':'down';
   }
 
-  // vol delta badge
+  // vol badge — spot vol compression indicator (primary)
   let volBadge='';
   if(vDelta!=null){
     const absV=Math.abs(vDelta*100).toFixed(2);
     if(Math.abs(vDelta)>0.0005){
-      volBadge=vDelta>0
-        ?`<span class="vol-delta rising" title="Daily vol rose vs prev day: +${absV}%">Vol ▲${absV}%</span>`
-        :`<span class="vol-delta falling" title="Daily vol fell vs prev day: -${absV}%">Vol ▼${absV}%</span>`;
+      volBadge=vDelta<0
+        ?`<span class="vol-delta falling" title="Spot daily vol COMPRESSING vs prev day — coiling signal">SpotVol▼${absV}%</span>`
+        :`<span class="vol-delta rising"  title="Spot daily vol EXPANDING vs prev day">SpotVol▲${absV}%</span>`;
     } else {
-      volBadge=`<span class="vol-delta flat" title="Daily vol unchanged">Vol ~</span>`;
+      volBadge=`<span class="vol-delta flat" title="Spot daily vol unchanged">SpotVol~</span>`;
     }
-  } else if(fo.vol){
-    // fallback: just show annualised vol
-    volBadge=`<span class="vol-delta flat" title="Annualised IV">IV ${fo.vol}%</span>`;
+  } else if(displayVol){
+    volBadge=`<span class="vol-delta flat" title="Applicable annualised volatility (col N)">AppVol ${displayVol.toFixed(1)}%</span>`;
+  }
+
+  // Futures vol badge (secondary — shown only when data available)
+  let futVolBadge='';
+  if(futVDelta!=null&&Math.abs(futVDelta)>0.0005){
+    const absF=Math.abs(futVDelta*100).toFixed(2);
+    futVolBadge=futVDelta<0
+      ?`<span class="vol-delta falling" title="Futures daily vol compressing — smart money building quietly">FutVol▼${absF}%</span>`
+      :`<span class="vol-delta rising"  title="Futures daily vol expanding — positioning activity rising">FutVol▲${absF}%</span>`;
   }
 
   return`<div class="price-trio">
@@ -1085,7 +1265,11 @@ function priceTrio(fo, d1){
       <span class="price-trio-label">Fut (prev)</span>
       <span class="price-trio-val prevfut">${fmt(prevFut)}</span>
     </div>`:''}
-    ${volBadge?`<div class="price-trio-row" style="margin-top:2px">${volBadge}</div>`:''}
+    ${displayVol?`<div class="price-trio-row">
+      <span class="price-trio-label">App.Vol</span>
+      <span style="font-family:'Space Mono',monospace;font-size:.68rem;font-weight:700;color:${displayVol<30?'var(--green)':displayVol<50?'var(--amber)':'var(--red)'}">${displayVol.toFixed(1)}%</span>
+    </div>`:''}
+    ${volBadge||futVolBadge?`<div class="price-trio-row" style="gap:4px;margin-top:2px">${volBadge}${futVolBadge}</div>`:''}
   </div>`;
 }
 
@@ -1538,11 +1722,14 @@ function renderSmartRanking(){
           </div>
           <button class="card-expand-toggle" onclick="toggleExpand('${expandId}',this)"><span>▸</span> Score breakdown</button>
           <div class="card-expand-body" id="${expandId}">
-            <div class="expand-section-title">Probability: ${r.prob.total}/100</div>
-            <div class="expand-line"><span class="expand-label">Confluence (${r.prob.breakdown.confluence.sources} sources${r.prob.hasInsiderBuy?' · Insider buy':''})</span><span class="expand-val">${r.prob.breakdown.confluence.score}/25</span></div>
-            <div class="expand-line"><span class="expand-label">Momentum</span><span class="expand-val">${r.prob.breakdown.momentum.score}/25</span></div>
-            <div class="expand-line"><span class="expand-label">Trend Consistency</span><span class="expand-val">${r.prob.breakdown.consistency.score}/25</span></div>
-            <div class="expand-line"><span class="expand-label">Entry Timing</span><span class="expand-val">${r.prob.breakdown.timing.score}/25</span></div>
+            <div class="expand-section-title">Probability: ${r.prob.total}/100 — FOVOLT 6-Factor</div>
+            <div class="expand-line"><span class="expand-label">F1 · Confluence (${r.prob.breakdown.confluence?.sources??0} sources${r.prob.hasInsiderBuy?' · Insider':''})</span><span class="expand-val">${r.prob.breakdown.confluence?.score??0}/20</span></div>
+            <div class="expand-line"><span class="expand-label">F2 · Futures Structure${r.fo?.futD1!=null?` · Fut ${r.fo.futD1>=0?'+':''}${r.fo.futD1.toFixed(2)}%`:''}</span><span class="expand-val">${r.prob.breakdown.futuresStructure?.score??0}/20</span></div>
+            <div class="expand-line"><span class="expand-label">F3 · Vol Regime${r.prob.breakdown.volRegime?.appAnnVol!=null?` · AppVol ${r.prob.breakdown.volRegime.appAnnVol.toFixed(1)}%`:''}</span><span class="expand-val">${r.prob.breakdown.volRegime?.score??0}/20</span></div>
+            <div class="expand-line"><span class="expand-label">F4 · Return Quality${r.prob.breakdown.returnQuality?.aligned===false?' · ⚠ Diverging':r.prob.breakdown.returnQuality?.aligned===true?' · ✓ Aligned':''}</span><span class="expand-val">${r.prob.breakdown.returnQuality?.score??0}/20</span></div>
+            <div class="expand-line"><span class="expand-label">F5 · Trend (${r.prob.breakdown.consistency?.daysTracked??0}d)</span><span class="expand-val">${r.prob.breakdown.consistency?.score??0}/15</span></div>
+            <div class="expand-line"><span class="expand-label">F6 · Entry Timing${r.prob.breakdown.timing?.compressing?' · Coiling':''}</span><span class="expand-val">${r.prob.breakdown.timing?.score??0}/5</span></div>
+            ${r.prob.breakdown.hardFilter?`<div class="expand-line" style="color:var(--red)"><span class="expand-label">⚠ Hard Filter: ${r.prob.breakdown.hardFilter}</span></div>`:''}
             ${r.conflict?`<div class="expand-line" style="color:var(--purple)"><span class="expand-label">⚠ Conflict: MF buying but F&O bearish (${r.fo?.score?.toFixed(2)}). Manual review required.</span></div>`:''}
             <div class="expand-section-title">MF Signals</div>
             ${(r.funds||[]).map(fn=>`<div class="expand-line"><span class="expand-label" style="color:var(--text)">${fn}</span></div>`).join('')}
@@ -1789,18 +1976,22 @@ function buildPicksUniverse(){
     const oiSig=isLong?'Long Buildup':isShort?'Short Buildup':'Neutral';
     // Signal layer flags
     const hasBulk=bulkSyms.has(sym),hasBlock=blockSyms.has(sym);
-    // Improvement 2: volSpike uses same-day volDelta (precise) instead of raw annualised vol threshold
+    // volSpike: futures vol delta preferred (col K-J), then spot vol delta (col G-F), then annualised fallback
     const volDelta=fo?.volDelta??null;
-    const volSpike=volDelta!=null?(volDelta>0.001):(vol>50); // prefer intraday delta; fallback to annualised >50
+    const futVolDelta=fo?.futVolDelta??null;
+    const volSpike=(futVolDelta!=null&&futVolDelta>0.001)||(volDelta!=null&&volDelta>0.001)||(futVolDelta==null&&volDelta==null&&vol>50);
+    // volCompressing: spot daily vol falling = coiling signal (F3b sweet spot)
+    const pv=fo?.prevVol??null,cv=fo?.curVol??null;
+    const volCompressing=pv!=null&&cv!=null&&pv>0&&(cv/pv)<0.92;
     const conflict=fo&&fo.score<=-1&&mfScore>=1.5;
-    // Improvement 1: Basis alert — flag unusual contango (>1%) or backwardation (bullish)
+    // Basis alert — flag unusual contango (>1%) or backwardation
     const futCl=fo?.futCl??null,spotCl=fo?.cl??null;
     const basisPct=(futCl&&spotCl&&spotCl>0)?+((futCl-spotCl)/spotCl*100).toFixed(2):null;
     const basisAlert=basisPct!=null?(basisPct>1?'contango':basisPct<0?'backwardation':null):null;
     // Layer count for badge
-    const layers=(mfScore>0?1:0)+(foScore>0.3?1:0)+(hasBulk||hasBlock?1:0)+(volSpike?1:0)+(basisAlert==='backwardation'?1:0);
+    const layers=(mfScore>0?1:0)+(foScore>0.3?1:0)+(hasBulk||hasBlock?1:0)+(volSpike?1:0)+(basisAlert==='backwardation'?1:0)+(volCompressing?1:0);
     const setup=classifySetup(fo,trend),vel=scoreVelocity(trend);
-    items.push({sym,sec,fo,mfPick,trend,prob,mfScore,foScore,d1,oiSig,prem,vol,volDelta,hasBulk,hasBlock,volSpike,basisPct,basisAlert,conflict,layers,setup,vel});
+    items.push({sym,sec,fo,mfPick,trend,prob,mfScore,foScore,d1,oiSig,prem,vol,volDelta,futVolDelta,volSpike,volCompressing,hasBulk,hasBlock,basisPct,basisAlert,conflict,layers,setup,vel});
   });
   return items;
 }
@@ -1846,7 +2037,7 @@ function renderPicks(){
 }
 
 function renderPickCard(item,idx,mode){
-  const{sym,fo,mfPick,prob,d1,oiSig,prem,mfScore,foScore,volSpike,volDelta,hasBulk,hasBlock,basisPct,basisAlert,conflict,layers}=item;
+  const{sym,fo,mfPick,prob,d1,oiSig,prem,mfScore,foScore,volSpike,volDelta,futVolDelta,volCompressing,hasBulk,hasBlock,basisPct,basisAlert,conflict,layers}=item;
   const expandId=`pick-exp-${idx}`;
   const isWatched=STATE.watchlist.has(sym),up1d=d1>=0;
   const isLong=oiSig==='Long Buildup',isShort=oiSig==='Short Buildup';
@@ -1860,7 +2051,8 @@ function renderPickCard(item,idx,mode){
     item.setup?`<span class="rank-layer ${item.setup.cls}" title="${item.setup.tip}">${item.setup.type}</span>`:'',
     item.vel&&item.vel.direction!=='flat'?`<span class="rank-layer" style="color:${item.vel.direction==='rising'?'var(--green)':'var(--red)'};background:${item.vel.direction==='rising'?'rgba(0,229,153,.1)':'rgba(255,69,96,.1)'};border:1px solid ${item.vel.direction==='rising'?'rgba(0,229,153,.2)':'rgba(255,69,96,.2)'}">${item.vel.label}</span>`:'',
     fo?.delPct>=60?`<span class="rank-layer layer-held">Del ${fo.delPct}%</span>`:'',
-    volSpike?`<span class="rank-layer layer-new" title="${volDelta!=null?'Intraday vol rising: +'+(volDelta*100).toFixed(2)+'%':'Annualised vol spike'}">Vol↑${volDelta!=null?' +'+(volDelta*100).toFixed(2)+'%':''}</span>`:'',
+    volSpike?`<span class="rank-layer layer-new" title="${futVolDelta!=null?'Futures daily vol rising (col K−J): +'+(futVolDelta*100).toFixed(2)+'%':volDelta!=null?'Spot daily vol rising (col G−F): +'+(volDelta*100).toFixed(2)+'%':'Annualised vol spike'}">FutVol↑${futVolDelta!=null?' +'+(futVolDelta*100).toFixed(2)+'%':volDelta!=null?' +'+(volDelta*100).toFixed(2)+'%':''}</span>`:'',
+    volCompressing&&!volSpike?`<span class="rank-layer layer-held" title="Daily vol compressing (col G÷F < 0.92) — coiling spring, ideal positional setup">Compression</span>`:'',
     basisAlert==='contango'?`<span class="rank-layer" style="color:var(--amber);background:rgba(255,184,48,.1);border:1px solid rgba(255,184,48,.25)" title="Unusual contango: futures ${basisPct>0?'+':''}${basisPct}% above spot — cost-of-carry elevated">Contango ${basisPct}%</span>`:'',
     basisAlert==='backwardation'?`<span class="rank-layer" style="color:var(--green);background:rgba(0,229,153,.1);border:1px solid rgba(0,229,153,.25)" title="Backwardation: futures below spot — bullish demand signal">◆ Backwardation ${basisPct}%</span>`:'',
     hasBulk?`<span class="rank-layer layer-new">Bulk</span>`:'',
@@ -1885,7 +2077,8 @@ function renderPickCard(item,idx,mode){
       <div class="oi-cell">
         <span class="oi-type-badge ${isLong?'oi-badge-long':isShort?'oi-badge-short':'oi-badge-neutral'}">${isLong?'▲':isShort?'▼':'—'} ${oiSig}</span>
         <span class="oi-stat">Prem <strong style="color:${prem>0?'var(--green)':'var(--red)'}">${prem>0?'+':''}${parseFloat(fo?.prem||0).toFixed(3)}%</strong></span>
-        ${volSpike?`<span class="oi-diverge" style="background:rgba(255,69,96,.1);border-color:rgba(255,69,96,.25);color:var(--red)">${volDelta!=null?'Vol↑ +'+(volDelta*100).toFixed(2)+'% Δ':'Vol↑ Ann.IV '+fo.vol+'%'}</span>`:''}
+        ${volSpike?`<span class="oi-diverge" style="background:rgba(255,69,96,.1);border-color:rgba(255,69,96,.25);color:var(--red)">${futVolDelta!=null?'FutVol↑ +'+(futVolDelta*100).toFixed(2)+'%':volDelta!=null?'Vol↑ +'+(volDelta*100).toFixed(2)+'%':'Vol↑ Ann.IV '+fo.vol+'%'}</span>`:''}
+        ${volCompressing&&!volSpike?`<span class="oi-diverge" style="background:rgba(0,229,153,.08);border-color:rgba(0,229,153,.25);color:var(--green)" title="Spot daily vol compressing — coiling before the move">SpringCoil ↓Vol</span>`:''}
       </div>
       ${priceTrio(fo,d1)}
     </div>`:''}
@@ -1895,16 +2088,17 @@ function renderPickCard(item,idx,mode){
     </div>
     <button class="card-expand-toggle" onclick="toggleExpand('${expandId}',this)"><span>▸</span> Score breakdown</button>
     <div class="card-expand-body" id="${expandId}">
-      <div class="expand-section-title">Probability Breakdown: ${prob.total}/100</div>
-      <div class="expand-line"><span class="expand-label">Confluence (${prob.breakdown.confluence.sources} signal sources)</span><span class="expand-val">${prob.breakdown.confluence.score}/25</span></div>
-      <div class="expand-line"><span class="expand-label">F&O Momentum${fo?.delPct>=45?' · Del '+fo.delPct+'%':''}</span><span class="expand-val">${prob.breakdown.momentum.score}/25 ${!fo?'<span style="color:var(--text-muted);font-size:.65rem">(no F&O data)</span>':''}</span></div>
-      ${prob.breakdown.pcr&&prob.breakdown.pcr.value!==null?`<div class="expand-line"><span class="expand-label">PCR (Put-Call Ratio)</span><span class="expand-val" style="color:${prob.breakdown.pcr.score>=0?'var(--green)':'var(--red)'}">${prob.breakdown.pcr.value.toFixed(2)} ${prob.breakdown.pcr.score>0?'✓':prob.breakdown.pcr.score<0?'⚠ Caution':'Neutral'}</span></div>`:''}
-      ${prob.hasInsiderBuy?'<div class="expand-line"><span class="expand-label" style="color:var(--amber)">🔍 Insider buy detected this month</span></div>':''}
-      <div class="expand-line"><span class="expand-label">Trend Consistency (${prob.breakdown.consistency.daysTracked}d)</span><span class="expand-val">${prob.breakdown.consistency.score}/25</span></div>
-      <div class="expand-line"><span class="expand-label">Entry Timing${prob.breakdown.timing.volSpike?' + Vol Spike bonus':''}</span><span class="expand-val">${prob.breakdown.timing.score}/25</span></div>
+      <div class="expand-section-title">Probability Breakdown: ${prob.total}/100 — FOVOLT 6-Factor Model</div>
+      <div class="expand-line"><span class="expand-label">F1 · MF Confluence (${prob.breakdown.confluence?.sources??0} sources${prob.hasInsiderBuy?' · Insider buy':''})</span><span class="expand-val">${prob.breakdown.confluence?.score??0}/20</span></div>
+      <div class="expand-line"><span class="expand-label">F2 · Futures Structure${fo?` · Basis ${parseFloat(fo.prem||0)>0?'+':''}${parseFloat(fo.prem||0).toFixed(3)}%`:''}${prob.breakdown.futuresStructure?.futD1!=null?` · Fut ${prob.breakdown.futuresStructure.futD1>=0?'+':''}${prob.breakdown.futuresStructure.futD1.toFixed(2)}%`:''}</span><span class="expand-val">${prob.breakdown.futuresStructure?.score??0}/20</span></div>
+      <div class="expand-line"><span class="expand-label">F3 · Vol Regime${prob.breakdown.volRegime?.appAnnVol!=null?` · AppVol ${prob.breakdown.volRegime.appAnnVol.toFixed(1)}%`:''}${prob.breakdown.volRegime?.compression!=null?` · Compression ${(prob.breakdown.volRegime.compression*100).toFixed(1)}%`:''}</span><span class="expand-val" style="color:${prob.breakdown.volRegime?.f3a>=7?'var(--green)':prob.breakdown.volRegime?.f3a>=5?'var(--amber)':'var(--red)'}">${prob.breakdown.volRegime?.score??0}/20</span></div>
+      <div class="expand-line"><span class="expand-label">F4 · Return Quality · Spot ${d1>=0?'+':''}${d1.toFixed(2)}%${prob.breakdown.returnQuality?.futReturn!=null?` · Fut ${prob.breakdown.returnQuality.futReturn>=0?'+':''}${prob.breakdown.returnQuality.futReturn.toFixed(2)}%`:''}${prob.breakdown.returnQuality?.aligned===false?' · ⚠ Diverging':prob.breakdown.returnQuality?.aligned===true?' · ✓ Aligned':''}</span><span class="expand-val">${prob.breakdown.returnQuality?.score??0}/20</span></div>
+      <div class="expand-line"><span class="expand-label">F5 · Trend Consistency (${prob.breakdown.consistency?.daysTracked??0}d tracked)</span><span class="expand-val">${prob.breakdown.consistency?.score??0}/15</span></div>
+      <div class="expand-line"><span class="expand-label">F6 · Entry Timing${prob.breakdown.timing?.compressing?' · Vol compressing ✓':''}</span><span class="expand-val">${prob.breakdown.timing?.score??0}/5</span></div>
+      ${prob.breakdown.pcr?.value!=null?`<div class="expand-line"><span class="expand-label">PCR Adj · ${prob.breakdown.pcr.value.toFixed(2)}</span><span class="expand-val" style="color:${prob.breakdown.pcr.score>=0?'var(--green)':'var(--red)'}">${prob.breakdown.pcr.score>=0?'+':''}${prob.breakdown.pcr.score}</span></div>`:''}
+      ${prob.breakdown.hardFilter?`<div class="expand-line" style="color:var(--red)"><span class="expand-label">⚠ Hard Filter: ${prob.breakdown.hardFilter} — score capped</span></div>`:''}
       ${basisAlert==='contango'?`<div class="expand-line"><span class="expand-label" style="color:var(--amber)">⚠ Basis: Unusual contango ${basisPct}% — elevated cost-of-carry, watch for roll decay</span></div>`:''}
-      ${basisAlert==='backwardation'?`<div class="expand-line"><span class="expand-label" style="color:var(--green)">◆ Basis: Backwardation ${basisPct}% — futures below spot, demand pressure (bullish signal)</span></div>`:''}
-      ${fo&&volDelta!=null?`<div class="expand-line"><span class="expand-label">Intraday Vol Δ</span><span class="expand-val" style="color:${volDelta>0.001?'var(--red)':volDelta<-0.001?'var(--green)':'var(--text-muted)'}">${volDelta>0?'+':''}${(volDelta*100).toFixed(3)}% ${volDelta>0.001?'↑ risk rising':volDelta<-0.001?'↓ risk fading':'~flat'}</span></div>`:''}
+      ${basisAlert==='backwardation'?`<div class="expand-line"><span class="expand-label" style="color:var(--green)">◆ Basis: Backwardation ${basisPct}% — demand pressure (futures below spot)</span></div>`:''}
       ${conflict?`<div class="expand-line" style="color:var(--red)"><span class="expand-label">⚠ CONFLICT: MF buying (${mfScore.toFixed(1)}) but F&O bearish (${foScore.toFixed(1)}) — do NOT trade without manual review</span></div>`:''}
       ${mfPick?.sig?.length?`<div class="expand-section-title">MF Signal Detail</div>${mfPick.sig.map(s=>`<div class="expand-line"><span class="expand-label" style="color:var(--text)">${s}</span></div>`).join('')}`:''}
       ${hasBulk||hasBlock?`<div class="expand-line"><span class="expand-label" style="color:var(--amber)">🏛 ${hasBulk?'Bulk deal':''}${hasBulk&&hasBlock?' + ':''}${hasBlock?'Block deal':''} detected today</span></div>`:''}
@@ -2419,80 +2613,35 @@ function updateFreshness(){
 /* ═══════════════════════════════════════════
    DATA FETCHING
 ═══════════════════════════════════════════ */
-/* ── fetchNifty: tries Vercel API first, falls back to NSE public endpoint,
-   then shows a clean offline state. Warnings printed only once. ── */
-let _niftyWarnedOnce=false;
-async function fetchNifty(){
-  // 1. Try Vercel serverless API (works when deployed)
-  try{
-    const r=await fetch('/api/nifty',{signal:AbortSignal.timeout(4000)});
-    if(r.ok){
-      const d=await r.json();
-      if(d.dataAvailable){
-        if(d.indices?.nifty)renderNiftyTile('nifty',d.indices.nifty);
-        if(d.indices?.banknifty)renderNiftyTile('bnk',d.indices.banknifty);
-        if(d.quotes)Object.assign(STATE.quotes,d.quotes);
-        STATE.quotesAge=d.fetchedAt;
-        _niftyWarnedOnce=false;
-        refreshCurrentTab();
-        return;
-      }
-    }
-  }catch(e){/* fall through to public API */}
-
-  // 2. Try NSE India public indices API (no auth, works in browser)
-  try{
-    const headers={'Accept':'application/json','Accept-Language':'en-US,en;q=0.9'};
-    const r=await fetch('https://www.nseindia.com/api/allIndices',{
-      signal:AbortSignal.timeout(6000),
-      credentials:'include',
-      headers
+/* ── renderNiftyFromFOVOLT: populates index tiles from FOVOLT signals ─
+   NIFTY and BANKNIFTY rows are present in FOVOLT when NSE includes them.
+   Called once after FOVOLT loads. Falls back to a clean offline state.   ── */
+function renderNiftyFromFOVOLT(){
+  const signals=STATE.foData?.signals||{};
+  const NIFTY_SYMS  =['NIFTY','NIFTY50'];
+  const BNIFTY_SYMS =['BANKNIFTY','NIFTYBANK'];
+  const findFo=keys=>keys.map(k=>signals[k]).find(v=>v);
+  const nifty=findFo(NIFTY_SYMS), bnk=findFo(BNIFTY_SYMS);
+  if(nifty){
+    renderNiftyTile('nifty',{
+      last:nifty.cl,
+      change:nifty.cl-(nifty.pr||nifty.cl),
+      changePct:parseFloat(nifty.d1||0),
+      high:null,low:null
     });
-    if(r.ok){
-      const d=await r.json();
-      const indices=d.data||[];
-      const nifty50=indices.find(i=>i.index==='NIFTY 50');
-      const bankNifty=indices.find(i=>i.index==='NIFTY BANK');
-      if(nifty50){
-        renderNiftyTile('nifty',{
-          last:nifty50.last,
-          change:nifty50.variation,
-          changePct:nifty50.percentChange,
-          high:nifty50.high,
-          low:nifty50.low
-        });
-      }
-      if(bankNifty){
-        renderNiftyTile('bnk',{
-          last:bankNifty.last,
-          change:bankNifty.variation,
-          changePct:bankNifty.percentChange,
-          high:bankNifty.high,
-          low:bankNifty.low
-        });
-      }
-      if(nifty50||bankNifty){
-        STATE.quotesAge=new Date().toISOString();
-        _niftyWarnedOnce=false;
-        refreshCurrentTab();
-        return;
-      }
-    }
-  }catch(e){/* fall through to offline state */}
-
-  // 3. Offline / outside market hours — show clean state, warn only once
-  if(!_niftyWarnedOnce){
-    _niftyWarnedOnce=true;
-    console.warn('MFI: Index data unavailable — NSE API unreachable or market closed. Prices will refresh automatically.');
+  } else {
+    ['niftyVal','niftyChg'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=id.includes('Val')?'—':'F&O cls only';});
   }
-  const now=new Date();
-  // IST offset = UTC+5:30
-  const istH=((now.getUTCHours()+5)*60+(now.getUTCMinutes()+30))/60%24;
-  const isWeekend=now.getUTCDay()===0||now.getUTCDay()===6;
-  const marketOpen=!isWeekend&&istH>=9.25&&istH<15.5;
-  const msg=marketOpen?'Live data unavailable — retrying…':'Market closed · Last close shown when data loads';
-  ['niftyChg','bnkChg'].forEach(id=>{const el=document.getElementById(id);if(el&&el.textContent==='Loading…')el.textContent=msg;});
-  ['niftyVal','bnkVal'].forEach(id=>{const el=document.getElementById(id);if(el&&el.textContent==='—')el.textContent='—';});
+  if(bnk){
+    renderNiftyTile('bnk',{
+      last:bnk.cl,
+      change:bnk.cl-(bnk.pr||bnk.cl),
+      changePct:parseFloat(bnk.d1||0),
+      high:null,low:null
+    });
+  } else {
+    ['bnkVal','bnkChg'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=id.includes('Val')?'—':'F&O cls only';});
+  }
 }
 
 updateDataAgeBadge();
@@ -2580,14 +2729,27 @@ function parseBhavCopyFile(text, filename){
     }
     console.log(`BhavCopy parsed: ${Object.keys(signals).length} stocks, date=${tradingDate}`);
   } else {
-    // ── Legacy FOVOLT format ───────────────────────────────────────
-    // Date(0) Sym(1) SpotClose(2) PrevClose(3) LogRet(4) ... AnnVol(7) FutClose(8)
-    const iSym  = colIdx('symbol','sym')>0?colIdx('symbol','sym'):1;
-    const iCl   = Math.max(2,colIdx('underlyingvalue(a)','underlyinga','undrlygvala','underlyingvaluea'));
-    const iPr   = Math.max(3,colIdx('underlyingvalue(b)','underlyingb','undrlygvalb','underlyingvalueb'));
-    const iLogr = Math.max(4,colIdx('logreturn','logret','logreturns'));
-    const iVol  = Math.max(7,colIdx('annualisedvolatility','annualizedvolatility','annvol'));
-    const iFut  = Math.max(8,colIdx('futuresprice','futprice','closingpricefutures'));
+    // ── FOVOLT format — all 16 columns (0-indexed) ────────────────
+    // Col 0=Date  1=Symbol  2=SpotClose(A)  3=PrevClose(B)  4=LogRet(C)
+    // Col 5=PrevDailyVol(D)  6=CurDailyVol(E)  7=SpotAnnVol(F)
+    // Col 8=FutClose(G)  9=PrevFutClose(H)  10=FutLogRet(I)
+    // Col 11=PrevFutDailyVol(J)  12=CurFutDailyVol(K)  13=FutAnnVol(L)
+    // Col 14=AppDailyVol(M)  15=AppAnnVol(N)
+    const iSym     = colIdx('symbol','sym')>0?colIdx('symbol','sym'):1;
+    const iCl      = Math.max(2, colIdx('underlyingcloseprice(a)','underlyingvalue(a)','underlyinga','undrlygclosepricea','underlyingvaluea'));
+    const iPr      = Math.max(3, colIdx('underlyingpreviousdaycloseprice(b)','underlyingvalue(b)','underlyingb','undrlygprevdaycloseb','underlyingvalueb'));
+    const iLogr    = Math.max(4, colIdx('underlyinglogreturns(c)','logreturn','logret','logreturns'));
+    const iPrevVol = Math.max(5, colIdx('previousdayunderlyingvolatility(d)','previousdayvolatility','prevdayvol','prevvol'));
+    const iCurVol  = Math.max(6, colIdx('currentdayunderlyingdailyvolatility(e)','currentdaydailyvolatility','currentdayvol','dailyvolatility'));
+    const iVol     = Math.max(7, colIdx('underlyingannualisedvolatility(f)','annualisedvolatility','annualizedvolatility','annvol'));
+    const iFut     = Math.max(8, colIdx('futurescloseprice(g)','futuresprice(g)','futuresprice','futprice','closingpricefutures'));
+    const iPrevFut = Math.max(9, colIdx('futurespreviousdaycloseprice(h)','futuresprice(h)','previousfuturesprice','prevfutprice'));
+    const iFutLogr = Math.max(10,colIdx('futureslogreturns(i)','futureslogreturn','futlogret','futlogreturns'));
+    const iPrevFutVol=Math.max(11,colIdx('previousdayfuturesvolatility(j)','previousdayfuturesvolatility','prevdayfutvol','prevfutvol'));
+    const iCurFutVol =Math.max(12,colIdx('currentdayfuturesdailyvolatility(k)','currentdayfuturesvolatility','currentdayfutvol','curfutvol'));
+    const iFutAnnVol =Math.max(13,colIdx('futuresannualisedvolatility(l)','futuresannualisedvolatility','futannvol'));
+    const iAppDailyVol=Math.max(14,colIdx('applicabledailyvolatility(m)','applicabledailyvolatility','appdailyvol'));
+    const iAppAnnVol  =Math.max(15,colIdx('applicableannualisedvolatility(n)','applicableannualisedvolatility','appannvol'));
     const iDate = 0;
     const INDEX_SYMS=new Set(['NIFTY','BANKNIFTY','SENSEX','FINNIFTY','NIFTYNXT50','MIDCPNIFTY','BANKEX','SX40','SENSEX50']);
 
@@ -2598,32 +2760,50 @@ function parseBhavCopyFile(text, filename){
         const sym=(row[iSym]||'').replace(/^"|"$/g,'').trim().toUpperCase();
         if(!sym||INDEX_SYMS.has(sym)) continue;
         const _f=v=>{const n=parseFloat(String(v||'').replace(/,/g,'').trim());return isNaN(n)?null:n;};
-        const cl=_f(row[iCl]),pr=_f(row[iPr]),logR=_f(row[iLogr]);
-        const pv=row.length>iPrevVol?_f(row[iPrevVol]):null;   // F: prev day daily vol
-        const cv=row.length>iCurVol?_f(row[iCurVol]):null;     // G: curr day daily vol
-        const volA=_f(row[iVol]);                               // H: annualised vol
-        const futCl=_f(row[iFut]);                             // I: today futures close
-        const prevFutCl=row.length>iPrevFut?_f(row[iPrevFut]):null; // J: prev futures close
+        const cl        = _f(row[iCl]);           // C: Spot close today
+        const pr        = _f(row[iPr]);           // D: Spot close prev day
+        const logR      = _f(row[iLogr]);         // E: Spot log return
+        const pv        = row.length>iPrevVol  ? _f(row[iPrevVol])   : null; // F: Prev day spot daily vol
+        const cv        = row.length>iCurVol   ? _f(row[iCurVol])    : null; // G: Cur day spot daily vol
+        const volA      = _f(row[iVol]);           // H: Spot annualised vol
+        const futCl     = row.length>iFut      ? _f(row[iFut])       : null; // I: Futures close today
+        const prevFutCl = row.length>iPrevFut  ? _f(row[iPrevFut])   : null; // J: Futures close prev day
+        const futLogR   = row.length>iFutLogr  ? _f(row[iFutLogr])   : null; // K: Futures log return
+        const pvFut     = row.length>iPrevFutVol? _f(row[iPrevFutVol]): null; // J(vol): Prev day fut daily vol
+        const cvFut     = row.length>iCurFutVol ? _f(row[iCurFutVol]) : null; // K(vol): Cur day fut daily vol
+        const futAnnVol = row.length>iFutAnnVol ? _f(row[iFutAnnVol]) : null; // L: Futures annualised vol
+        const appDailyVol=row.length>iAppDailyVol?_f(row[iAppDailyVol]):null; // M: Applicable daily vol
+        const appAnnVol = row.length>iAppAnnVol ? _f(row[iAppAnnVol]) : null; // N: Applicable annualised vol
         if(!cl||cl<=0) continue;
         if(!tradingDate&&iDate>=0){tradingDate=parseTradingDate((row[iDate]||'').replace(/^"|"$/g,'').trim());}
+        // Spot 1-day return — prefer log return (exact), fallback to simple
         let d1=0;
-        try{d1=logR?+((Math.exp(logR)-1)*100).toFixed(2):(pr?+((cl-pr)/pr*100).toFixed(2):0);}catch(e){}
-        const prem=futCl&&cl?+((futCl-cl)/cl*100).toFixed(3):0;
-        const vol=volA?+volA.toFixed(1):0;
-        const volDelta=(cv!=null&&pv!=null)?+(cv-pv).toFixed(3):null;
+        try{d1=logR?+((Math.exp(logR)-1)*100).toFixed(2):(pr&&pr>0?+((cl-pr)/pr*100).toFixed(2):0);}catch(e){}
+        // Futures 1-day return — prefer log return, fallback to simple
+        let futD1=null;
+        if(futLogR!=null)futD1=+((Math.exp(futLogR)-1)*100).toFixed(2);
+        else if(futCl!=null&&prevFutCl!=null&&prevFutCl>0)futD1=+((futCl-prevFutCl)/prevFutCl*100).toFixed(2);
+        const prem      = (futCl!=null&&cl>0)?+((futCl-cl)/cl*100).toFixed(3):0;
+        const vol       = volA!=null?+volA.toFixed(1):0;                 // H: spot annualised vol %
+        const volDelta  = (cv!=null&&pv!=null)?+(cv-pv).toFixed(4):null; // G-F: spot daily vol delta
+        const futVolDelta=(cvFut!=null&&pvFut!=null)?+(cvFut-pvFut).toFixed(4):null; // K-J: fut daily vol delta
+        // Legacy score kept for backwards-compat display labels; real scoring now in computeProbScore
         const raw=(d1/3.0)+(prem*0.5);
         const score=Math.round(Math.max(-5,Math.min(5,raw))*100)/100;
         const label=score>=3?'Strong Bullish':score>=1.5?'Bullish':score>=0.5?'Mild Bullish':
                     score<=-3?'Strong Bearish':score<=-1.5?'Bearish':score<=-0.5?'Mild Bearish':'Neutral';
         signals[sym]={
-          score,label,cl,pr,
-          futCl:futCl??null,prevFutCl:prevFutCl??null,
-          prevVol:pv??null,curVol:cv??null,volDelta:volDelta??null,
-          d1:String(d1),d2:String(d1),prem:String(prem),vol:String(vol)
+          score,label,cl,pr,logR,
+          futCl:futCl??null, prevFutCl:prevFutCl??null, futD1:futD1??null,
+          prevVol:pv??null,  curVol:cv??null,   volDelta:volDelta??null,
+          prevFutVol:pvFut??null, curFutVol:cvFut??null, futVolDelta:futVolDelta??null,
+          spotAnnVol:volA??null, futAnnVol:futAnnVol??null,
+          appDailyVol:appDailyVol??null, appAnnVol:appAnnVol??null,
+          d1:String(d1), d2:String(d1), prem:String(prem), vol:String(vol)
         };
       }catch(e){errors.push(ri);}
     }
-    console.log(`FOVOLT parsed: ${Object.keys(signals).length} stocks, date=${tradingDate}`);
+    console.log(`FOVOLT parsed: ${Object.keys(signals).length} stocks, date=${tradingDate} (cols up to ${rows[1]?.length||0})`);
   }
 
   if(!Object.keys(signals).length) return{error:'No valid stock rows found. Check file format and column names.'};
@@ -2670,7 +2850,7 @@ function handleManualCSVUpload(file){
     }
     STATE.foData.meta.source=`manual_html_upload_${result.isBhavCopy?'bhavcopy':'fovolt'}`;
     STATE.foData.meta.stockCount=Object.keys(STATE.foData.signals).length;
-    updateFreshness();updateFoDataBadge();renderMarket();renderIntelligence();renderPicks();checkExitSignals();
+    updateFreshness();updateFoDataBadge();renderNiftyFromFOVOLT();renderMarket();renderIntelligence();renderPicks();checkPriceAlerts();checkExitSignals();
     showToast(`✅ Loaded ${result.stockCount} stocks from ${file.name}${result.tradingDate?' · '+result.tradingDate:''}`);
   };
   reader.readAsText(file);
@@ -2681,7 +2861,7 @@ async function fetchFOData(){
     const cfg=await fetch('/api/config').then(r=>r.json()).catch(()=>null);
     if(cfg?.dataUrl){
       const r=await fetch(cfg.dataUrl+'?t='+Date.now());
-      if(r.ok){STATE.foData=await r.json();updateFreshness();updateFoDataBadge();renderMarket();renderIntelligence();renderPicks();checkExitSignals();return;}
+      if(r.ok){STATE.foData=await r.json();updateFreshness();updateFoDataBadge();renderNiftyFromFOVOLT();renderMarket();renderIntelligence();renderPicks();checkExitSignals();return;}
     }
     const r=await fetch('/api/history?type=trends&days=5');
     if(r.ok){STATE.trendsData=await r.json();}
@@ -3663,8 +3843,8 @@ function renderGuide(){
   if(!c)return;
   c.innerHTML=`
   <div class="card" style="margin-bottom:12px;border-left:3px solid var(--accent)">
-    <div style="font-size:.9rem;font-weight:700;color:var(--accent);margin-bottom:4px">How to make profitable trades with this app</div>
-    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.6">This app tracks what India's top 20 mutual fund houses are buying and combines it with live F&O (Futures & Options) data. When <em>both</em> smart money and derivatives markets agree — that's your edge.</div>
+    <div style="font-size:.9rem;font-weight:700;color:var(--accent);margin-bottom:4px">How to find profitable positional trades with this app</div>
+    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.6">This app combines India's top mutual fund disclosures with daily NSE FOVOLT data (16 volatility and futures columns per stock). When institutional money, derivatives structure, and volatility regime all align — that's your positional edge.</div>
   </div>
 
   <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">THE 3-STEP DAILY ROUTINE</div>
@@ -3672,72 +3852,175 @@ function renderGuide(){
   <div class="card" style="margin-bottom:8px">
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
       <div style="width:28px;height:28px;border-radius:50%;background:var(--accent);color:#000;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.85rem;flex-shrink:0">1</div>
-      <div style="font-weight:700;font-size:.88rem">Morning check — MARKET tab (5 min)</div>
+      <div style="font-weight:700;font-size:.88rem">After market close — Upload FOVOLT CSV (2 min)</div>
     </div>
     <div style="font-size:.75rem;color:var(--text-muted);line-height:1.7;margin-left:38px">
-      • Look at <strong style="color:var(--text)">FII/DII flow</strong>. FII buying + DII buying = green light. Both selling = stay out.<br>
-      • Check <strong style="color:var(--text)">PCR</strong>. Above 1.0 = market has a cushion. Below 0.7 = danger zone — avoid new longs.<br>
-      • Look at <strong style="color:var(--text)">Delivery %</strong> chip. Above 55% = genuine buying. Below 30% = speculative noise.<br>
-      • If VIX &gt; 20: reduce position size. High VIX means high risk.
+      • Download <code style="background:var(--bg);padding:1px 4px;border-radius:3px">FOVOLT_DDMMYYYY.csv</code> from NSE → F&O → Historical Data → Volatility.<br>
+      • Tap <strong style="color:var(--accent)">📁 Upload CSV</strong> in the top strip. The app reads all 16 columns automatically.<br>
+      • The freshness strip turns green. All prices, volatility, and signals update instantly — no live connection needed.<br>
+      • <strong style="color:var(--text)">All prices in this app come from the FOVOLT file</strong>, labelled <span style="background:rgba(255,184,48,.12);color:var(--amber);padding:0 4px;border-radius:3px;font-size:.65rem;font-weight:700">F&O cls</span>. They are the previous session's closing prices, not live quotes.
     </div>
   </div>
 
   <div class="card" style="margin-bottom:8px">
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
       <div style="width:28px;height:28px;border-radius:50%;background:var(--accent);color:#000;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.85rem;flex-shrink:0">2</div>
-      <div style="font-weight:700;font-size:.88rem">Find your trade — PICKS tab → Best Trades</div>
+      <div style="font-weight:700;font-size:.88rem">Check market context — MARKET tab (3 min)</div>
     </div>
     <div style="font-size:.75rem;color:var(--text-muted);line-height:1.7;margin-left:38px">
-      • Open <strong style="color:var(--text)">Picks → Best Trades</strong>. This list is sorted by probability score (P score).<br>
-      • Only consider stocks with <strong style="color:var(--green)">P ≥ 65</strong>. Below 55 = not enough evidence.<br>
-      • Look for badges: <span style="background:rgba(0,229,153,.12);color:var(--green);padding:1px 6px;border-radius:8px;font-size:.65rem;font-weight:700">⚡⚡ Triple Lock</span> = MF + F&O + Trend all agree. This is the best setup.<br>
-      • Prefer <strong style="color:var(--text)">Breakout</strong> or <strong style="color:var(--text)">Accumulation</strong> setup types over Pullback (higher risk).<br>
-      • Avoid any stock showing a <span style="background:rgba(255,69,96,.12);color:var(--red);padding:1px 6px;border-radius:8px;font-size:.65rem;font-weight:700">⚠ Conflict</span> badge — MF and F&O disagree.
+      • <strong style="color:var(--text)">FII + DII both buying</strong> = green light for new longs. Both selling = sit out.<br>
+      • <strong style="color:var(--text)">PCR above 1.0</strong> = market has put protection, cushion in place.<br>
+      • <strong style="color:var(--text)">Delivery % above 55%</strong> = genuine accumulation, not speculative noise.<br>
+      • Nifty/BankNifty tiles show the session close from your FOVOLT upload.
     </div>
   </div>
 
   <div class="card" style="margin-bottom:12px">
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
       <div style="width:28px;height:28px;border-radius:50%;background:var(--accent);color:#000;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.85rem;flex-shrink:0">3</div>
-      <div style="font-weight:700;font-size:.88rem">Enter the trade — with discipline</div>
+      <div style="font-weight:700;font-size:.88rem">Find and enter your trade — PICKS → Best Trades</div>
     </div>
     <div style="font-size:.75rem;color:var(--text-muted);line-height:1.7;margin-left:38px">
-      • Tap <strong style="color:var(--accent)">▷ Buy</strong> on your chosen stock. A checklist will appear — review all 5 gates.<br>
-      • The app auto-calculates <strong style="color:var(--text)">Stop Loss and Target</strong> based on volatility and signal strength.<br>
-      • Set your capital in <strong style="color:var(--text)">Portfolio → Auto-Pilot</strong> and the app will show exactly how many shares to buy (1.5% risk per trade rule).<br>
-      • Only enter if R:R (Risk:Reward) is ≥ 1.5. The app flags weak setups.
+      • Go to <strong style="color:var(--text)">Picks → Best Trades</strong>. Sorted by the 6-factor probability score (P score).<br>
+      • Only consider stocks with <strong style="color:var(--green)">P ≥ 65</strong>. P ≥ 80 = rare, highest conviction setups.<br>
+      • Look for <span style="background:rgba(0,229,153,.12);color:var(--green);padding:1px 6px;border-radius:8px;font-size:.65rem;font-weight:700">⚡⚡ Triple Lock</span> — MF + F&O + Trend all agree.<br>
+      • Check the <strong style="color:var(--text)">Compression</strong> badge — vol tightening before the move = best positional entry.<br>
+      • Tap <strong style="color:var(--text)">▸ Score breakdown</strong> to see exactly which of the 6 factors drove the score.<br>
+      • Tap <strong style="color:var(--accent)">▷ Buy</strong>. The app calculates SL and Target using the Applicable Volatility (col N from FOVOLT).
     </div>
   </div>
 
-  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">UNDERSTANDING THE SCORES</div>
+  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">THE 6-FACTOR PROBABILITY SCORE (P SCORE)</div>
 
   <div class="card" style="margin-bottom:12px">
-    <div style="font-size:.78rem;font-weight:700;margin-bottom:10px">Probability Score (P score) — out of 100</div>
-    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.8">
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--border)"><span><strong style="color:var(--green)">P ≥ 75</strong> — High conviction</span><span style="color:var(--green);font-weight:700">Strong Buy</span></div>
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--border)"><span><strong style="color:var(--amber)">P 60–74</strong> — Good evidence</span><span style="color:var(--amber);font-weight:700">Buy with caution</span></div>
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--border)"><span><strong>P 45–59</strong> — Weak signal</span><span style="color:var(--text-muted)">Watch only</span></div>
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0"><span><strong style="color:var(--red)">P &lt; 45</strong> — Not enough evidence</span><span style="color:var(--red)">Skip</span></div>
+    <div style="font-size:.78rem;font-weight:700;margin-bottom:10px">What makes up the 100-point score — all from FOVOLT + MF data</div>
+
+    <div style="margin-bottom:10px;padding:8px 10px;background:var(--surface2);border-radius:7px;border:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-size:.78rem;font-weight:700;color:var(--blue)">F1 · MF Confluence</span><span style="font-size:.72rem;font-family:'Space Mono',monospace;color:var(--text-muted)">0–20 pts</span></div>
+      <div style="font-size:.72rem;color:var(--text-muted);line-height:1.6">How many independent signal sources agree: MF buying, F&O bullish, multi-day trend, insider buy. Each source is weighted. 4 sources = 20 pts (max). Requires MF data (monthly) plus FOVOLT for F&O signal.</div>
     </div>
-    <div style="font-size:.72rem;color:var(--text-muted);margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">The score has 4 components: <strong style="color:var(--text)">Confluence</strong> (how many signals agree) · <strong style="color:var(--text)">F&O Momentum</strong> (derivatives direction + delivery %) · <strong style="color:var(--text)">Trend Consistency</strong> (days of bullish data) · <strong style="color:var(--text)">Entry Timing</strong> (pullback vs overextended).</div>
+
+    <div style="margin-bottom:10px;padding:8px 10px;background:var(--surface2);border-radius:7px;border:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-size:.78rem;font-weight:700;color:var(--green)">F2 · Futures Structure</span><span style="font-size:.72rem;font-family:'Space Mono',monospace;color:var(--text-muted)">0–20 pts</span></div>
+      <div style="font-size:.72rem;color:var(--text-muted);line-height:1.6">Three sub-signals from FOVOLT:<br>
+        <strong style="color:var(--text)">Basis (0–8):</strong> Futures premium vs spot (cols I–C). Healthy contango + spot confirming = 8 pts. Excessive contango (roll risk) capped at 5.<br>
+        <strong style="color:var(--text)">Futures Momentum (0–7):</strong> Did futures lead spot up? Futures return (col K log return or J→I) vs spot return.<br>
+        <strong style="color:var(--text)">Futures Vol Expansion (0–5):</strong> Futures daily vol rising on an up-day = institutions positioning (cols K−J).
+      </div>
+    </div>
+
+    <div style="margin-bottom:10px;padding:8px 10px;background:var(--surface2);border-radius:7px;border:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-size:.78rem;font-weight:700;color:var(--amber)">F3 · Volatility Regime</span><span style="font-size:.72rem;font-family:'Space Mono',monospace;color:var(--text-muted)">0–20 pts</span></div>
+      <div style="font-size:.72rem;color:var(--text-muted);line-height:1.6">The most information-rich factor — uses 5 FOVOLT columns:<br>
+        <strong style="color:var(--text)">AppVol Level (0–8):</strong> Applicable Annualised Vol (col N — NSE's margin vol). 15–30% = sweet spot for positional trades. Above 60% = gap risk, avoid.<br>
+        <strong style="color:var(--text)">Vol Compression (0–8):</strong> Today's spot daily vol ÷ yesterday's (col G ÷ col F). Ratio &lt;0.85 = spring coiling = highest score. Ratio &gt;1.2 = late entry, lowest score.<br>
+        <strong style="color:var(--text)">Spot/Futures Vol Spread (0–4):</strong> Futures ann. vol (col L) ÷ spot ann. vol (col H). Below 90% = F&O market not confirming spot move — score capped.
+      </div>
+    </div>
+
+    <div style="margin-bottom:10px;padding:8px 10px;background:var(--surface2);border-radius:7px;border:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-size:.78rem;font-weight:700;color:var(--purple)">F4 · Return Quality</span><span style="font-size:.72rem;font-family:'Space Mono',monospace;color:var(--text-muted)">0–20 pts</span></div>
+      <div style="font-size:.72rem;color:var(--text-muted);line-height:1.6">
+        <strong style="color:var(--text)">Spot Return Quality (0–8):</strong> 0–1.5% up-day = ideal. Mild pullback (–1% to 0%) = also good (better entry). Gap up &gt;3% = overextended, low score.<br>
+        <strong style="color:var(--text)">Spot–Futures Alignment (0–8):</strong> Are both spot and futures returning positively? Futures leading spot = 8 pts (institutions positioning ahead). Spot up but futures down &gt;0.3% = HARD FILTER triggers (score capped at 25).<br>
+        <strong style="color:var(--text)">Return Convergence (0–4):</strong> |Spot return − Futures return| should be small. Large divergence = instability.
+      </div>
+    </div>
+
+    <div style="margin-bottom:10px;padding:8px 10px;background:var(--surface2);border-radius:7px;border:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-size:.78rem;font-weight:700;color:var(--text)">F5 · Trend Consistency</span><span style="font-size:.72rem;font-family:'Space Mono',monospace;color:var(--text-muted)">0–15 pts</span></div>
+      <div style="font-size:.72rem;color:var(--text-muted);line-height:1.6">Multi-day trend score from history (requires 3+ FOVOLT uploads). ConsistencyPct ≥ 90% = 15 pts. Defaults to 5 pts (neutral) when only 1 day of data is available — no penalty for fresh uploads.</div>
+    </div>
+
+    <div style="padding:8px 10px;background:var(--surface2);border-radius:7px;border:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-size:.78rem;font-weight:700;color:var(--text)">F6 · Entry Timing</span><span style="font-size:.72rem;font-family:'Space Mono',monospace;color:var(--text-muted)">0–5 pts</span></div>
+      <div style="font-size:.72rem;color:var(--text-muted);line-height:1.6">Refinement factor. Vol compressing (col G &lt; col F × 0.92) AND spot mildly up (0–1.5%) = 5 pts = coiling spring, perfect positional entry. Vol expanding + strongly up day = 1 pt (late entry).</div>
+    </div>
+
+    <div style="margin-top:10px;font-size:.72rem;color:var(--text-muted)"><strong style="color:var(--text)">Hard Filters</strong> (automatic caps, shown in breakdown):<br>
+      • Spot up &gt;0.5% but Futures down &gt;0.3% → score capped at 25 (Spot-Futures Divergence)<br>
+      • Futures annualised vol &lt;80% of Spot vol → score capped at 45 (F&O not confirming)<br>
+      • PCR &lt;0.6 → −6 pts adjustment (bearish options market)<br>
+      PCR &gt;1.5 → +3 pts bonus (strong put protection)
+    </div>
+  </div>
+
+  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">P SCORE THRESHOLDS</div>
+
+  <div class="card" style="margin-bottom:12px">
+    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.8">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border)"><span><strong style="color:var(--green)">P ≥ 80</strong> — Exceptional alignment across all 6 factors</span><span style="color:var(--green);font-weight:700">Full position</span></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border)"><span><strong style="color:var(--green)">P 65–79</strong> — Strong multi-factor confluence</span><span style="color:var(--green);font-weight:700">Strong Buy</span></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border)"><span><strong style="color:var(--amber)">P 50–64</strong> — Good evidence, some factors weak</span><span style="color:var(--amber);font-weight:700">Half position / Watch</span></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border)"><span><strong>P 35–49</strong> — Single-signal or thin evidence</span><span style="color:var(--text-muted)">Watch only</span></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0"><span><strong style="color:var(--red)">P &lt; 35</strong> — Hard filter triggered or no data</span><span style="color:var(--red)">Skip</span></div>
+    </div>
+    <div style="margin-top:8px;font-size:.7rem;color:var(--text-muted);padding:6px 8px;background:var(--surface2);border-radius:6px;border:1px solid var(--border)">
+      P ≥ 80 is genuinely hard to hit — it requires MF buying + healthy futures premium + vol compressing in the 15–30% zone + spot and futures both up + trend confirmed. That's your highest-probability positional trade.
+    </div>
+  </div>
+
+  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">UNDERSTANDING THE FOVOLT COLUMNS</div>
+
+  <div class="card" style="margin-bottom:12px">
+    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.8">
+      <div style="padding:5px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--text)">Cols A–B (2–3):</strong> Spot close today and previous day. Used to compute 1-day return.</div>
+      <div style="padding:5px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--text)">Col C (4):</strong> Log return (ln A/B). More precise than simple % for volatility math.</div>
+      <div style="padding:5px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--text)">Cols D–E (5–6):</strong> Previous and current day's <em>daily</em> spot volatility. Their ratio (E/D) powers the Compression signal in F3. A falling ratio = stock quieting down before a move.</div>
+      <div style="padding:5px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--text)">Col F (7):</strong> Spot annualised volatility. Used as fallback when col N is unavailable.</div>
+      <div style="padding:5px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--text)">Cols G–H (8–9):</strong> Futures close today and previous day. Their ratio powers the Futures Momentum sub-score in F2.</div>
+      <div style="padding:5px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--text)">Cols I–K (10–12):</strong> Futures log returns and daily volatility (prev/curr). Futures vol delta (K−J) in F2c shows whether the options market is actively pricing in a move.</div>
+      <div style="padding:5px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--text)">Col L (13):</strong> Futures annualised vol. Compared to col F (spot vol) in F3c — when futures vol &lt;80% of spot vol, F&O is not confirming the spot move (hard discount applied).</div>
+      <div style="padding:5px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--text)">Col M (14):</strong> Applicable daily volatility. NSE's margin calculation input.</div>
+      <div style="padding:5px 0"><strong style="color:var(--green)">Col N (15) — Most Important:</strong> <strong>Applicable Annualised Volatility</strong>. NSE computes this as the higher of spot and futures vol. It's used to set margins — and it's the number the whole market prices off. This drives the Vol Regime level score (F3a) and the SL/Target calculation. Sweet spot: 15–30% = best positional risk:reward.</div>
+    </div>
+  </div>
+
+  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">UNDERSTANDING PRICES IN THIS APP</div>
+
+  <div class="card" style="margin-bottom:12px">
+    <div style="font-size:.78rem;font-weight:700;margin-bottom:8px;color:var(--amber)">There are 2 types of values — prices and allocations. They look similar but mean very different things.</div>
+    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.9">
+      <div style="padding:7px 10px;background:rgba(255,184,48,.06);border:1px solid rgba(255,184,48,.2);border-radius:8px;margin-bottom:8px">
+        <div style="font-weight:700;color:var(--amber);margin-bottom:3px">① F&O Session Close — labelled <span style="background:rgba(255,184,48,.12);padding:0 4px;border-radius:3px;font-size:.65rem">F&O cls</span></div>
+        <div>The closing spot price from the FOVOLT file you uploaded (col C). This is the previous session's close. Shown next to every stock name across the app. <strong style="color:var(--text)">Never a live price.</strong></div>
+      </div>
+      <div style="padding:7px 10px;background:rgba(255,69,96,.06);border:1px solid rgba(255,69,96,.2);border-radius:8px;margin-bottom:8px">
+        <div style="font-weight:700;color:var(--red);margin-bottom:3px">② MF Allocation % — not a price</div>
+        <div>Values like <strong style="color:var(--text)">4.2%</strong> or <strong style="color:var(--text)">₹1,800 Cr</strong> in Intelligence/Holdings tabs = the <strong style="color:var(--text)">fund's portfolio weight</strong>, not a price. SEBI disclosures do not reveal what price the fund paid.</div>
+      </div>
+      <div style="padding:7px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px">
+        <div style="font-weight:700;color:var(--text);margin-bottom:3px">③ Your Entry Price — Portfolio tab only</div>
+        <div>The price you recorded when logging a trade. P&L is calculated as (F&O session close − your entry). Nothing to do with what any fund paid.</div>
+      </div>
+    </div>
   </div>
 
   <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">SIGNAL BADGES EXPLAINED</div>
 
   <div class="card" style="margin-bottom:12px">
-    <div style="font-size:.75rem;color:var(--text-muted);line-height:2">
+    <div style="font-size:.75rem;color:var(--text-muted);line-height:2.1">
       <div><span style="background:rgba(0,229,153,.12);color:var(--green);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">⚡⚡ Triple Lock</span> — MF buying + F&O bullish + Multi-day trend confirmed. Highest quality signal.</div>
-      <div><span style="background:rgba(0,229,153,.12);color:var(--green);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">⚡ 2 Signals</span> — Two of three confirm. Good signal, watch for 3rd to align.</div>
-      <div><span style="background:rgba(0,229,153,.12);color:var(--green);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">F&O Bullish</span> — Derivatives players are positioning long. Strong momentum signal.</div>
-      <div><span style="background:rgba(59,158,255,.12);color:var(--blue);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">MF Strong</span> — Multiple mutual fund houses accumulated this month.</div>
-      <div><span style="background:rgba(255,184,48,.12);color:var(--amber);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">Breakout</span> — High volume + premium expansion. Enter on confirmation, not anticipation.</div>
-      <div><span style="background:rgba(255,184,48,.12);color:var(--amber);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">Pullback</span> — Short-term dip in an uptrend. Good risk:reward but requires patience.</div>
-      <div><span style="background:rgba(255,184,48,.12);color:var(--amber);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">Compression</span> — Range tightening. Expect a move soon — direction not yet confirmed.</div>
-      <div><span style="background:rgba(255,184,48,.12);color:var(--amber);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">Accumulation</span> — Steady institutional buying with no price breakout yet. Early-stage opportunity.</div>
-      <div><span style="background:rgba(0,229,153,.12);color:var(--green);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">Del 65%</span> — High delivery percentage. Institutions are taking delivery, not just speculating.</div>
+      <div><span style="background:rgba(0,229,153,.12);color:var(--green);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">⚡ 2 Signals</span> — Two of three sources confirm. Good signal, watch for third to align.</div>
+      <div><span style="background:rgba(0,229,153,.12);color:var(--green);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">Compression</span> — Daily vol tightening (col G &lt; col F × 0.92). Spring coiling — move incoming.</div>
+      <div><span style="background:rgba(255,184,48,.12);color:var(--amber);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">Breakout</span> — High vol + premium expansion. Enter on confirmation only — not anticipation.</div>
+      <div><span style="background:rgba(255,184,48,.12);color:var(--amber);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">Pullback</span> — Short dip in an uptrend (D/F score &gt;0.5, consistency &gt;60%). Good R:R entry.</div>
+      <div><span style="background:rgba(59,158,255,.12);color:var(--blue);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">Accumulation</span> — Steady OI buildup, no price breakout yet. Early-stage positional opportunity.</div>
+      <div><span style="background:rgba(0,229,153,.12);color:var(--green);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">SpotVol▼</span> — Spot daily vol falling vs prev day (col G &lt; col F). Confirms compression.</div>
+      <div><span style="background:rgba(255,69,96,.12);color:var(--red);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">FutVol▲</span> — Futures daily vol rising (col K &gt; col J). F&O activity increasing — watch for breakout.</div>
       <div><span style="background:rgba(0,229,153,.12);color:var(--green);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">↑ Rising</span> — F&O score improving over last 3 sessions. Momentum building.</div>
-      <div><span style="background:rgba(255,69,96,.12);color:var(--red);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">↓ Falling</span> — F&O score weakening. Consider waiting or skipping.</div>
-      <div><span style="background:rgba(255,69,96,.12);color:var(--red);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">⚠ Conflict</span> — MF is buying but F&O is bearish. DO NOT TRADE without manual research.</div>
+      <div><span style="background:rgba(255,69,96,.12);color:var(--red);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">⚠ Conflict</span> — MF buying but F&O is bearish. DO NOT TRADE without additional research.</div>
+    </div>
+  </div>
+
+  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">STOP LOSS &amp; TARGET — HOW THEY ARE CALCULATED</div>
+
+  <div class="card" style="margin-bottom:12px">
+    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.8">
+      Both SL and Target are calculated using the <strong style="color:var(--text)">Applicable Annualised Volatility (col N)</strong> from FOVOLT — not a fixed percentage.<br><br>
+      <strong style="color:var(--text)">SL width:</strong> AppVol &lt;20% → 12% below entry · AppVol 20–35% → 17% · AppVol 35–50% → 22% · AppVol &gt;50% → 27%<br>
+      <strong style="color:var(--text)">Target:</strong> Entry × (1 + AppVol × multiplier). Multiplier = 0.55× for P≥80, 0.42× for P≥65, 0.32× otherwise.<br><br>
+      Low-vol names (AppVol 15–25%) get tighter stops and modest targets — this is intentional. High-vol names need wider stops to survive intraday moves but also offer larger targets. The SL and Target adapt to each stock's actual NSE-recognised risk.
     </div>
   </div>
 
@@ -3745,11 +4028,12 @@ function renderGuide(){
 
   <div class="card" style="margin-bottom:12px">
     <div style="font-size:.75rem;color:var(--text-muted);line-height:1.8">
-      <div style="padding:4px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--red)">Immediate exit:</strong> Stock hits your Stop Loss. No exceptions.</div>
-      <div style="padding:4px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--red)">Exit signal:</strong> F&O score turns negative (crosses from positive to bearish label).</div>
-      <div style="padding:4px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--amber)">Review and exit:</strong> MF exits the stock (shown in Intelligence → Exits).</div>
-      <div style="padding:4px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--amber)">Consider exit:</strong> P score drops below 40 on your open position.</div>
-      <div style="padding:4px 0"><strong style="color:var(--green)">Book partial profits:</strong> Stock hits 60% of target. Move SL to entry (risk-free trade).</div>
+      <div style="padding:4px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--red)">Immediate exit:</strong> Stock hits your Stop Loss. No exceptions. The SL is volatility-calibrated.</div>
+      <div style="padding:4px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--red)">Hard exit signal:</strong> F3 · Vol Regime score drops to 0 (futures vol discounting spot = F&O diverging).</div>
+      <div style="padding:4px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--red)">Hard filter triggered:</strong> Score breakdown shows "Spot-Futures Divergence" hard filter. Exit or reduce.</div>
+      <div style="padding:4px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--amber)">Review:</strong> MF exits the stock (Intelligence → Exits). Check if F2+F3 still positive before deciding.</div>
+      <div style="padding:4px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--amber)">Consider exit:</strong> P score drops below 40 on your open position (check daily after upload).</div>
+      <div style="padding:4px 0"><strong style="color:var(--green)">Book partial profits:</strong> Stock hits 60% of target. Move SL to breakeven — risk-free trade from here.</div>
     </div>
   </div>
 
@@ -3760,9 +4044,10 @@ function renderGuide(){
       <div>1. <strong style="color:var(--text)">Never risk more than 2% of capital on a single trade.</strong> Set this in Portfolio → Auto-Pilot.</div>
       <div>2. <strong style="color:var(--text)">Maximum 2 stocks from the same sector at a time.</strong> The Auto-Pilot enforces this; do the same manually.</div>
       <div>3. <strong style="color:var(--text)">Wait for Triple Lock before sizing up.</strong> 2-signal setups get half position, 3-signal get full.</div>
-      <div>4. <strong style="color:var(--text)">Don't chase breakouts.</strong> If a stock is up 5%+ on the day, wait for the next pullback.</div>
-      <div>5. <strong style="color:var(--text)">Red market days (FII + DII both selling) = no new trades.</strong> Let the market find its footing.</div>
-      <div>6. <strong style="color:var(--text)">The Auto-Pilot is your discipline engine.</strong> Let it run 5 positions — it uses the same scoring without emotion.</div>
+      <div>4. <strong style="color:var(--text)">Prefer Compression setups over Breakout setups for positional trades.</strong> Compression = you're early. Breakout = you're late.</div>
+      <div>5. <strong style="color:var(--text)">AppVol &gt; 60% = speculative only, very small size.</strong> The SL will be wide — size down accordingly.</div>
+      <div>6. <strong style="color:var(--text)">Red market days (FII + DII both selling) = no new trades.</strong> Let the market find its footing.</div>
+      <div>7. <strong style="color:var(--text)">The Auto-Pilot is your discipline engine.</strong> Let it run 5 positions — it uses the same 6-factor scoring without emotion.</div>
     </div>
   </div>
 
@@ -3770,62 +4055,12 @@ function renderGuide(){
   <div class="card" style="margin-bottom:16px">
     <div style="font-size:.75rem;color:var(--text-muted);line-height:1.7">
       <strong style="color:var(--text)">MF Holdings</strong> — Updated monthly (SEBI mandate). Current data: Jan–Feb 2026.<br>
-      <strong style="color:var(--text)">F&O Signals</strong> — Auto-fetched each trading day via GitHub Actions workflow. If today's data is unavailable, last valid day's signals are shown with an amber banner.<br>
-      <strong style="color:var(--text)">Nifty / BankNifty</strong> — Live, refreshed every 60 seconds during market hours.<br>
+      <strong style="color:var(--text)">F&O Signals (FOVOLT)</strong> — Upload each evening after market close. GitHub Actions can automate this at 7PM IST.<br>
       <div style="margin-top:8px;padding:8px 10px;background:rgba(0,229,153,.06);border-radius:6px;border:1px solid rgba(0,229,153,.2)">
-        <strong style="color:var(--green)">📁 Manual Upload (new):</strong> Tap the <strong>Upload CSV</strong> button in the top strip to load prices directly in the browser — no GitHub Actions run needed.<br>
-        Accepts: <code style="background:var(--bg);padding:1px 4px;border-radius:3px">BhavCopy_NSE_FO_*.csv</code> (new NSE format, uses <strong>UndrlygPric</strong> + <strong>TradDt</strong>) or <code style="background:var(--bg);padding:1px 4px;border-radius:3px">FOVOLT_*.csv</code> (legacy).<br>
-        The date shown in the freshness strip will update from the file's own TradDt/date column — not from your system clock.
+        <strong style="color:var(--green)">📁 Manual Upload:</strong> Tap <strong>Upload CSV</strong> in the top strip. Accepts <code style="background:var(--bg);padding:1px 4px;border-radius:3px">FOVOLT_DDMMYYYY.csv</code> (all 16 cols) or <code style="background:var(--bg);padding:1px 4px;border-radius:3px">BhavCopy_NSE_FO_*.csv</code> (spot price only).<br>
+        FOVOLT gives you all 16 columns and the full 6-factor score. BhavCopy gives spot price only — F2/F3/F4 futures and vol factors will be zero or neutral.
       </div>
-      <div style="margin-top:6px;padding:6px 10px;background:var(--surface2);border-radius:6px;border:1px solid var(--border)">If you see an amber "F&O signals unavailable" banner, the data is from the previous trading day. Rankings still work — F&O momentum scores will be slightly stale but MF conviction and trend scores are unaffected.</div>
-    </div>
-  </div>
-
-  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">UNDERSTANDING PRICES — AVOID CONFUSION</div>
-  <div class="card" style="margin-bottom:12px">
-    <div style="font-size:.78rem;font-weight:700;margin-bottom:10px;color:var(--amber)">⚠ There are 3 different types of prices in this app. They mean very different things.</div>
-    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.9">
-
-      <div style="padding:8px 10px;background:rgba(0,229,153,.06);border:1px solid rgba(0,229,153,.2);border-radius:8px;margin-bottom:8px">
-        <div style="font-weight:700;color:var(--green);margin-bottom:3px">① Live CMP — labelled <span style="background:rgba(0,229,153,.15);padding:0 4px;border-radius:3px;font-size:.65rem">LIVE</span></div>
-        <div>The current market price, refreshed every 60 seconds during market hours. This is what you'd pay if you buy right now. Shown next to stock names in most cards when your Vercel/NSE connection is active.</div>
-      </div>
-
-      <div style="padding:8px 10px;background:rgba(255,184,48,.06);border:1px solid rgba(255,184,48,.2);border-radius:8px;margin-bottom:8px">
-        <div style="font-weight:700;color:var(--amber);margin-bottom:3px">② F&O Session Close — labelled <span style="background:rgba(255,184,48,.12);padding:0 4px;border-radius:3px;font-size:.65rem">F&O cls</span></div>
-        <div>The closing price from the last F&O data upload (via GitHub Actions). Used when live quotes aren't available. It is the previous session's close, <strong style="color:var(--text)">not today's live price.</strong> Can be hours or days old depending on when data was last pushed.</div>
-      </div>
-
-      <div style="padding:8px 10px;background:rgba(255,69,96,.06);border:1px solid rgba(255,69,96,.2);border-radius:8px;margin-bottom:8px">
-        <div style="font-weight:700;color:var(--red);margin-bottom:3px">③ MF Allocation % — <em>not a price at all</em></div>
-        <div>In Intelligence → MF Buying / New Entry / Exits and in the Fund Holdings modal, you'll see values like <strong style="color:var(--text)">4.2% or ₹1,800 Cr</strong>. These are the <strong style="color:var(--text)">percentage of the fund's AUM</strong> allocated to that stock, and the rupee value of that holding — <strong style="color:var(--red)">NOT the price the fund paid.</strong> SEBI disclosures do not reveal the exact buy price of the fund.</div>
-      </div>
-
-      <div style="padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px">
-        <div style="font-weight:700;color:var(--text);margin-bottom:3px">④ Your Entry Price — in Portfolio tab</div>
-        <div>The price at which <em>you</em> recorded a trade. Shown as "Entry" in open trades. The P&L shown below it is calculated using the F&O session close (or live CMP if available) vs your entry. This is your personal trade record — it has nothing to do with what any fund paid.</div>
-      </div>
-
-    </div>
-    <div style="margin-top:12px;padding:8px 10px;background:var(--surface2);border-radius:6px;border:1px solid var(--border);font-size:.72rem;color:var(--text-muted)">
-      <strong style="color:var(--text)">Quick rule of thumb:</strong> If you see <strong>%</strong> next to a value → it's an allocation weight, not a price. If you see <strong>₹</strong> with a <span style="background:rgba(255,184,48,.12);color:var(--amber);padding:0 3px;border-radius:2px;font-size:.65rem">F&amp;O cls</span> badge → it's the FOVOLT session close price (no live quotes used). If you see ₹ under "Entry" in Portfolio → it's your personal buy price.
-    </div>
-  </div>
-
-  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">HOME TAB — FUND CARDS</div>
-  <div class="card" style="margin-bottom:16px">
-    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.8">
-      <strong style="color:var(--text)">Tap any fund house card</strong> on the Home tab (Fund Coverage section) to open a full holdings breakdown for that house.<br><br>
-      <div style="padding:6px 10px;background:var(--surface2);border-radius:6px;border:1px solid var(--border);margin-bottom:8px">
-        <strong style="color:var(--text)">Inside the holdings modal you'll find:</strong>
-        <div style="margin-top:6px">• Full list of stocks held, sorted by allocation %</div>
-        <div>• Jan→Feb change for each position (NEW / +x% / -x%)</div>
-        <div>• Stocks exited this month (highlighted in red, struck through)</div>
-        <div>• If the house runs multiple funds, use the fund pills to switch between them</div>
-        <div>• ⚖ Compare button — shows all funds side by side for the same house</div>
-        <div>• Live CMP or F&O close next to each holding for quick reference</div>
-      </div>
-      <strong style="color:var(--amber)">Remember:</strong> The allocation % shown inside the modal is the fund's portfolio weight — it is not the purchase price. The fund's actual buy price is not disclosed by SEBI.
+      <div style="margin-top:6px;padding:6px 10px;background:var(--surface2);border-radius:6px;border:1px solid var(--border)">If you see an amber stale banner, the data is from a previous trading day. Upload today's FOVOLT to restore full scoring.</div>
     </div>
   </div>`;
 }
@@ -3862,7 +4097,8 @@ function init(){
   initPillTabs();initSearch();
   renderMarket();renderIntelligence();renderPortfolio();renderGuide();
   fetchFOData().then(async()=>{
-    // No live price fetch — all prices come from FOVOLT file
+    // All prices come from FOVOLT — populate index tiles from signals
+    renderNiftyFromFOVOLT();
     renderFiiDiiChart();
     ingestFoDelivery();
     renderDeliverySpikes();
@@ -3871,11 +4107,12 @@ function init(){
     fetchHistoryForSparklines().catch(()=>{});
     fetchPCRData().catch(()=>{});
     renderIntelligence();
+    // One-time exit signal check after data loads (no polling — FOVOLT is static)
+    checkPriceAlerts();
+    checkExitSignals();
   });
   // mfapi.in NAV fetch — parallel, non-blocking, single run
   setTimeout(()=>fetchLiveHoldings(),2000);
-  // Periodic: only check alerts/exit signals — no live price polling
-  setInterval(()=>{checkPriceAlerts();checkExitSignals();},60000);
 }
 document.addEventListener('DOMContentLoaded',init);
 </script>
