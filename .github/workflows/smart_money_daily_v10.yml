@@ -1,95 +1,1181 @@
-name: Smart Money Daily V11
+name: Smart Money Daily Fetch V10
+
+# Runs at 7:00 PM IST (13:30 UTC) Mon–Fri after market close.
+# Also manually triggerable — useful if you upload your own CSV instead.
+#
+# REQUIRED SECRETS (set in app repo → Settings → Secrets → Actions):
+#   DATA_REPO_PAT       — GitHub PAT with contents:write on the data repo
+#
+# OPTIONAL SECRETS (for new V10 features):
+#   SENDGRID_API_KEY    — SendGrid API key for weekly digest email (#12)
+#   DIGEST_EMAIL_TO     — recipient email address for weekly digest
+#   DIGEST_EMAIL_FROM   — sender email address (must be verified in SendGrid)
+#
+# REQUIRED VARS:
+#   GITHUB_OWNER    — your GitHub username
+#   GITHUB_REPO     — data repo name (default: mf-intelligence-data)
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: '30 10 * * 1-5'  # 4:00 PM IST
+    - cron: '30 13 * * 1-5'   # 7:00 PM IST Mon–Fri (after market close)
+  workflow_dispatch:
+    inputs:
+      date_override:
+        description: 'Date to fetch (DD-Mon-YYYY e.g. 10-Apr-2026). Leave blank for today.'
+        required: false
+        default: ''
+      skip_nse_fetch:
+        description: 'Skip NSE fetch — just recompute from existing CSV if uploaded manually'
+        required: false
+        default: 'false'
+      force_weekly_digest:
+        description: 'Force send weekly digest email even if not Friday'
+        required: false
+        default: 'false'
 
 jobs:
-  build:
+  fetch-and-push:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
+      - name: Checkout data repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/mf-intelligence-data
+          token: ${{ secrets.DATA_REPO_PAT }}
+          path: data-repo
 
-      - name: Setup Python
-        uses: actions/setup-python@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install pandas
+        run: pip install requests pandas
 
-      - name: Process Data
+      # ── Process manually uploaded CSVs (FOVOLT + FII-DII) ───────────────────
+      # Upload files to data/uploads/ in the data repo before triggering workflow.
+      # File naming:
+      #   FOVOLT:  FOVOLT_DDMMYYYY.csv      (NSE F&O Volatility archive download)
+      #   FII-DII: fii-dii_DDMMYYYY.csv     (NSE FII-DII Trend download — exact name)
+      #            Also accepts: FIIDII_DDMMYYYY.csv or fiidii_DDMMYYYY.csv
+      # After processing, files are archived to data/uploads/processed/
+      # If valid uploads are found, NSE auto-fetch is skipped automatically.
+      - name: Process manual CSV uploads (FOVOLT + FIIDII)
+        id: process_uploads
         run: |
-          import csv, json, os
+          python3 << 'PYEOF'
+          import csv, io, glob, os, json, math, shutil
+          from datetime import datetime, date, timedelta
 
-          def parse_bhavcopy(path):
-              data = {}
-              trade_date = None
-              with open(path) as f:
-                  reader = csv.DictReader(f)
-                  for row in reader:
-                      sym = row.get('TckrSymb')
-                      price = row.get('UndrlygPric')
-                      date = row.get('TradDt')
-                      if sym and price:
+          uploads_dir  = 'data-repo/data/uploads'
+          archive_dir  = 'data-repo/data/uploads/processed'
+          os.makedirs(archive_dir, exist_ok=True)
+
+          INDEX_SYMS = {'NIFTY','BANKNIFTY','SENSEX','FINNIFTY','NIFTYNXT50',
+                        'MIDCPNIFTY','BANKEX','SX40','SENSEX50'}
+
+          # ── Find the newest FOVOLT and FII-DII files ─────────────
+          # FOVOLT filename:  FOVOLT_DDMMYYYY.csv
+          # FII-DII filename: fii-dii_DDMMYYYY.csv  (NSE download naming)
+          #                   Also accepts FIIDII_*.csv or fiidii_*.csv variants
+          fovolt_files = sorted(glob.glob(f'{uploads_dir}/FOVOLT_*.csv'))
+          # New NSE BhavCopy format: BhavCopy_NSE_FO_*.csv
+          bhavcopy_files = sorted(glob.glob(f'{uploads_dir}/BhavCopy_NSE_FO_*.csv'))
+          fiidii_files = sorted(
+              glob.glob(f'{uploads_dir}/fii-dii_*.csv') +
+              glob.glob(f'{uploads_dir}/FIIDII_*.csv')  +
+              glob.glob(f'{uploads_dir}/fiidii_*.csv')
+          )
+
+          if not fovolt_files and not bhavcopy_files and not fiidii_files:
+              print("No manual upload CSVs found — NSE auto-fetch will run normally.")
+              with open('/tmp/upload_processed.env', 'w') as f:
+                  f.write('UPLOADS_FOUND=false\n')
+              raise SystemExit(0)
+
+          signals     = {}
+          fii_dii_raw = {}
+          fiidii_rows = []   # per-day rows for fiiDiiHistory chart
+          stock_count = 0
+
+          # ── Parse FOVOLT CSV ──────────────────────────────────────
+          if fovolt_files:
+              fovolt_path = fovolt_files[-1]   # newest
+              print(f"Processing FOVOLT: {os.path.basename(fovolt_path)}")
+              with open(fovolt_path, newline='', encoding='utf-8-sig') as fh:
+                  content = fh.read()
+              reader = csv.reader(io.StringIO(content))
+              raw_header = next(reader, None)
+              print(f"  FOVOLT header: {raw_header[:9] if raw_header else 'EMPTY'}")
+
+              # Build column-index map from actual header (fallback if NSE renames)
+              # Expected: Date(0) Symbol(1) UndrlgVal(A)(2) UndrlgVal(B)(3) LogRet(4) ...
+              # Annualised(7) FutPrice(8)
+              hdr_lower = [str(h).lower().replace(' ','').replace('_','') for h in (raw_header or [])]
+              def _col(candidates, default):
+                  for c in candidates:
+                      for i, h in enumerate(hdr_lower):
+                          if c in h: return i
+                  return default
+
+              col_sym   = _col(['symbol','sym'], 1)
+              col_cl    = _col(['underlyingvalue(a)','underlynga','undrlygval(a)','underlyingvaluea'], 2)
+              col_pr    = _col(['underlyingvalue(b)','underlyingb','undrlygval(b)','underlyingvalueb'], 3)
+              col_logr  = _col(['logreturn','logret','logreturns'], 4)
+              col_vol   = _col(['annualisedvolatility','annualizedvolatility','annvol','annualisedvol'], 7)
+              col_fut   = _col(['futuresprice','futprice','futurespriceg','closingpricefutures'], 8)
+              print(f"  FOVOLT col map: sym={col_sym} cl={col_cl} pr={col_pr} logr={col_logr} vol={col_vol} fut={col_fut}")
+
+              for row in reader:
+                  try:
+                      if len(row) < 9: continue
+                      sym = row[col_sym].strip().upper()
+                      if not sym or sym in INDEX_SYMS: continue
+
+                      def _f(v):
+                          try: return float(str(v).replace(',','').strip())
+                          except: return None
+
+                      cl      = _f(row[col_cl])    # Underlying spot close  ✅ FIXED
+                      pr      = _f(row[col_pr])    # Prev day spot close
+                      log_ret = _f(row[col_logr])  # Log return
+                      vol_ann = _f(row[col_vol])   # Annualised IV
+                      fut_cl  = _f(row[col_fut])   # Futures close (basis only)
+
+                      # Guard: if cl looks like a futures price (very different from expected),
+                      # do a sanity cross-check — fut_cl should be within ±5% of cl for near-month.
+                      # If cl==0 or None, skip row.
+                      if cl is None or cl == 0: continue
+
+                      try:
+                          d1 = round((math.exp(log_ret) - 1) * 100, 2) if log_ret else 0.0
+                      except:
+                          d1 = round(((cl - pr) / pr * 100), 2) if pr else 0.0
+
+                      try:
+                          prem = round((fut_cl - cl) / cl * 100, 3) if fut_cl and cl else 0.0
+                      except:
+                          prem = 0.0
+
+                      vol   = round(vol_ann, 1) if vol_ann else 0.0
+                      raw   = (d1 / 3.0) + (prem * 0.5)
+                      score = round(max(-5.0, min(5.0, raw)), 2)
+                      label = ('Strong Bullish' if score >= 3   else
+                               'Bullish'        if score >= 1.5 else
+                               'Mild Bullish'   if score >= 0.5 else
+                               'Strong Bearish' if score <= -3  else
+                               'Bearish'        if score <= -1.5 else
+                               'Mild Bearish'   if score <= -0.5 else 'Neutral')
+
+                      signals[sym] = {
+                          'score': score, 'label': label, 'cl': cl, 'pr': pr,
+                          'd1': str(d1), 'd2': str(d1),
+                          'prem': str(prem), 'vol': str(vol)
+                      }
+                      stock_count += 1
+                  except: continue
+
+              print(f"  Parsed {stock_count} stocks from FOVOLT")
+              for chk in ['SUNPHARMA','RELIANCE','HDFCBANK']:
+                  if chk in signals:
+                      s = signals[chk]
+                      print(f"  CHECK {chk}: cl={s['cl']}  prem={s['prem']}  d1={s['d1']}")
+
+              # Store basename BEFORE archiving (used later for date extraction)
+              fovolt_basename = os.path.basename(fovolt_path)
+              # Archive the processed file
+              shutil.move(fovolt_path, os.path.join(archive_dir, fovolt_basename))
+              print(f"  Archived {fovolt_basename} → uploads/processed/")
+
+          # ── Parse NEW NSE BhavCopy format: BhavCopy_NSE_FO_*.csv ──────────
+          # Format: TckrSymb,TradDt,FinInstrmNm,OptnTp,StrkPric,UndrlygPric,...
+          # We use UndrlygPric as the spot close (this is the correct field).
+          # TradDt (YYYY-MM-DD) is used as the authoritative trading date.
+          bhavcopy_date_iso = None
+          if bhavcopy_files:
+              bhavcopy_path = bhavcopy_files[-1]   # newest
+              print(f"Processing BhavCopy: {os.path.basename(bhavcopy_path)}")
+              with open(bhavcopy_path, newline='', encoding='utf-8-sig') as fh:
+                  content = fh.read()
+              reader = csv.DictReader(io.StringIO(content))
+              bhav_header = reader.fieldnames or []
+              print(f"  BhavCopy header: {bhav_header[:10]}")
+
+              # Normalise header keys
+              def _norm(k): return str(k).strip().replace(' ','').replace('_','').lower()
+              bhav_header_norm = {_norm(h): h for h in bhav_header}
+
+              def _bfld(*names):
+                  for n in names:
+                      if n in bhav_header_norm: return bhav_header_norm[n]
+                  return None
+
+              fld_sym   = _bfld('tckrsymb','symbol','sym')
+              fld_dt    = _bfld('traddt','tradingdate','trddt','bizdt','date')
+              fld_undrl = _bfld('undrlygpric','underlyingprice','underlyingvalue','undrlygvl','spotclose')
+              fld_close = _bfld('closepric','closingprice','close','settlpric')
+              fld_inst  = _bfld('fininstrmn','instrumenttype','instrmntype','instrmtype','type')
+
+              print(f"  BhavCopy fields: sym={fld_sym} dt={fld_dt} undrl={fld_undrl} close={fld_close} inst={fld_inst}")
+
+              bhav_signals_raw = {}  # sym -> {cl, dates seen}
+              for row in reader:
+                  try:
+                      if not fld_sym: continue
+                      sym = str(row.get(fld_sym,'')).strip().upper()
+                      if not sym or sym in INDEX_SYMS: continue
+
+                      # Only process FUTSTK rows (futures on stocks) — skip OPTSTK/FUTIDX etc
+                      if fld_inst:
+                          inst = str(row.get(fld_inst,'')).strip().upper()
+                          if inst not in ('FUTSTK',): continue
+
+                      def _bf(field):
+                          if not field: return None
+                          try: return float(str(row.get(field,'')).replace(',','').strip() or '0') or None
+                          except: return None
+
+                      # UndrlygPric is the canonical spot price in the new bhavcopy format
+                      spot_cl = _bf(fld_undrl)
+                      # TradDt for the authoritative trading date
+                      if fld_dt and not bhavcopy_date_iso:
+                          raw_dt = str(row.get(fld_dt,'')).strip()
+                          for fmt in ('%Y-%m-%d','%d-%b-%Y','%d/%m/%Y','%d-%m-%Y','%Y%m%d'):
+                              try:
+                                  from datetime import datetime as _dtp
+                                  bhavcopy_date_iso = _dtp.strptime(raw_dt, fmt).strftime('%Y-%m-%d')
+                                  break
+                              except: continue
+
+                      if not spot_cl or spot_cl <= 0: continue
+
+                      # Accumulate by sym — keep only the first FUTSTK row (near-month)
+                      if sym not in bhav_signals_raw:
+                          bhav_signals_raw[sym] = spot_cl
+                  except: continue
+
+              print(f"  Parsed {len(bhav_signals_raw)} stocks from BhavCopy (UndrlygPric)")
+              print(f"  BhavCopy TradDt: {bhavcopy_date_iso}")
+
+              # Merge into signals dict — BhavCopy spot close updates/overrides cl
+              # If a symbol was already parsed from FOVOLT, update only the cl field.
+              # If it's new, create a minimal signal entry.
+              bhav_added = 0
+              for sym, spot_cl in bhav_signals_raw.items():
+                  if sym in signals:
+                      old_cl = signals[sym]['cl']
+                      signals[sym]['cl'] = spot_cl
+                      # Recalculate prem with updated spot
+                      try:
+                          fut = signals[sym].get('fut_cl_raw')
+                          prem = round((fut - spot_cl) / spot_cl * 100, 3) if fut else 0.0
+                          signals[sym]['prem'] = str(prem)
+                      except: pass
+                      if abs(old_cl - spot_cl) > 1:
+                          print(f"  UPDATED {sym}: cl {old_cl} → {spot_cl} (BhavCopy)")
+                  else:
+                      # New symbol only in bhavcopy — minimal entry, no score data
+                      signals[sym] = {
+                          'score': 0.0, 'label': 'Neutral',
+                          'cl': spot_cl, 'pr': spot_cl,
+                          'd1': '0', 'd2': '0', 'prem': '0', 'vol': '0'
+                      }
+                      bhav_added += 1
+              stock_count = len(signals)
+              print(f"  BhavCopy merge done — {bhav_added} new symbols added, total={stock_count}")
+              for chk in ['SUNPHARMA','RELIANCE','HDFCBANK']:
+                  if chk in signals:
+                      s = signals[chk]
+                      print(f"  FINAL {chk}: cl={s['cl']}")
+
+              # Archive
+              bhavcopy_basename = os.path.basename(bhavcopy_path)
+              shutil.move(bhavcopy_path, os.path.join(archive_dir, bhavcopy_basename))
+              print(f"  Archived {bhavcopy_basename} → uploads/processed/")
+
+          # ── Parse FII-DII CSV ─────────────────────────────────────
+          # Real NSE FII-DII download format (fii-dii_DDMMYYYY.csv):
+          #   Headers contain embedded newlines inside quotes — e.g.:
+          #   "CATEGORY \n","DATE \n","BUY VALUE \n(₹ Crores)","SELL VALUE \n(₹ Crores)","NET VALUE \n(₹ Crores)"
+          #   "DII","04-May-2026","19,516.11","14,751.95","4,764.16"
+          #   "FII/FPI","04-May-2026","19,660.47","16,824.85","2,835.62"
+          #
+          # Strategy: collapse \n inside quoted fields → space, then parse with csv.DictReader.
+          # Key normalisation strips spaces, ₹, (, ) → 'buyvaluecrores', 'sellvaluecrores', etc.
+          if fiidii_files:
+              fiidii_path = fiidii_files[-1]
+              print(f"Processing FII-DII: {os.path.basename(fiidii_path)}")
+              with open(fiidii_path, newline='', encoding='utf-8-sig') as fh:
+                  raw_content = fh.read()
+
+              # Collapse \n that appear INSIDE quoted fields (multi-line headers)
+              def collapse_quoted_newlines(text):
+                  result = []
+                  in_quote = False
+                  for c in text:
+                      if c == '"':
+                          in_quote = not in_quote
+                          result.append(c)
+                      elif c == '\n' and in_quote:
+                          result.append(' ')   # newline inside quote → space
+                      else:
+                          result.append(c)
+                  return ''.join(result)
+
+              cleaned = collapse_quoted_newlines(raw_content)
+              import re as _re
+              reader = csv.DictReader(io.StringIO(cleaned))
+              rows_raw = list(reader)
+              print(f"  FII-DII fieldnames: {reader.fieldnames}")
+              print(f"  FII-DII rows: {len(rows_raw)}")
+
+              # Normalise keys: lowercase, remove everything except a-z0-9
+              def clean_key(k):
+                  if k is None: return ''
+                  return _re.sub(r'[^a-z0-9]', '', k.lower().replace('₹', ''))
+
+              fii_buy = fii_sell = fii_net_val = 0.0
+              dii_buy = dii_sell = dii_net_val = 0.0
+              latest_date_str = None
+
+              for row in rows_raw:
+                  nrow = {clean_key(k): str(v).strip().strip('"') for k, v in row.items() if k}
+
+                  def fval(*keys):
+                      for k in keys:
+                          v = nrow.get(k)
+                          if v:
+                              try: return float(v.replace(',','').strip())
+                              except: pass
+                      return 0.0
+
+                  # Category: strip everything non-alpha
+                  category = _re.sub(r'[^A-Z]', '', nrow.get('category', '').upper())
+
+                  # Date parsing
+                  date_raw = nrow.get('date', '').strip()
+                  if date_raw and not latest_date_str:
+                      for fmt_str in ('%d-%b-%Y', '%d-%B-%Y', '%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y'):
                           try:
-                              data[sym] = float(price)
-                          except:
-                              pass
-                          trade_date = date
-              return data, trade_date
+                              latest_date_str = datetime.strptime(date_raw, fmt_str).strftime('%Y-%m-%d')
+                              break
+                          except: continue
 
-          def parse_fovolt(path):
-              data = {}
-              trade_date = None
-              with open(path) as f:
-                  reader = csv.DictReader(f)
-                  price_col = None
-                  for col in reader.fieldnames:
-                      if 'CLOSE' in col.upper():
-                          price_col = col
-                          break
+                  buy = fval('buyvaluecrores', 'buyvalue', 'buy')
+                  sell = fval('sellvaluecrores', 'sellvalue', 'sell')
+                  net  = fval('netvaluecrores', 'netvalue', 'net')
 
-                  for row in reader:
-                      sym = row.get('SYMBOL') or row.get('TckrSymb')
-                      if sym and price_col:
-                          try:
-                              data[sym] = float(row[price_col])
-                          except:
-                              pass
-                          trade_date = row.get('DATE') or row.get('BizDt')
-              return data, trade_date
+                  if 'FII' in category:
+                      fii_buy, fii_sell = buy, sell
+                      fii_net_val = round(buy - sell, 2) if buy or sell else round(net, 2)
+                  elif 'DII' in category:
+                      dii_buy, dii_sell = buy, sell
+                      dii_net_val = round(buy - sell, 2) if buy or sell else round(net, 2)
 
-          prices = {}
-          trade_date = None
+              fii_dii_raw = {
+                  'fii':     fii_net_val,
+                  'dii':     dii_net_val,
+                  'fiiBuy':  fii_buy,   'fiiSell': fii_sell,
+                  'diiBuy':  dii_buy,   'diiSell': dii_sell,
+                  'date':    latest_date_str or datetime.utcnow().strftime('%Y-%m-%d'),
+                  'source':  'manual_upload'
+              }
+              if latest_date_str:
+                  fiidii_rows.append({
+                      'date': latest_date_str,
+                      'fii':  fii_net_val,
+                      'dii':  dii_net_val
+                  })
+              print(f"  FII net: ₹{fii_net_val:,.2f} Cr  |  DII net: ₹{dii_net_val:,.2f} Cr")
+              print(f"  Date: {fii_dii_raw['date']}")
 
-          files = os.listdir('.')
+              # Archive
+              shutil.move(fiidii_path, os.path.join(archive_dir, os.path.basename(fiidii_path)))
+              print(f"  Archived {os.path.basename(fiidii_path)} → uploads/processed/")
 
-          bhav = [f for f in files if f.startswith('BhavCopy')]
-          fovolt = [f for f in files if f.startswith('FOVOLT')]
+          # ── Merge with existing fno_signals.json ─────────────────
+          # Load existing data so we preserve bulk/block/insider/pcr/history
+          existing = {}
+          fno_path = 'data-repo/data/fno_signals.json'
+          if os.path.exists(fno_path):
+              try:
+                  with open(fno_path) as fh:
+                      existing = json.load(fh)
+                  print(f"  Loaded existing fno_signals.json ({len(existing.get('signals',{}))} stocks)")
+              except Exception as e:
+                  print(f"  Could not load existing: {e}")
 
-          if bhav:
-              prices, trade_date = parse_bhavcopy(bhav[0])
-          elif fovolt:
-              prices, trade_date = parse_fovolt(fovolt[0])
+          # Determine fetch date — priority order (highest to lowest):
+          #   1. BhavCopy TradDt field (most authoritative — comes from inside the file)
+          #   2. FII-DII CSV date rows (actual trading date from file content)
+          #   3. FOVOLT filename date (FOVOLT_DDMMYYYY.csv)
+          #   4. Today's date (last resort)
+          upload_date_iso = datetime.utcnow().strftime('%Y-%m-%d')
+          date_source = 'utcnow_fallback'
+
+          if bhavcopy_date_iso:
+              # Highest priority: TradDt from inside the BhavCopy CSV
+              upload_date_iso = bhavcopy_date_iso
+              date_source = 'bhavcopy_traddt'
+              print(f"  Date from BhavCopy TradDt: {upload_date_iso}")
+          elif fiidii_files and fiidii_rows:
+              # Second priority: actual date parsed from inside the FII-DII CSV
+              upload_date_iso = fiidii_rows[-1]['date']
+              date_source = 'fiidii_csv'
+              print(f"  Date from FII-DII CSV rows: {upload_date_iso}")
+          elif fovolt_files and 'fovolt_basename' in dir():
+              # Third priority: parse from FOVOLT filename (FOVOLT_DDMMYYYY.csv)
+              try:
+                  ds_part = fovolt_basename.replace('FOVOLT_','').replace('.csv','')  # DDMMYYYY
+                  if len(ds_part) == 8:
+                      upload_date_iso = f"{ds_part[4:8]}-{ds_part[2:4]}-{ds_part[0:2]}"
+                      date_source = 'fovolt_filename'
+                      print(f"  Date from FOVOLT filename: {upload_date_iso}")
+              except: pass
+          print(f"  Upload date resolved: {upload_date_iso} (source={date_source})")
+
+          fetch_date_str = datetime.strptime(upload_date_iso,'%Y-%m-%d').strftime('%d-%b-%Y')
+          print(f"  Upload fetch_date_str: {fetch_date_str}")
+
+          # Build 5-day FII/DII history
+          import glob as _glob
+          hist_files = sorted(_glob.glob('data-repo/data/history/*.json'))[-5:]
+          five_day = []
+          for hf in hist_files:
+              try:
+                  with open(hf) as fh: hd = json.load(fh)
+                  d = hd.get('fiiDii',{})
+                  if d:
+                      day_label = os.path.basename(hf).replace('.json','')
+                      dl = datetime.strptime(day_label,'%Y-%m-%d').strftime('%a')
+                      five_day.append({'date': day_label, 'd': dl,
+                                       'fii': d.get('fii',0), 'dii': d.get('dii',0)})
+              except: continue
+
+          # If FIIDII upload had multiple daily rows, merge them into history
+          if fiidii_rows:
+              # Deduplicate: only add rows not already in five_day
+              existing_dates = {r['date'] for r in five_day}
+              for r in fiidii_rows:
+                  if r['date'] not in existing_dates:
+                      dl = datetime.strptime(r['date'],'%Y-%m-%d').strftime('%a')
+                      five_day.append({'date': r['date'], 'd': dl,
+                                       'fii': r['fii'], 'dii': r['dii']})
+              five_day = sorted(five_day, key=lambda x: x['date'])[-10:]
+
+          # If FIIDII upload had today's data, also add it (if not duplicated)
+          if fii_dii_raw:
+              today_date = fii_dii_raw.get('date', upload_date_iso)
+              if not any(r['date'] == today_date for r in five_day):
+                  dl = datetime.strptime(today_date,'%Y-%m-%d').strftime('%a')
+                  five_day.append({'date': today_date, 'd': dl,
+                                   'fii': fii_dii_raw.get('fii',0),
+                                   'dii': fii_dii_raw.get('dii',0)})
+              five_day = sorted(five_day, key=lambda x: x['date'])[-10:]
+
+          # Use signals from upload if present, else carry from existing
+          final_signals = signals if signals else existing.get('signals', {})
+          final_count   = len(final_signals)
+
+          # Use fii_dii from upload if present, else keep existing
+          final_fii_dii = fii_dii_raw if fii_dii_raw else existing.get('fiiDii', {})
 
           output = {
-              "meta": {
-                  "date": trade_date
-              },
-              "prices": prices
+              'signals':       final_signals,
+              'fiiDii':        final_fii_dii,
+              'fiiDiiHistory': five_day[-10:],
+              'bulkDeals':     existing.get('bulkDeals', []),
+              'blockDeals':    existing.get('blockDeals', []),
+              'insiderData':   existing.get('insiderData', []),
+              'pcr':           existing.get('pcr', {}),
+              'meta': {
+                  'date':              upload_date_iso,
+                  'latestDate':        fetch_date_str,
+                  'updatedAt':         datetime.utcnow().isoformat() + 'Z',
+                  'stockCount':        final_count,
+                  'carriedForwardFrom': None,
+                  'files':             [fetch_date_str],
+                  'version':           'V10',
+                  'source':            'manual_upload'
+              }
           }
 
-          with open('data.json','w') as f:
-              json.dump(output, f)
+          os.makedirs('data-repo/data/history', exist_ok=True)
+          with open(fno_path, 'w') as fh:
+              json.dump(output, fh, separators=(',',':'))
+          print(f"Written fno_signals.json ({final_count} stocks, source=manual_upload)")
+          # Confirm key prices written correctly
+          for chk in ['SUNPHARMA','RELIANCE','HDFCBANK']:
+              if chk in final_signals:
+                  s = final_signals[chk]
+                  print(f"  WRITTEN {chk}: cl={s.get('cl')}  d1={s.get('d1')}")
 
-      - name: Commit JSON
+          hist_path = f'data-repo/data/history/{upload_date_iso}.json'
+          with open(hist_path, 'w') as fh:
+              json.dump(output, fh, separators=(',',':'))
+          print(f"Written {hist_path}")
+
+          # Update index.json
+          all_hist = sorted([os.path.basename(f).replace('.json','')
+                             for f in _glob.glob('data-repo/data/history/*.json')
+                             if '.gitkeep' not in f])
+          with open('data-repo/data/index.json', 'w') as fh:
+              json.dump({'dates': all_hist[-30:],
+                         'lastUpdated': datetime.utcnow().isoformat()+'Z',
+                         'totalUploads': len(all_hist),
+                         'latestDate': upload_date_iso,
+                         'latestStockCount': final_count,
+                         'version': 'V10'}, fh, indent=2)
+          print(f"Updated index.json ({len(all_hist)} dates)")
+
+          # Signal to next step that uploads were processed → skip NSE fetch
+          with open('/tmp/upload_processed.env', 'w') as f:
+              f.write('UPLOADS_FOUND=true\n')
+          PYEOF
+
+      - name: Load upload flag
+        id: upload_flag
         run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          git add data.json
-          git commit -m "update data" || echo "no changes"
-          git push
+          if [ -f /tmp/upload_processed.env ]; then
+            cat /tmp/upload_processed.env >> $GITHUB_ENV
+          else
+            echo "UPLOADS_FOUND=false" >> $GITHUB_ENV
+          fi
+
+      - name: Fetch NSE data + compute signals (V10)
+        if: env.UPLOADS_FOUND != 'true'
+        env:
+          DATE_OVERRIDE: ${{ github.event.inputs.date_override }}
+          SKIP_NSE: ${{ github.event.inputs.skip_nse_fetch }}
+        run: |
+          python3 << 'PYEOF'
+          import requests, time, json, csv, io, os, glob
+          from datetime import datetime, date, timedelta
+
+          # ── Resolve target date ───────────────────────────────────
+          override = os.environ.get('DATE_OVERRIDE','').strip()
+          if override:
+              fetch_date_str = override
+              fetch_date_iso = datetime.strptime(override,'%d-%b-%Y').strftime('%Y-%m-%d')
+          else:
+              today = date.today()
+              if today.weekday() == 5: today -= timedelta(days=1)
+              if today.weekday() == 6: today -= timedelta(days=2)
+              fetch_date_str = today.strftime('%d-%b-%Y')
+              fetch_date_iso = today.strftime('%Y-%m-%d')
+          print(f"Target date: {fetch_date_str} ({fetch_date_iso})")
+
+          NSE = "https://www.nseindia.com"
+          HEADERS = {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+              "Accept-Language": "en-US,en;q=0.9",
+              "Accept-Encoding": "gzip, deflate, br",
+              "Connection": "keep-alive",
+          }
+
+          signals = {}
+          fii_dii = {}
+          bulk_deals = []
+          block_deals = []
+          insider_data = []
+          pcr_data = {}
+          delivery_data = {}
+          stock_count = 0
+
+          if os.environ.get('SKIP_NSE','false').lower() != 'true':
+              session = requests.Session()
+              session.headers.update(HEADERS)
+
+              # ── Establish NSE session (cookie handshake) ──────────
+              print("Establishing NSE session...")
+              try:
+                  session.get(NSE, timeout=20)
+                  time.sleep(2)
+                  session.get(NSE + "/all-reports-derivatives", timeout=20)
+                  time.sleep(2)
+                  session.headers.update({
+                      "Referer": NSE + "/all-reports-derivatives",
+                      "Accept": "application/json, text/plain, */*",
+                  })
+              except Exception as e:
+                  print(f"Session error: {e}")
+
+              def nse_report(name, category, section, date_str):
+                  try:
+                      archives = json.dumps([{"name": name,"type":"archives","category": category,"section": section}])
+                      params = {"archives": archives,"date": date_str,"type": section,"mode": "single"}
+                      r = session.get(NSE + "/api/reports", params=params, timeout=30)
+                      print(f"  {name[:30]}: HTTP {r.status_code}")
+                      if r.status_code != 200: return None
+                      links = r.json()
+                      if isinstance(links, list) and links:
+                          url = links[0].get('link','')
+                          if url:
+                              time.sleep(1)
+                              dr = session.get(url, timeout=30)
+                              return dr.text
+                  except Exception as e:
+                      print(f"  Report error: {e}")
+                  return None
+
+              # ── F&O Daily Volatility CSV ──────────────────────────
+              print("Fetching F&O Volatility...")
+              fovolt = nse_report("F&O - Daily Volatility (csv)", "derivatives", "equity", fetch_date_str)
+              time.sleep(2)
+
+              if fovolt:
+                  INDEX_SYMS = {'NIFTY','BANKNIFTY','SENSEX','FINNIFTY','NIFTYNXT50','MIDCPNIFTY','BANKEX',
+                                'SX40','SENSEX50'}
+                  import math as _math
+
+                  # ── Print header so we can see the real column names in logs ──
+                  lines = fovolt.strip().splitlines()
+                  print(f"  FOVOLT header: {lines[0][:200] if lines else 'EMPTY'}")
+
+                  # ── Read by POSITION with header-name fallback ──────────────
+                  # FOVOLT column layout (0-indexed, confirmed from NSE archive):
+                  #   0  Date
+                  #   1  Symbol
+                  #   2  Underlying Value (A)  ← SPOT close        ✅ → cl
+                  #   3  Underlying Value (B)  ← Prev day spot     ✅ → pr
+                  #   4  Log Returns (Underlying)                   → d1
+                  #   5  Previous Day Volatility (Underlying)
+                  #   6  Current Day Daily Volatility (Underlying)
+                  #   7  Annualised Volatility (Underlying)         → vol
+                  #   8  Futures Price (G)     ← near-month futures ❌ NOT spot
+                  reader = csv.reader(io.StringIO(fovolt))
+                  raw_header = next(reader)   # consume header row
+
+                  # Build column-index map from actual header (guards against NSE renames)
+                  _hl = [str(h).lower().replace(' ','').replace('_','') for h in raw_header]
+                  def _acol(candidates, default):
+                      for c in candidates:
+                          for i, h in enumerate(_hl):
+                              if c in h: return i
+                      return default
+
+                  _col_sym  = _acol(['symbol','sym'], 1)
+                  _col_cl   = _acol(['underlyingvalue(a)','underlynga','undrlygval(a)','underlyingvaluea'], 2)
+                  _col_pr   = _acol(['underlyingvalue(b)','underlyingb','undrlygval(b)','underlyingvalueb'], 3)
+                  _col_logr = _acol(['logreturn','logret','logreturns'], 4)
+                  _col_vol  = _acol(['annualisedvolatility','annualizedvolatility','annvol'], 7)
+                  _col_fut  = _acol(['futuresprice','futprice','futurespriceg','closingpricefutures'], 8)
+                  print(f"  FOVOLT col map: sym={_col_sym} cl={_col_cl} pr={_col_pr} logr={_col_logr} vol={_col_vol} fut={_col_fut}")
+
+                  for row in reader:
+                      try:
+                          if len(row) < 9: continue
+                          sym = row[_col_sym].strip().upper()
+                          if not sym or sym in INDEX_SYMS: continue
+
+                          def _f(v):
+                              try: return float(str(v).replace(',','').strip())
+                              except: return None
+
+                          cl      = _f(row[_col_cl])    # Underlying spot close  ✅ FIXED
+                          pr      = _f(row[_col_pr])    # Prev day spot close
+                          log_ret = _f(row[_col_logr])  # Log return (underlying)
+                          vol_ann = _f(row[_col_vol])   # Annualised IV (underlying)
+                          fut_cl  = _f(row[_col_fut])   # Futures close (basis calc only)
+
+                          if cl is None or cl == 0: continue
+
+                          # d1: convert log return → simple % move
+                          try:
+                              d1 = round((_math.exp(log_ret) - 1) * 100, 2) if log_ret else 0.0
+                          except:
+                              d1 = round(((cl - pr) / pr * 100), 2) if pr else 0.0
+
+                          # prem: futures basis % vs spot
+                          try:
+                              prem = round((fut_cl - cl) / cl * 100, 3) if fut_cl and cl else 0.0
+                          except:
+                              prem = 0.0
+
+                          vol = round(vol_ann, 1) if vol_ann else 0.0
+
+                          raw   = (d1 / 3.0) + (prem * 0.5)
+                          score = round(max(-5.0, min(5.0, raw)), 2)
+                          label = ('Strong Bullish' if score >= 3   else
+                                   'Bullish'        if score >= 1.5 else
+                                   'Mild Bullish'   if score >= 0.5 else
+                                   'Strong Bearish' if score <= -3  else
+                                   'Bearish'        if score <= -1.5 else
+                                   'Mild Bearish'   if score <= -0.5 else 'Neutral')
+
+                          signals[sym] = {'score':score,'label':label,'cl':cl,'pr':pr,
+                                          'd1':str(d1),'d2':str(d1),'prem':str(prem),'vol':str(vol)}
+                          stock_count += 1
+                      except: continue
+
+                  print(f"  Parsed {stock_count} stocks")
+                  # Spot-check — SUNPHARMA should show actual spot (e.g. ~1823), not futures price (~1717)
+                  for _chk in ['SUNPHARMA','RELIANCE','HDFCBANK']:
+                      if _chk in signals:
+                          s = signals[_chk]
+                          print(f"  CHECK {_chk}: cl={s['cl']}  prem={s['prem']}  d1={s['d1']}")
+
+              # ── FII/DII flow ──────────────────────────────────────
+              print("Fetching FII/DII flow...")
+              try:
+                  session.headers.update({"Referer": NSE + "/market-data/live-equity-market"})
+                  fii_r = session.get(NSE + "/api/fiidiiTradeReact", timeout=20)
+                  if fii_r.status_code == 200:
+                      fii_data = fii_r.json()
+                      if isinstance(fii_data, list) and fii_data:
+                          latest = fii_data[0]
+                          fii_buy  = float(str(latest.get('fiiBuy','0')).replace(',','') or 0)
+                          fii_sell = float(str(latest.get('fiiSell','0')).replace(',','') or 0)
+                          dii_buy  = float(str(latest.get('diiBuy','0')).replace(',','') or 0)
+                          dii_sell = float(str(latest.get('diiSell','0')).replace(',','') or 0)
+                          fii_dii = {
+                              'fii': round(fii_buy - fii_sell, 2),
+                              'dii': round(dii_buy - dii_sell, 2),
+                              'fiiBuy': fii_buy, 'fiiSell': fii_sell,
+                              'diiBuy': dii_buy, 'diiSell': dii_sell,
+                              'date': fetch_date_iso
+                          }
+                          print(f"  FII net: {fii_dii['fii']} Cr, DII net: {fii_dii['dii']} Cr")
+              except Exception as e:
+                  print(f"  FII/DII error: {e}")
+              time.sleep(1)
+
+              # ── Bulk + Block deals ────────────────────────────────
+              print("Fetching Bulk/Block deals...")
+              try:
+                  session.headers.update({"Referer": NSE + "/companies-listing/corporate-filings-bulk-deals"})
+                  bulk_r = session.get(NSE + f"/api/historical/bulk-deals?from={fetch_date_iso}&to={fetch_date_iso}", timeout=20)
+                  if bulk_r.status_code == 200:
+                      for d in (bulk_r.json().get('data') or []):
+                          try:
+                              qty = float(str(d.get('quantityTraded','0')).replace(',','') or 0)
+                              price = float(str(d.get('tradePrice','0')).replace(',','') or 0)
+                              value = round((qty * price) / 1e7, 2)  # in Crores
+                              bulk_deals.append({
+                                  'stock': str(d.get('symbol','')).upper().strip(),
+                                  'client': str(d.get('clientName','')).strip(),
+                                  'type': 'BUY' if str(d.get('buySell','')).upper().startswith('B') else 'SELL',
+                                  'qty': int(qty), 'price': price, 'value': value,
+                                  'date': fetch_date_str
+                              })
+                          except: continue
+                  block_r = session.get(NSE + f"/api/historical/block-deals?from={fetch_date_iso}&to={fetch_date_iso}", timeout=20)
+                  if block_r.status_code == 200:
+                      for d in (block_r.json().get('data') or []):
+                          try:
+                              qty = float(str(d.get('quantityTraded','0')).replace(',','') or 0)
+                              price = float(str(d.get('tradePrice','0')).replace(',','') or 0)
+                              value = round((qty * price) / 1e7, 2)
+                              block_deals.append({
+                                  'stock': str(d.get('symbol','')).upper().strip(),
+                                  'client': str(d.get('clientName','')).strip(),
+                                  'type': 'BUY' if str(d.get('buySell','')).upper().startswith('B') else 'SELL',
+                                  'qty': int(qty), 'price': price, 'value': value,
+                                  'date': fetch_date_str
+                              })
+                          except: continue
+                  print(f"  Bulk: {len(bulk_deals)}, Block: {len(block_deals)}")
+              except Exception as e:
+                  print(f"  Deals error: {e}")
+              time.sleep(1)
+
+              # ── #2 INSIDER TRADING — NSE SAST/Form-C ─────────────
+              # NSE publishes insider trading disclosures as JSON via corporate filings API
+              print("Fetching Insider Trading disclosures...")
+              try:
+                  session.headers.update({"Referer": NSE + "/companies-listing/corporate-filings-insider-trading"})
+                  # Fetch last 7 days of insider trading
+                  from_date = (datetime.strptime(fetch_date_iso,'%Y-%m-%d') - timedelta(days=7)).strftime('%Y-%m-%d')
+                  ins_r = session.get(
+                      NSE + f"/api/corporates-pit?index=equities&from_date={from_date}&to_date={fetch_date_iso}&category=insider-trading-initial",
+                      timeout=25
+                  )
+                  if ins_r.status_code == 200:
+                      ins_data = ins_r.json()
+                      for d in (ins_data.get('data') or [])[:50]:
+                          try:
+                              qty = float(str(d.get('noOfShareAcqOrDisp','0')).replace(',','') or 0)
+                              price = float(str(d.get('acqFromDt_price','0')).replace(',','') or 0)
+                              value = round((qty * price) / 1e7, 2)
+                              trans_type = str(d.get('typeOfSecuritiesPostTrans',''))
+                              buy_sell = 'BUY' if 'acq' in str(d.get('typeOfTrans','')).lower() or value > 0 else 'SELL'
+                              insider_data.append({
+                                  'stock': str(d.get('symbol','')).upper().strip(),
+                                  'person': str(d.get('personName','')).strip(),
+                                  'role': str(d.get('personCategory','')).strip(),
+                                  'type': buy_sell,
+                                  'qty': int(qty),
+                                  'price': price,
+                                  'value': value,
+                                  'date': str(d.get('intimDt',fetch_date_str))[:10],
+                                  'mode': str(d.get('acqDisp','')).strip()
+                              })
+                          except: continue
+                  # Also try the SAST endpoint (promoter acquisitions)
+                  sast_r = session.get(
+                      NSE + f"/api/corporates-pit?index=equities&from_date={from_date}&to_date={fetch_date_iso}&category=insider-trading-continual",
+                      timeout=25
+                  )
+                  if sast_r.status_code == 200:
+                      for d in (sast_r.json().get('data') or [])[:20]:
+                          try:
+                              qty = float(str(d.get('noOfShareAcqOrDisp','0')).replace(',','') or 0)
+                              price = float(str(d.get('acqFromDt_price','0')).replace(',','') or 0)
+                              value = round((qty * price) / 1e7, 2)
+                              insider_data.append({
+                                  'stock': str(d.get('symbol','')).upper().strip(),
+                                  'person': str(d.get('personName','')).strip(),
+                                  'role': 'Promoter',
+                                  'type': 'BUY' if 'acq' in str(d.get('typeOfTrans','')).lower() else 'SELL',
+                                  'qty': int(qty), 'price': price, 'value': value,
+                                  'date': str(d.get('intimDt',fetch_date_str))[:10],
+                                  'mode': 'Market Purchase'
+                              })
+                          except: continue
+                  print(f"  Insider disclosures: {len(insider_data)}")
+              except Exception as e:
+                  print(f"  Insider error: {e}")
+              time.sleep(1)
+
+              # ── #10 DELIVERY VOLUME from NSE Bhavcopy ─────────────
+              print("Fetching delivery volume data...")
+              try:
+                  # NSE CM bhavcopy (equity delivery data) 
+                  del_r = nse_report("CM - Bhavcopy with delivery position", "equities", "equity", fetch_date_str)
+                  if del_r:
+                      reader2 = csv.DictReader(io.StringIO(del_r))
+                      for row in reader2:
+                          try:
+                              sym = str(row.get('SYMBOL','').strip().upper())
+                              if not sym: continue
+                              tot_traded = float(str(row.get('TOTTRDQTY','0')).replace(',','') or 0)
+                              del_qty = float(str(row.get('DELIV_QTY','0')).replace(',','') or 0)
+                              if tot_traded > 0:
+                                  del_pct = round(del_qty / tot_traded * 100, 1)
+                                  delivery_data[sym] = del_pct
+                          except: continue
+                      # Inject delivery% into signals
+                      for sym in signals:
+                          if sym in delivery_data:
+                              signals[sym]['delPct'] = delivery_data[sym]
+                      print(f"  Delivery data for {len(delivery_data)} stocks")
+              except Exception as e:
+                  print(f"  Delivery error: {e}")
+              time.sleep(1)
+
+              # ── #10b NSE FO BhavCopy — enrich spot closes ──────────
+              # If FOVOLT data was fetched, the new BhavCopy_NSE_FO_* file format contains
+              # UndrlygPric which is the authoritative spot close. Try to fetch it and
+              # use it to correct/confirm the cl values written from FOVOLT col[2].
+              # Also: use TradDt from bhavcopy to set/confirm fetch_date_iso.
+              print("Fetching FO BhavCopy (UndrlygPric enrichment)...")
+              try:
+                  fo_bhav_r = nse_report("F&O - Bhavcopy", "derivatives", "equity", fetch_date_str)
+                  if fo_bhav_r:
+                      INDEX_SYMS_FO = {'NIFTY','BANKNIFTY','SENSEX','FINNIFTY','NIFTYNXT50','MIDCPNIFTY','BANKEX','SX40','SENSEX50'}
+                      fo_bhav_reader = csv.DictReader(io.StringIO(fo_bhav_r))
+                      fo_bhav_hdr = fo_bhav_reader.fieldnames or []
+                      def _nb(k): return str(k).strip().replace(' ','').replace('_','').lower()
+                      nb_norm = {_nb(h): h for h in fo_bhav_hdr}
+                      def _nbfld(*names):
+                          for n in names:
+                              if n in nb_norm: return nb_norm[n]
+                          return None
+                      fld_tsym  = _nbfld('tckrsymb','symbol','sym')
+                      fld_tdt   = _nbfld('traddt','tradingdate','trddt','bizdt')
+                      fld_undrl = _nbfld('undrlygpric','underlyingprice','underlyingvalue')
+                      fld_inst2 = _nbfld('fininstrmn','instrumenttype','instrmtype')
+                      _bhav_date_seen = None
+                      _updated = 0
+                      for row2 in fo_bhav_reader:
+                          try:
+                              if not fld_tsym: break
+                              sym2 = str(row2.get(fld_tsym,'')).strip().upper()
+                              if not sym2 or sym2 in INDEX_SYMS_FO: continue
+                              if fld_inst2:
+                                  inst2 = str(row2.get(fld_inst2,'')).strip().upper()
+                                  if inst2 != 'FUTSTK': continue
+                              if fld_undrl:
+                                  try: spot2 = float(str(row2.get(fld_undrl,'')).replace(',','').strip() or '0')
+                                  except: continue
+                                  if spot2 > 0 and sym2 in signals:
+                                      signals[sym2]['cl'] = spot2
+                                      _updated += 1
+                              if fld_tdt and not _bhav_date_seen:
+                                  raw_td = str(row2.get(fld_tdt,'')).strip()
+                                  for fmt in ('%Y-%m-%d','%d-%b-%Y','%d/%m/%Y','%d-%m-%Y','%Y%m%d'):
+                                      try:
+                                          from datetime import datetime as _dtp2
+                                          _bhav_date_seen = _dtp2.strptime(raw_td, fmt).strftime('%Y-%m-%d')
+                                          break
+                                      except: continue
+                          except: continue
+                      print(f"  FO BhavCopy: updated {_updated} spot closes from UndrlygPric")
+                      if _bhav_date_seen:
+                          fetch_date_iso = _bhav_date_seen
+                          fetch_date_str = _bhav_date_seen[:4]+'-'+_bhav_date_seen[5:7]+'-'+_bhav_date_seen[8:]
+                          from datetime import datetime as _dtp3
+                          fetch_date_str = _dtp3.strptime(_bhav_date_seen,'%Y-%m-%d').strftime('%d-%b-%Y')
+                          print(f"  Date confirmed from FO BhavCopy TradDt: {fetch_date_iso}")
+                      for _chk in ['SUNPHARMA','RELIANCE','HDFCBANK']:
+                          if _chk in signals:
+                              print(f"  POST-BHAV {_chk}: cl={signals[_chk]['cl']}")
+              except Exception as e:
+                  print(f"  FO BhavCopy error: {e}")
+              time.sleep(1)
+
+              # ── #11 PCR (Put-Call Ratio) per stock ────────────────
+              print("Fetching PCR per stock...")
+              try:
+                  session.headers.update({"Referer": NSE + "/option-chain"})
+                  # Nifty PCR from OI data
+                  nifty_oc = session.get(NSE + "/api/option-chain-indices?symbol=NIFTY", timeout=20)
+                  if nifty_oc.status_code == 200:
+                      oc_data = nifty_oc.json()
+                      total_put_oi = sum(r.get('PE',{}).get('openInterest',0) for r in (oc_data.get('records',{}).get('data') or []) if r.get('PE'))
+                      total_call_oi = sum(r.get('CE',{}).get('openInterest',0) for r in (oc_data.get('records',{}).get('data') or []) if r.get('CE'))
+                      if total_call_oi > 0:
+                          pcr_data['NIFTY'] = round(total_put_oi / total_call_oi, 2)
+                          print(f"  NIFTY PCR: {pcr_data['NIFTY']}")
+                  time.sleep(1)
+                  # BankNifty PCR
+                  bnk_oc = session.get(NSE + "/api/option-chain-indices?symbol=BANKNIFTY", timeout=20)
+                  if bnk_oc.status_code == 200:
+                      oc_data2 = bnk_oc.json()
+                      tpo = sum(r.get('PE',{}).get('openInterest',0) for r in (oc_data2.get('records',{}).get('data') or []) if r.get('PE'))
+                      tco = sum(r.get('CE',{}).get('openInterest',0) for r in (oc_data2.get('records',{}).get('data') or []) if r.get('CE'))
+                      if tco > 0: pcr_data['BANKNIFTY'] = round(tpo / tco, 2)
+                  time.sleep(1)
+                  # Top 10 individual stocks PCR
+                  top_stocks = ['ICICIBANK','HDFCBANK','RELIANCE','INFY','TCS','BAJFINANCE','AXISBANK','SBIN','BHARTIARTL','LT','TATAMOTORS','SUNPHARMA']
+                  for sym in top_stocks:
+                      try:
+                          r = session.get(NSE + f"/api/option-chain-equities?symbol={sym}", timeout=15)
+                          if r.status_code == 200:
+                              d = r.json()
+                              tpo = sum(x.get('PE',{}).get('openInterest',0) for x in (d.get('records',{}).get('data') or []) if x.get('PE'))
+                              tco = sum(x.get('CE',{}).get('openInterest',0) for x in (d.get('records',{}).get('data') or []) if x.get('CE'))
+                              if tco > 0: pcr_data[sym] = round(tpo / tco, 2)
+                          time.sleep(0.5)
+                      except: continue
+                  print(f"  PCR data for {len(pcr_data)} symbols")
+              except Exception as e:
+                  print(f"  PCR error: {e}")
+
+          # ── Build 5-day FII/DII chart data ────────────────────────
+          hist_files = sorted(glob.glob('data-repo/data/history/*.json'))[-5:]
+          five_day = []
+          for hf in hist_files:
+              try:
+                  with open(hf) as f: hd = json.load(f)
+                  d = hd.get('fiiDii',{})
+                  if d:
+                      day_label = os.path.basename(hf).replace('.json','')
+                      from datetime import datetime as dt2
+                      dl = dt2.strptime(day_label,'%Y-%m-%d').strftime('%a')
+                      five_day.append({'d':dl,'fii':d.get('fii',0),'dii':d.get('dii',0)})
+              except: continue
+          if fii_dii:
+              from datetime import datetime as dt2
+              five_day.append({'d':dt2.strptime(fetch_date_iso,'%Y-%m-%d').strftime('%a'),
+                               'fii':fii_dii.get('fii',0),'dii':fii_dii.get('dii',0)})
+
+          # ── Guard: abort if NSE fetch returned too few stocks ─────
+          # ── Retry + carry-forward if NSE fetch insufficient ────────────
+          if stock_count < 100:
+              print(f"WARNING: Only {stock_count} stocks parsed. Checking history for carry-forward...")
+              import glob as _glob
+              hist_files = sorted(_glob.glob('data-repo/data/history/*.json'))
+              carried = False
+              carry_from = None
+              for hf in reversed(hist_files):
+                  try:
+                      with open(hf) as _f: prev = json.load(_f)
+                      if len(prev.get('signals', {})) >= 100:
+                          signals = prev['signals']
+                          stock_count = len(signals)
+                          carry_from = os.path.basename(hf).replace('.json','')
+                          print(f"  Carried {stock_count} signals from {carry_from}")
+                          carried = True
+                          break
+                  except: continue
+              if not carried:
+                  print("CRITICAL: No valid history found. Aborting.")
+                  import sys; sys.exit(1)
+
+          # ── Assemble and write JSON ───────────────────────────────
+          from datetime import datetime as dt
+          output = {
+              'signals': signals,
+              'fiiDii': fii_dii,
+              'fiiDiiHistory': five_day[-5:],
+              'bulkDeals': bulk_deals,
+              'blockDeals': block_deals,
+              'insiderData': insider_data,        # NEW #2
+              'pcr': pcr_data,                    # NEW #11
+              'meta': {
+                  'date': fetch_date_iso,
+                  'latestDate': fetch_date_str,
+                  'updatedAt': dt.utcnow().isoformat() + 'Z',
+                  'stockCount': stock_count,
+                  'carriedForwardFrom': carry_from if 'carry_from' in dir() and carry_from else None,
+                  'files': [fetch_date_str],
+                  'version': 'V10'
+              }
+          }
+
+          os.makedirs('data-repo/data/history', exist_ok=True)
+          with open('data-repo/data/fno_signals.json','w') as f:
+              json.dump(output, f, separators=(',',':'))
+          print(f"Written fno_signals.json ({stock_count} stocks, {len(insider_data)} insider, {len(pcr_data)} PCR)")
+
+          hist_path = f'data-repo/data/history/{fetch_date_iso}.json'
+          with open(hist_path,'w') as f:
+              json.dump(output, f, separators=(',',':'))
+          print(f"Written {hist_path}")
+
+          # Update index.json
+          all_hist = sorted([os.path.basename(f).replace('.json','')
+                             for f in glob.glob('data-repo/data/history/*.json')
+                             if '.gitkeep' not in f])
+          with open('data-repo/data/index.json','w') as f:
+              json.dump({'dates':all_hist[-30:],'lastUpdated':dt.utcnow().isoformat()+'Z',
+                         'totalUploads':len(all_hist),'latestDate':fetch_date_iso,
+                         'latestStockCount':stock_count,'version':'V10'}, f, indent=2)
+          print(f"Updated index.json ({len(all_hist)} dates)")
+          PYEOF
+
+      - name: Commit and push to data repo
+        working-directory: data-repo
+        run: |
+          git config user.name  "smart-money-bot"
+          git config user.email "bot@mf-intelligence"
+          git add -A
+          git diff --cached --quiet && echo "Nothing changed" || \
+            (git commit -m "data: smart money V10 $(date -u +'%Y-%m-%d %H:%M UTC')" && git push)
+
+      # ── #12 WEEKLY DIGEST EMAIL (every Friday at 7PM IST) ──────────
+      - name: Send Weekly Digest Email
+        if: |
+          env.SENDGRID_API_KEY != '' &&
+          (github.event.inputs.force_weekly_digest == 'true' ||
+           format('{0}', github.run_id) != '' && '5' == steps.check_day.outputs.day_of_week)
+        env:
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          DIGEST_EMAIL_TO: ${{ secrets.DIGEST_EMAIL_TO }}
+          DIGEST_EMAIL_FROM: ${{ secrets.DIGEST_EMAIL_FROM }}
+        run: |
+          python3 << 'PYEOF'
+          import os, json, glob, requests
+          from datetime import datetime
+
+          # Only run on Fridays or if forced
+          today = datetime.utcnow()
+          is_friday = today.weekday() == 4  # 0=Mon, 4=Fri
+          force = os.environ.get('INPUT_FORCE_WEEKLY_DIGEST','false').lower()=='true'
+          if not is_friday and not force:
+              print(f"Not Friday ({today.strftime('%A')}) and not forced — skipping digest")
+              exit(0)
+
+          api_key = os.environ.get('SENDGRID_API_KEY','')
+          to_email = os.environ.get('DIGEST_EMAIL_TO','')
+          from_email = os.environ.get('DIGEST_EMAIL_FROM','')
+          if not api_key or not to_email:
+              print("SENDGRID_API_KEY or DIGEST_EMAIL_TO not set — skipping email")
+              exit(0)
+
+          # Load latest data
+          try:
+              with open('data-repo/data/fno_signals.json') as f:
+                  data = json.load(f)
+          except:
+              print("Could not load fno_signals.json")
+              exit(0)
+
+          signals = data.get('signals', {})
+          bulk = data.get('bulkDeals', [])[:5]
+          insider = data.get('insiderData', [])[:5]
+          fii = data.get('fiiDii', {})
+          date_str = data.get('meta',{}).get('latestDate','this week')
+
+          # Build email body
+          top_bulls = sorted([(s,v) for s,v in signals.items() if v.get('score',0)>=2],
+                             key=lambda x:-x[1]['score'])[:5]
+          top_bears = sorted([(s,v) for s,v in signals.items() if v.get('score',0)<=-2],
+                             key=lambda x:x[1]['score'])[:3]
+
+          html_body = f"""
+          <html><body style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#1a2a3a">
+          <div style="background:#05080F;padding:20px;border-radius:8px;margin-bottom:20px">
+            <h1 style="color:#00E599;margin:0;font-size:1.4rem">📊 MF Intelligence Weekly Digest</h1>
+            <p style="color:#5A6A82;margin:5px 0 0;font-size:.85rem">Week ending {date_str}</p>
+          </div>
+
+          <h2 style="color:#18243A;font-size:1rem;border-bottom:2px solid #00E599;padding-bottom:6px">⚡ Top Bullish Signals</h2>
+          <table style="width:100%;border-collapse:collapse">
+          {''.join(f'<tr><td style="padding:8px;font-weight:bold">{s}</td><td style="padding:8px;color:#0A7C59;font-family:monospace">Score: +{v["score"]}</td><td style="padding:8px;color:#666;font-size:.85rem">₹{v.get("cl",0):,.2f}</td></tr>' for s,v in top_bulls)}
+          </table>
+
+          {f'<h2 style="color:#18243A;font-size:1rem;border-bottom:2px solid #D93025;padding-bottom:6px">⚠ Bearish Signals to Watch</h2><table style="width:100%;border-collapse:collapse">{"".join(f"<tr><td style=padding:8px;font-weight:bold>{s}</td><td style=padding:8px;color:#D93025;font-family:monospace>Score: {v[score]}</td></tr>" for s,v in top_bears)}</table>' if top_bears else ''}
+
+          <h2 style="color:#18243A;font-size:1rem;border-bottom:2px solid #4DA6FF;padding-bottom:6px">🏦 Bulk Deals This Week</h2>
+          {''.join(f'<p style="margin:4px 0"><strong>{d.get("stock","")}</strong> — {d.get("client","")} {d.get("type","")} ₹{d.get("value",0):.1f} Cr</p>' for d in bulk) or '<p style="color:#666">No significant bulk deals</p>'}
+
+          {f'<h2 style="color:#18243A;font-size:1rem;border-bottom:2px solid #FFB830;padding-bottom:6px">🔍 Insider Activity</h2>{"".join(f"<p style=margin:4px 0><strong>{d.get(stock,)}</strong> — {d.get(person,)} ({d.get(role,)}) {d.get(type,)} ₹{d.get(value,0):.1f} Cr</p>" for d in insider) or "<p style=color:#666>No insider disclosures</p>"}'  if insider else ''}
+
+          <h2 style="color:#18243A;font-size:1rem;border-bottom:2px solid #5A6A82;padding-bottom:6px">📡 FII / DII Flow</h2>
+          <p>FII: <strong style="color:{'#0A7C59' if fii.get('fii',0)>=0 else '#D93025'}">₹{abs(fii.get('fii',0)):,.0f} Cr {'Net Buy' if fii.get('fii',0)>=0 else 'Net Sell'}</strong> &nbsp;|&nbsp;
+             DII: <strong style="color:#1558D6">₹{abs(fii.get('dii',0)):,.0f} Cr {'Net Buy' if fii.get('dii',0)>=0 else 'Net Sell'}</strong></p>
+
+          <div style="background:#EEF2F7;padding:14px;border-radius:8px;margin-top:20px;font-size:.8rem;color:#60718A">
+            Generated by <strong>MF Intelligence V10</strong> · Open the app for full analysis and interactive signals.
+            <br><a href="https://mf-intelligence.vercel.app" style="color:#1558D6">→ Open MF Intelligence</a>
+          </div>
+          </body></html>
+          """
+
+          # Send via SendGrid
+          resp = requests.post(
+              "https://api.sendgrid.com/v3/mail/send",
+              headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+              json={
+                  "personalizations": [{"to": [{"email": to_email}]}],
+                  "from": {"email": from_email or "noreply@mfintelligence.app", "name": "MF Intelligence"},
+                  "subject": f"📊 Smart Money Weekly Digest — {date_str}",
+                  "content": [{"type": "text/html", "value": html_body}]
+              }
+          )
+          if resp.status_code in (200, 202):
+              print(f"✅ Digest email sent to {to_email}")
+          else:
+              print(f"❌ Email send failed: {resp.status_code} {resp.text}")
+          PYEOF
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Smart Money Daily Fetch V10" >> $GITHUB_STEP_SUMMARY
+          echo "**Date fetched:** $(date -u +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
+          if [ -f data-repo/data/fno_signals.json ]; then
+            python3 - << 'EOF'
+          import json,sys
+          try:
+            d=json.load(open('data-repo/data/fno_signals.json'))
+            m=d.get('meta',{})
+            print(f"**Stocks:** {m.get('stockCount',0)}")
+            print(f"**Bulk deals:** {len(d.get('bulkDeals',[]))}")
+            print(f"**Insider disclosures:** {len(d.get('insiderData',[]))}")
+            print(f"**PCR symbols:** {len(d.get('pcr',{}))}")
+            fii=d.get('fiiDii',{})
+            if fii: print(f"**FII net:** ₹{fii.get('fii',0):,.0f} Cr | **DII net:** ₹{fii.get('dii',0):,.0f} Cr")
+            print("**Status:** ✅ V10 Success")
+          except Exception as e:
+            print(f"**Status:** ❌ Error: {e}")
+          EOF
+            >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Status:** ❌ fno_signals.json not written" >> $GITHUB_STEP_SUMMARY
+          fi
