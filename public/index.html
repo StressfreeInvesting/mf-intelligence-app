@@ -512,8 +512,12 @@ button{cursor:pointer;font-family:inherit}
     <span><span class="fresh-dot fresh-green" id="foDot"></span>F&amp;O: <span id="foDate">—</span></span>
     <span>·</span>
     <span><span class="fresh-dot fresh-amber" id="trendsDot"></span>Trends: <span id="trendsLabel">—</span></span>
-  
     <span id="dataAgeBadge" style="margin-left:auto;font-size:.68rem"></span>
+    <!-- Manual upload: accepts FOVOLT_*.csv and BhavCopy_NSE_FO_*.csv -->
+    <label title="Upload BhavCopy_NSE_FO_*.csv or FOVOLT_*.csv to update F&amp;O prices" style="cursor:pointer;font-size:.65rem;padding:2px 8px;border-radius:10px;border:1px solid var(--border);color:var(--text-muted);background:transparent;white-space:nowrap;margin-left:6px;transition:border-color .15s" onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--accent)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-muted)'">
+      📁 Upload CSV
+      <input type="file" accept=".csv" style="display:none" onchange="handleManualCSVUpload(this.files[0]);this.value=''"/>
+    </label>
   </div>
 
   <!-- EXIT ALERT BAR -->
@@ -2217,9 +2221,27 @@ function updateFreshness(){
   const meta=STATE.foData.meta||{};
   const isManual=meta.source==='manual_upload'||STATE.foData?.fiiDii?.source==='manual_upload';
 
-  // Resolve data date from meta (prefer ISO date field)
-  const rawDate=meta.date||meta.latestDate||STATE.foData.date||'';
-  const dataDate=rawDate?new Date(rawDate):null;
+  // Resolve data date strictly from meta.date (ISO YYYY-MM-DD, sourced from TradDt/BizDt inside the file).
+  // meta.latestDate is a formatted string like "05-May-2026" — parse it only as a fallback.
+  // NEVER use Date.now() / utcnow() here — that was the root cause of the stale-date bug.
+  let rawDate='';
+  if(meta.date&&/^\d{4}-\d{2}-\d{2}/.test(meta.date)){
+    rawDate=meta.date;           // ISO YYYY-MM-DD from TradDt/BizDt — most reliable
+  } else if(meta.latestDate){
+    // Formatted string e.g. "05-May-2026" — parse carefully
+    const parts=meta.latestDate.match(/^(\d{2})-([A-Za-z]{3})-(\d{4})$/);
+    if(parts){
+      const months={Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
+      const mo=months[parts[2]];
+      if(mo!==undefined){
+        const dt=new Date(Date.UTC(+parts[3],mo,+parts[1]));
+        rawDate=dt.toISOString().slice(0,10);
+      }
+    }
+  } else if(STATE.foData.date){
+    rawDate=STATE.foData.date;
+  }
+  const dataDate=rawDate?new Date(rawDate+'T00:00:00Z'):null;
 
   // Display date label in freshness strip
   const dateLabel=dataDate?dataDate.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'2-digit'}):'—';
@@ -2228,16 +2250,24 @@ function updateFreshness(){
 
   // ── Trading-date staleness (not wall-clock hours) ─────────────────
   // Logic: data is "current" if it covers the latest completed trading day.
-  // A trading day is Mon–Fri. We look backward from today to find the most
-  // recent completed trading session (market closes ~3:30 PM IST = 10:00 UTC).
-  // If today is a trading day and it's before 10:00 UTC, yesterday is the latest.
+  // A trading day is Mon–Fri (NSE). Market closes at 15:30 IST = 10:00 UTC.
+  // FIX: We do NOT roll back to "yesterday" just because it's before 10:00 UTC
+  //      if today IS a weekday — that was causing same-day uploads to show as
+  //      stale until 10:00 UTC. Instead we only treat today as "not yet done"
+  //      if market hasn't closed yet (before 10:00 UTC on a weekday).
+  //      If the data date matches the resolved latest trading date, it's fresh.
   function latestTradingDate(){
     const now=new Date();
     const d=new Date(now);
-    // If before 10:00 UTC today, last session was yesterday
-    if(now.getUTCHours()<10) d.setUTCDate(d.getUTCDate()-1);
+    const isWeekday=d.getUTCDay()!==0&&d.getUTCDay()!==6;
+    // Market closed (>=10:00 UTC) or weekend: today's session is done (or no session)
+    // Market not yet closed (<10:00 UTC on weekday): latest complete session was yesterday
+    if(isWeekday&&now.getUTCHours()<10){
+      // Before market close today — latest complete session is the previous trading day
+      d.setUTCDate(d.getUTCDate()-1);
+    }
     // Roll back over weekends
-    while(d.getDay()===0||d.getDay()===6) d.setUTCDate(d.getUTCDate()-1);
+    while(d.getUTCDay()===0||d.getUTCDay()===6) d.setUTCDate(d.getUTCDate()-1);
     d.setUTCHours(0,0,0,0);
     return d;
   }
@@ -2395,6 +2425,166 @@ function updateDataAgeBadge(){
   if(!el||!age)return;
   el.textContent=age.label;
   el.style.color=age.color;
+}
+
+/* ═══════════════════════════════════════════
+   BHAVCOPY / FOVOLT MANUAL UPLOAD PARSER
+   Supports both:
+   1. New NSE FO BhavCopy  (BhavCopy_NSE_FO_*.csv)
+      Columns: TckrSymb, TradDt, FinInstrmNm, OptnTp, StrkPric, UndrlygPric, ...
+      Spot close = UndrlygPric  |  Date = TradDt
+   2. FOVOLT legacy format (FOVOLT_*.csv)
+      Columns: Date, Symbol, UndrlygValue(A)=spot, UndrlygValue(B)=prev, LogRet, ..., AnnVolatility, FutPrice
+      Spot close = col[2]       |  Date = col[0]
+═══════════════════════════════════════════ */
+function parseCSVRows(text){
+  // Handles quoted fields and \r\n line endings
+  const lines=text.replace(/\r\n/g,'\n').replace(/\r/g,'\n').split('\n');
+  return lines.map(line=>{
+    const cols=[];let cur='',inQ=false;
+    for(let i=0;i<line.length;i++){
+      const ch=line[i];
+      if(ch==='"'){inQ=!inQ;}
+      else if(ch===','&&!inQ){cols.push(cur.trim());cur='';}
+      else cur+=ch;
+    }
+    cols.push(cur.trim());
+    return cols;
+  }).filter(r=>r.length>1&&r.some(c=>c));
+}
+
+function parseBhavCopyFile(text, filename){
+  const rows=parseCSVRows(text);
+  if(!rows.length) return null;
+  const header=rows[0].map(h=>h.replace(/^"|"$/g,'').trim().toLowerCase().replace(/[^a-z0-9]/g,''));
+  // Detect format
+  const hasTckr=header.some(h=>h.includes('tckrsymb')||h.includes('symbol'));
+  const hasUndrl=header.some(h=>h.includes('undrlygpric')||h.includes('underlyingprice'));
+  const isBhavCopy=hasTckr&&hasUndrl;
+
+  function colIdx(...names){
+    for(const n of names){const i=header.findIndex(h=>h.includes(n));if(i>=0)return i;}
+    return -1;
+  }
+
+  const signals={}, errors=[];
+  let tradingDate=null;
+
+  if(isBhavCopy){
+    // ── New BhavCopy_NSE_FO_* format ──────────────────────────────
+    const iSym  = colIdx('tckrsymb','symbol','sym');
+    const iDt   = colIdx('traddt','tradingdate','trddt','bizdt','date');
+    const iUndrl= colIdx('undrlygpric','underlyingprice','underlyingvalue');
+    const iInst = colIdx('fininstrmn','instrumenttype','instrmtype');
+    if(iSym<0||iUndrl<0) return{error:'Required columns not found (TckrSymb, UndrlygPric). Check file format.'};
+
+    const INDEX_SYMS=new Set(['NIFTY','BANKNIFTY','SENSEX','FINNIFTY','NIFTYNXT50','MIDCPNIFTY','BANKEX','SX40','SENSEX50']);
+    for(let ri=1;ri<rows.length;ri++){
+      const row=rows[ri];
+      try{
+        const sym=(row[iSym]||'').replace(/^"|"$/g,'').trim().toUpperCase();
+        if(!sym||INDEX_SYMS.has(sym)) continue;
+        // Only process FUTSTK rows
+        if(iInst>=0){const inst=(row[iInst]||'').replace(/^"|"$/g,'').trim().toUpperCase();if(inst!=='FUTSTK')continue;}
+        const spotRaw=(row[iUndrl]||'').replace(/^"|"$/g,'').replace(/,/g,'').trim();
+        const spot=parseFloat(spotRaw);
+        if(!spot||spot<=0) continue;
+        // Date from TradDt
+        if(iDt>=0&&!tradingDate){
+          const dRaw=(row[iDt]||'').replace(/^"|"$/g,'').trim();
+          tradingDate=parseTradingDate(dRaw);
+        }
+        if(!(sym in signals)){
+          signals[sym]={score:0,label:'Neutral',cl:spot,pr:spot,d1:'0',d2:'0',prem:'0',vol:'0'};
+        }
+      }catch(e){errors.push(ri);}
+    }
+    console.log(`BhavCopy parsed: ${Object.keys(signals).length} stocks, date=${tradingDate}`);
+  } else {
+    // ── Legacy FOVOLT format ───────────────────────────────────────
+    // Date(0) Sym(1) SpotClose(2) PrevClose(3) LogRet(4) ... AnnVol(7) FutClose(8)
+    const iSym  = colIdx('symbol','sym')>0?colIdx('symbol','sym'):1;
+    const iCl   = Math.max(2,colIdx('underlyingvalue(a)','underlyinga','undrlygvala','underlyingvaluea'));
+    const iPr   = Math.max(3,colIdx('underlyingvalue(b)','underlyingb','undrlygvalb','underlyingvalueb'));
+    const iLogr = Math.max(4,colIdx('logreturn','logret','logreturns'));
+    const iVol  = Math.max(7,colIdx('annualisedvolatility','annualizedvolatility','annvol'));
+    const iFut  = Math.max(8,colIdx('futuresprice','futprice','closingpricefutures'));
+    const iDate = 0;
+    const INDEX_SYMS=new Set(['NIFTY','BANKNIFTY','SENSEX','FINNIFTY','NIFTYNXT50','MIDCPNIFTY','BANKEX','SX40','SENSEX50']);
+
+    for(let ri=1;ri<rows.length;ri++){
+      const row=rows[ri];
+      if(row.length<9) continue;
+      try{
+        const sym=(row[iSym]||'').replace(/^"|"$/g,'').trim().toUpperCase();
+        if(!sym||INDEX_SYMS.has(sym)) continue;
+        const _f=v=>{const n=parseFloat(String(v||'').replace(/,/g,'').trim());return isNaN(n)?null:n;};
+        const cl=_f(row[iCl]),pr=_f(row[iPr]),logR=_f(row[iLogr]),volA=_f(row[iVol]),futCl=_f(row[iFut]);
+        if(!cl||cl<=0) continue;
+        // Date from first data col
+        if(!tradingDate&&iDate>=0){tradingDate=parseTradingDate((row[iDate]||'').replace(/^"|"$/g,'').trim());}
+        let d1=0;
+        try{d1=logR?+((Math.exp(logR)-1)*100).toFixed(2):(pr?+((cl-pr)/pr*100).toFixed(2):0);}catch(e){}
+        const prem=futCl&&cl?+((futCl-cl)/cl*100).toFixed(3):0;
+        const vol=volA?+volA.toFixed(1):0;
+        const raw=(d1/3.0)+(prem*0.5);
+        const score=Math.round(Math.max(-5,Math.min(5,raw))*100)/100;
+        const label=score>=3?'Strong Bullish':score>=1.5?'Bullish':score>=0.5?'Mild Bullish':
+                    score<=-3?'Strong Bearish':score<=-1.5?'Bearish':score<=-0.5?'Mild Bearish':'Neutral';
+        signals[sym]={score,label,cl,pr,d1:String(d1),d2:String(d1),prem:String(prem),vol:String(vol)};
+      }catch(e){errors.push(ri);}
+    }
+    console.log(`FOVOLT parsed: ${Object.keys(signals).length} stocks, date=${tradingDate}`);
+  }
+
+  if(!Object.keys(signals).length) return{error:'No valid stock rows found. Check file format and column names.'};
+  return{signals,tradingDate,isBhavCopy,stockCount:Object.keys(signals).length};
+}
+
+function parseTradingDate(raw){
+  if(!raw) return null;
+  // YYYY-MM-DD
+  if(/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  // DD-MMM-YYYY
+  const m1=raw.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
+  if(m1){const months={Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12'};const mo=months[m1[2].charAt(0).toUpperCase()+m1[2].slice(1).toLowerCase()];if(mo)return`${m1[3]}-${mo}-${m1[1].padStart(2,'0')}`;}
+  // YYYYMMDD
+  if(/^\d{8}$/.test(raw)) return`${raw.slice(0,4)}-${raw.slice(4,6)}-${raw.slice(6,8)}`;
+  return null;
+}
+
+function handleManualCSVUpload(file){
+  if(!file) return;
+  const reader=new FileReader();
+  reader.onload=e=>{
+    const text=e.target.result;
+    const result=parseBhavCopyFile(text, file.name);
+    if(!result||result.error){
+      showToast('❌ Parse error: '+(result?.error||'Unknown error'));
+      console.error('CSV parse error:',result);
+      return;
+    }
+    // Merge into existing foData or create new
+    if(!STATE.foData) STATE.foData={signals:{},meta:{},fiiDii:{},fiiDiiHistory:[],bulkDeals:[],blockDeals:[],insiderData:[],pcr:{}};
+    // Signals: new data overrides existing
+    Object.assign(STATE.foData.signals, result.signals);
+    // Date: use TradDt from file (authoritative)
+    if(result.tradingDate){
+      STATE.foData.meta=STATE.foData.meta||{};
+      STATE.foData.meta.date=result.tradingDate;
+      // Convert to display format DD-MMM-YYYY
+      try{
+        const [y,mo,d]=result.tradingDate.split('-');
+        const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        STATE.foData.meta.latestDate=`${d}-${months[+mo-1]}-${y}`;
+      }catch(e){}
+    }
+    STATE.foData.meta.source=`manual_html_upload_${result.isBhavCopy?'bhavcopy':'fovolt'}`;
+    STATE.foData.meta.stockCount=Object.keys(STATE.foData.signals).length;
+    updateFreshness();renderMarket();renderIntelligence();renderPicks();checkExitSignals();
+    showToast(`✅ Loaded ${result.stockCount} stocks from ${file.name}${result.tradingDate?' · '+result.tradingDate:''}`);
+  };
+  reader.readAsText(file);
 }
 
 async function fetchFOData(){
@@ -3487,6 +3677,11 @@ function renderGuide(){
       <strong style="color:var(--text)">MF Holdings</strong> — Updated monthly (SEBI mandate). Current data: Jan–Feb 2026.<br>
       <strong style="color:var(--text)">F&O Signals</strong> — Auto-fetched each trading day via GitHub Actions workflow. If today's data is unavailable, last valid day's signals are shown with an amber banner.<br>
       <strong style="color:var(--text)">Nifty / BankNifty</strong> — Live, refreshed every 60 seconds during market hours.<br>
+      <div style="margin-top:8px;padding:8px 10px;background:rgba(0,229,153,.06);border-radius:6px;border:1px solid rgba(0,229,153,.2)">
+        <strong style="color:var(--green)">📁 Manual Upload (new):</strong> Tap the <strong>Upload CSV</strong> button in the top strip to load prices directly in the browser — no GitHub Actions run needed.<br>
+        Accepts: <code style="background:var(--bg);padding:1px 4px;border-radius:3px">BhavCopy_NSE_FO_*.csv</code> (new NSE format, uses <strong>UndrlygPric</strong> + <strong>TradDt</strong>) or <code style="background:var(--bg);padding:1px 4px;border-radius:3px">FOVOLT_*.csv</code> (legacy).<br>
+        The date shown in the freshness strip will update from the file's own TradDt/date column — not from your system clock.
+      </div>
       <div style="margin-top:6px;padding:6px 10px;background:var(--surface2);border-radius:6px;border:1px solid var(--border)">If you see an amber "F&O signals unavailable" banner, the data is from the previous trading day. Rankings still work — F&O momentum scores will be slightly stale but MF conviction and trend scores are unaffected.</div>
     </div>
   </div>
