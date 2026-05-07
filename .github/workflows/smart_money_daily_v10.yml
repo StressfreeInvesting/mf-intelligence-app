@@ -57,43 +57,63 @@ jobs:
       # ── Process manually uploaded CSVs (FOVOLT + FII-DII) ───────────────────
       # Upload files to data/uploads/ in the data repo before triggering workflow.
       # File naming:
-      #   FOVOLT:  FOVOLT_DDMMYYYY.csv      (NSE F&O Volatility archive download)
-      #   FII-DII: fii-dii_DDMMYYYY.csv     (NSE FII-DII Trend download — exact name)
-      #            Also accepts: FIIDII_DDMMYYYY.csv or fiidii_DDMMYYYY.csv
-      # After processing, files are archived to data/uploads/processed/
+      # FILES STAY IN uploads/ PERMANENTLY — never moved or deleted.
+      # Every workflow run re-reads ALL CSVs in uploads/ to rebuild the
+      # complete fiiDiiHistory from scratch. No processed/ folder needed.
+      #
+      # Accepted filenames:
+      #   FOVOLT:  FOVOLT_DDMMYYYY.csv          (NSE F&O Volatility download)
+      #            BhavCopy_NSE_FO_*.csv         (new NSE BhavCopy format)
+      #   FII-DII: fii-dii_DDMMYYYY.csv         (NSE download — underscore)
+      #            fii-dii-DDMMYYYY.csv          (hyphen variant)
+      #            FIIDII_DDMMYYYY.csv / fiidii_DDMMYYYY.csv
+      #
+      # Multiple files per type are fine — newest FOVOLT used for signals,
+      # ALL fii-dii files used to build the full chart history.
       # If valid uploads are found, NSE auto-fetch is skipped automatically.
       - name: Process manual CSV uploads (FOVOLT + FIIDII)
         id: process_uploads
         run: |
           python3 << 'PYEOF'
-          import csv, io, glob, os, json, math, shutil
+          import csv, io, glob, os, json, math
           from datetime import datetime, date, timedelta
 
-          uploads_dir  = 'data-repo/data/uploads'
-          archive_dir  = 'data-repo/data/uploads/processed'
-          os.makedirs(archive_dir, exist_ok=True)
+          uploads_dir = 'data-repo/data/uploads'
+          # NOTE: We intentionally do NOT move or delete files from uploads/.
+          # All CSVs stay here permanently as the source of truth.
+          # fiiDiiHistory is rebuilt from all fii-dii CSVs on every run.
 
           INDEX_SYMS = {'NIFTY','BANKNIFTY','SENSEX','FINNIFTY','NIFTYNXT50',
                         'MIDCPNIFTY','BANKEX','SX40','SENSEX50'}
 
-          # ── Find the newest FOVOLT and FII-DII files ─────────────
+          # ── Find ALL FOVOLT and FII-DII files in uploads/ ────────
           # FOVOLT filename:  FOVOLT_DDMMYYYY.csv
-          # FII-DII filename: fii-dii_DDMMYYYY.csv  (NSE download naming)
-          #                   Also accepts FIIDII_*.csv or fiidii_*.csv variants
+          # FII-DII filename accepted patterns (ALL of these work):
+          #   fii-dii_DDMMYYYY.csv   — NSE standard (underscore after 'dii')
+          #   fii-dii-DDMMYYYY.csv   — hyphen variant (hyphen after 'dii')
+          #   FIIDII_DDMMYYYY.csv    — uppercase variant
+          #   fiidii_DDMMYYYY.csv    — lowercase variant
+          # Date validation: filenames with future dates are flagged as typos
           fovolt_files = sorted(glob.glob(f'{uploads_dir}/FOVOLT_*.csv'))
           # New NSE BhavCopy format: BhavCopy_NSE_FO_*.csv
           bhavcopy_files = sorted(glob.glob(f'{uploads_dir}/BhavCopy_NSE_FO_*.csv'))
-          fiidii_files = sorted(
-              glob.glob(f'{uploads_dir}/fii-dii_*.csv') +
-              glob.glob(f'{uploads_dir}/FIIDII_*.csv')  +
-              glob.glob(f'{uploads_dir}/fiidii_*.csv')
-          )
+          fiidii_files = sorted(set(
+              glob.glob(f'{uploads_dir}/fii-dii_*.csv') +   # fii-dii_DDMMYYYY.csv  (NSE standard)
+              glob.glob(f'{uploads_dir}/fii-dii-*.csv') +   # fii-dii-DDMMYYYY.csv  (hyphen variant)
+              glob.glob(f'{uploads_dir}/FIIDII_*.csv')  +   # FIIDII_DDMMYYYY.csv
+              glob.glob(f'{uploads_dir}/fiidii_*.csv')       # fiidii_DDMMYYYY.csv
+          ))
 
-          if not fovolt_files and not bhavcopy_files and not fiidii_files:
-              print("No manual upload CSVs found — NSE auto-fetch will run normally.")
+          has_fovolt   = bool(fovolt_files or bhavcopy_files)
+          has_fiidii   = bool(fiidii_files)
+
+          if not has_fovolt and not has_fiidii:
+              print("No CSVs in uploads/ — NSE auto-fetch will run.")
               with open('/tmp/upload_processed.env', 'w') as f:
                   f.write('UPLOADS_FOUND=false\n')
               raise SystemExit(0)
+
+          print(f"Found: {len(fovolt_files)} FOVOLT, {len(bhavcopy_files)} BhavCopy, {len(fiidii_files)} FII-DII files")
 
           signals     = {}
           fii_dii_raw = {}
@@ -102,7 +122,8 @@ jobs:
 
           # ── Parse FOVOLT CSV ──────────────────────────────────────
           if fovolt_files:
-              fovolt_path = fovolt_files[-1]   # newest
+              # Use newest FOVOLT for signals (all files stay in uploads/)
+              fovolt_path = fovolt_files[-1]   # newest — used for signals
               print(f"Processing FOVOLT: {os.path.basename(fovolt_path)}")
               with open(fovolt_path, newline='', encoding='utf-8-sig') as fh:
                   content = fh.read()
@@ -206,9 +227,7 @@ jobs:
 
               # Store basename BEFORE archiving (used later for date extraction)
               fovolt_basename = os.path.basename(fovolt_path)
-              # Archive the processed file
-              shutil.move(fovolt_path, os.path.join(archive_dir, fovolt_basename))
-              print(f"  Archived {fovolt_basename} → uploads/processed/")
+              print(f"  FOVOLT processed: {fovolt_basename} (stays in uploads/)")
 
           # ── Parse NEW NSE BhavCopy format: BhavCopy_NSE_FO_*.csv ──────────
           # Format: TckrSymb,TradDt,FinInstrmNm,OptnTp,StrkPric,UndrlygPric,...
@@ -313,8 +332,7 @@ jobs:
 
               # Archive
               bhavcopy_basename = os.path.basename(bhavcopy_path)
-              shutil.move(bhavcopy_path, os.path.join(archive_dir, bhavcopy_basename))
-              print(f"  Archived {bhavcopy_basename} → uploads/processed/")
+              print(f"  BhavCopy processed: {bhavcopy_basename} (stays in uploads/)")
 
           # ── Parse FII-DII CSV ─────────────────────────────────────
           # Real NSE FII-DII download format (fii-dii_DDMMYYYY.csv):
@@ -326,95 +344,120 @@ jobs:
           # Strategy: collapse \n inside quoted fields → space, then parse with csv.DictReader.
           # Key normalisation strips spaces, ₹, (, ) → 'buyvaluecrores', 'sellvaluecrores', etc.
           if fiidii_files:
-              fiidii_path = fiidii_files[-1]
-              print(f"Processing FII-DII: {os.path.basename(fiidii_path)}")
-              with open(fiidii_path, newline='', encoding='utf-8-sig') as fh:
-                  raw_content = fh.read()
+              # ── Parse ALL FII-DII CSV files (each file = one trading day) ──
+              import re as _re
 
-              # Collapse \n that appear INSIDE quoted fields (multi-line headers)
               def collapse_quoted_newlines(text):
-                  result = []
-                  in_quote = False
+                  result = []; in_quote = False
                   for c in text:
-                      if c == '"':
-                          in_quote = not in_quote
-                          result.append(c)
-                      elif c == '\n' and in_quote:
-                          result.append(' ')   # newline inside quote → space
-                      else:
-                          result.append(c)
+                      if c == '"': in_quote = not in_quote; result.append(c)
+                      elif c == '\n' and in_quote: result.append(' ')
+                      else: result.append(c)
                   return ''.join(result)
 
-              cleaned = collapse_quoted_newlines(raw_content)
-              import re as _re
-              reader = csv.DictReader(io.StringIO(cleaned))
-              rows_raw = list(reader)
-              print(f"  FII-DII fieldnames: {reader.fieldnames}")
-              print(f"  FII-DII rows: {len(rows_raw)}")
-
-              # Normalise keys: lowercase, remove everything except a-z0-9
               def clean_key(k):
                   if k is None: return ''
                   return _re.sub(r'[^a-z0-9]', '', k.lower().replace('₹', ''))
 
-              fii_buy = fii_sell = fii_net_val = 0.0
-              dii_buy = dii_sell = dii_net_val = 0.0
-              latest_date_str = None
+              # Process every file — deduplicated by date
+              fiidii_by_date = {}   # date_iso -> row dict
+              fii_dii_raw = None    # will be set to the LATEST date's data
 
-              for row in rows_raw:
-                  nrow = {clean_key(k): str(v).strip().strip('"') for k, v in row.items() if k}
+              for fiidii_path in sorted(fiidii_files):
+                  print(f"Processing FII-DII: {os.path.basename(fiidii_path)}")
+                  with open(fiidii_path, newline='', encoding='utf-8-sig') as fh:
+                      raw_content = fh.read()
+                  cleaned = collapse_quoted_newlines(raw_content)
+                  reader = csv.DictReader(io.StringIO(cleaned))
+                  rows_raw = list(reader)
+                  print(f"  fieldnames: {reader.fieldnames}  rows: {len(rows_raw)}")
 
-                  def fval(*keys):
-                      for k in keys:
-                          v = nrow.get(k)
-                          if v:
-                              try: return float(v.replace(',','').strip())
-                              except: pass
-                      return 0.0
+                  fii_buy = fii_sell = fii_net = 0.0
+                  dii_buy = dii_sell = dii_net = 0.0
+                  file_date = None
 
-                  # Category: strip everything non-alpha
-                  category = _re.sub(r'[^A-Z]', '', nrow.get('category', '').upper())
+                  for row in rows_raw:
+                      nrow = {clean_key(k): str(v).strip().strip('"') for k, v in row.items() if k}
 
-                  # Date parsing
-                  date_raw = nrow.get('date', '').strip()
-                  if date_raw and not latest_date_str:
-                      for fmt_str in ('%d-%b-%Y', '%d-%B-%Y', '%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y'):
+                      def fval(*keys):
+                          for k in keys:
+                              v = nrow.get(k)
+                              if v:
+                                  try: return float(v.replace(',','').strip())
+                                  except: pass
+                          return 0.0
+
+                      category = _re.sub(r'[^A-Z]', '', nrow.get('category', '').upper())
+
+                      date_raw = nrow.get('date', '').strip()
+                      if date_raw and not file_date:
+                          for fmt_str in ('%d-%b-%Y', '%d-%B-%Y', '%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y'):
+                              try:
+                                  file_date = datetime.strptime(date_raw, fmt_str).strftime('%Y-%m-%d')
+                                  break
+                              except: continue
+
+                      buy  = fval('buyvaluecrores', 'buyvalue', 'buy')
+                      sell = fval('sellvaluecrores', 'sellvalue', 'sell')
+                      net  = fval('netvaluecrores',  'netvalue',  'net')
+
+                      if 'FII' in category:
+                          fii_buy, fii_sell = buy, sell
+                          fii_net = round(buy - sell, 2) if (buy or sell) else round(net, 2)
+                      elif 'DII' in category:
+                          dii_buy, dii_sell = buy, sell
+                          dii_net = round(buy - sell, 2) if (buy or sell) else round(net, 2)
+
+                  if not file_date:
+                      # Try to extract date from filename: fii-dii_DDMMYYYY or fii-dii-DDMMYYYY
+                      bn = os.path.basename(fiidii_path)
+                      m = _re.search(r'(\d{8})', bn)
+                      if m:
+                          ds = m.group(1)
                           try:
-                              latest_date_str = datetime.strptime(date_raw, fmt_str).strftime('%Y-%m-%d')
-                              break
-                          except: continue
+                              candidate = f"{ds[4:8]}-{ds[2:4]}-{ds[0:2]}"
+                              parsed_dt = datetime.strptime(candidate, '%Y-%m-%d')
+                              # Sanity check: reject future dates (likely user typo like 07062026 vs 07052026)
+                              today_dt = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+                              if parsed_dt > today_dt:
+                                  print(f"  ⚠ WARNING: date in filename '{bn}' is FUTURE ({candidate}) — likely a typo. Skipping date from filename.")
+                                  file_date = None
+                              else:
+                                  file_date = candidate
+                          except:
+                              file_date = None
 
-                  buy = fval('buyvaluecrores', 'buyvalue', 'buy')
-                  sell = fval('sellvaluecrores', 'sellvalue', 'sell')
-                  net  = fval('netvaluecrores', 'netvalue', 'net')
+                  if not file_date:
+                      file_date = datetime.utcnow().strftime('%Y-%m-%d')
+                      print(f"  ⚠ Could not parse date from '{os.path.basename(fiidii_path)}' — using today: {file_date}")
 
-                  if 'FII' in category:
-                      fii_buy, fii_sell = buy, sell
-                      fii_net_val = round(buy - sell, 2) if buy or sell else round(net, 2)
-                  elif 'DII' in category:
-                      dii_buy, dii_sell = buy, sell
-                      dii_net_val = round(buy - sell, 2) if buy or sell else round(net, 2)
+                  day_entry = {
+                      'date': file_date,
+                      'fii':  fii_net,  'dii':  dii_net,
+                      'fiiBuy': fii_buy, 'fiiSell': fii_sell,
+                      'diiBuy': dii_buy, 'diiSell': dii_sell,
+                      'source': 'manual_upload'
+                  }
+                  # Keep latest data if multiple files share the same date
+                  if file_date not in fiidii_by_date or fii_net != 0 or dii_net != 0:
+                      fiidii_by_date[file_date] = day_entry
 
-              fii_dii_raw = {
-                  'fii':     fii_net_val,
-                  'dii':     dii_net_val,
-                  'fiiBuy':  fii_buy,   'fiiSell': fii_sell,
-                  'diiBuy':  dii_buy,   'diiSell': dii_sell,
-                  'date':    latest_date_str or datetime.utcnow().strftime('%Y-%m-%d'),
-                  'source':  'manual_upload'
-              }
-              if latest_date_str:
-                  fiidii_rows.append({
-                      'date': latest_date_str,
-                      'fii':  fii_net_val,
-                      'dii':  dii_net_val
-                  })
-              print(f"  FII net: ₹{fii_net_val:,.2f} Cr  |  DII net: ₹{dii_net_val:,.2f} Cr")
-              print(f"  Date: {fii_dii_raw['date']}")
+                  fiidii_rows.append({'date': file_date, 'fii': fii_net, 'dii': dii_net})
+                  print(f"  Date: {file_date}  FII: ₹{fii_net:,.2f} Cr  DII: ₹{dii_net:,.2f} Cr")
 
-              # Archive
-              shutil.move(fiidii_path, os.path.join(archive_dir, os.path.basename(fiidii_path)))
-              print(f"  Archived {os.path.basename(fiidii_path)} → uploads/processed/")
+                  print(f"  FII-DII parsed: {os.path.basename(fiidii_path)} (stays in uploads/)")
+
+              # fii_dii_raw = latest date's data (for fiiDii field + meta)
+              if fiidii_by_date:
+                  latest_fd = sorted(fiidii_by_date.keys())[-1]
+                  fii_dii_raw = fiidii_by_date[latest_fd]
+                  print(f"  Latest FII-DII date: {latest_fd}  FII: ₹{fii_dii_raw['fii']:,.2f} Cr  DII: ₹{fii_dii_raw['dii']:,.2f} Cr")
+                  # Deduplicate fiidii_rows by date, keep latest value per date
+                  seen = {}
+                  for r in fiidii_rows:
+                      seen[r['date']] = r
+                  fiidii_rows = sorted(seen.values(), key=lambda x: x['date'])
+                  print(f"  Total FII-DII rows after dedup: {len(fiidii_rows)} days")
 
           # ── Merge with existing fno_signals.json ─────────────────
           # Load existing data so we preserve bulk/block/insider/pcr/history
@@ -460,41 +503,34 @@ jobs:
           fetch_date_str = datetime.strptime(upload_date_iso,'%Y-%m-%d').strftime('%d-%b-%Y')
           print(f"  Upload fetch_date_str: {fetch_date_str}")
 
-          # Build 5-day FII/DII history
+          # ── Build complete FII/DII history from ALL sources ──────────
+          # Source 1: ALL fii-dii CSVs in uploads/ (already parsed into fiidii_rows above)
+          # Source 2: history/*.json from auto-fetch runs
+          # fiidii_rows contains every CSV currently in uploads/ — no need to re-scan.
           import glob as _glob
-          hist_files = sorted(_glob.glob('data-repo/data/history/*.json'))[-5:]
-          five_day = []
-          for hf in hist_files:
+          five_day_map2 = {}
+
+          # From parsed CSV rows (all uploads/ CSVs)
+          for r in fiidii_rows:
+              dl = datetime.strptime(r['date'],'%Y-%m-%d').strftime('%a')
+              five_day_map2[r['date']] = {'date': r['date'], 'd': dl,
+                                          'fii': r['fii'], 'dii': r['dii']}
+
+          # From history/*.json (auto-fetch snapshots — fills gaps CSV doesn't cover)
+          for hf in sorted(_glob.glob('data-repo/data/history/*.json')):
               try:
                   with open(hf) as fh: hd = json.load(fh)
                   d = hd.get('fiiDii',{})
-                  if d:
+                  if d and (d.get('fii',0) or d.get('dii',0)):
                       day_label = os.path.basename(hf).replace('.json','')
-                      dl = datetime.strptime(day_label,'%Y-%m-%d').strftime('%a')
-                      five_day.append({'date': day_label, 'd': dl,
-                                       'fii': d.get('fii',0), 'dii': d.get('dii',0)})
+                      if day_label not in five_day_map2:   # CSV data wins over history
+                          dl = datetime.strptime(day_label,'%Y-%m-%d').strftime('%a')
+                          five_day_map2[day_label] = {'date': day_label, 'd': dl,
+                                                      'fii': d.get('fii',0), 'dii': d.get('dii',0)}
               except: continue
 
-          # If FIIDII upload had multiple daily rows, merge them into history
-          if fiidii_rows:
-              # Deduplicate: only add rows not already in five_day
-              existing_dates = {r['date'] for r in five_day}
-              for r in fiidii_rows:
-                  if r['date'] not in existing_dates:
-                      dl = datetime.strptime(r['date'],'%Y-%m-%d').strftime('%a')
-                      five_day.append({'date': r['date'], 'd': dl,
-                                       'fii': r['fii'], 'dii': r['dii']})
-              five_day = sorted(five_day, key=lambda x: x['date'])[-10:]
-
-          # If FIIDII upload had today's data, also add it (if not duplicated)
-          if fii_dii_raw:
-              today_date = fii_dii_raw.get('date', upload_date_iso)
-              if not any(r['date'] == today_date for r in five_day):
-                  dl = datetime.strptime(today_date,'%Y-%m-%d').strftime('%a')
-                  five_day.append({'date': today_date, 'd': dl,
-                                   'fii': fii_dii_raw.get('fii',0),
-                                   'dii': fii_dii_raw.get('dii',0)})
-              five_day = sorted(five_day, key=lambda x: x['date'])[-10:]
+          five_day = sorted(five_day_map2.values(), key=lambda x: x['date'])[-90:]
+          print(f"  fiiDiiHistory: {len(five_day)} days — {[r['date'] for r in five_day]}")
 
           # Use signals from upload if present, else carry from existing
           final_signals = signals if signals else existing.get('signals', {})
@@ -506,7 +542,7 @@ jobs:
           output = {
               'signals':       final_signals,
               'fiiDii':        final_fii_dii,
-              'fiiDiiHistory': five_day[-10:],
+              'fiiDiiHistory': five_day[-90:],   # full 90-day history — all from uploads/ CSVs + history/*.json
               'bulkDeals':     existing.get('bulkDeals', []),
               'blockDeals':    existing.get('blockDeals', []),
               'insiderData':   existing.get('insiderData', []),
@@ -527,6 +563,12 @@ jobs:
           with open(fno_path, 'w') as fh:
               json.dump(output, fh, separators=(',',':'))
           print(f"Written fno_signals.json ({final_count} stocks, source=manual_upload)")
+
+          # NOTE: history/*.json snapshots are no longer needed for FII-DII
+          # because ALL fii-dii CSVs stay in uploads/ permanently.
+          # Every run rebuilds fiiDiiHistory by re-reading all CSVs.
+          # history/*.json are still written by the NSE auto-fetch path.
+
           # Confirm key prices written correctly
           for chk in ['SUNPHARMA','RELIANCE','HDFCBANK']:
               if chk in final_signals:
@@ -543,7 +585,7 @@ jobs:
                              for f in _glob.glob('data-repo/data/history/*.json')
                              if '.gitkeep' not in f])
           with open('data-repo/data/index.json', 'w') as fh:
-              json.dump({'dates': all_hist[-30:],
+              json.dump({'dates': all_hist[-90:],
                          'lastUpdated': datetime.utcnow().isoformat()+'Z',
                          'totalUploads': len(all_hist),
                          'latestDate': upload_date_iso,
@@ -998,23 +1040,100 @@ jobs:
               except Exception as e:
                   print(f"  PCR error: {e}")
 
-          # ── Build 5-day FII/DII chart data ────────────────────────
-          hist_files = sorted(glob.glob('data-repo/data/history/*.json'))[-5:]
-          five_day = []
-          for hf in hist_files:
+          # ── Build FII/DII chart history ───────────────────────────
+          # Source priority (all merged, deduped by date):
+          #   1. All fii-dii CSVs in uploads/ (permanent source of truth)
+          #   2. history/*.json snapshots (from previous auto-fetch runs)
+          #   3. Today's just-fetched fii_dii
+          import re as _re2
+          five_day_map = {}   # date_iso -> {date, d, fii, dii}
+
+          # 1. Parse ALL fii-dii CSVs from uploads/ (same parser as manual upload step)
+          _uploads = 'data-repo/data/uploads'
+          _fiidii_csvs = sorted(set(
+              glob.glob(f'{_uploads}/fii-dii_*.csv') +
+              glob.glob(f'{_uploads}/fii-dii-*.csv') +
+              glob.glob(f'{_uploads}/FIIDII_*.csv')  +
+              glob.glob(f'{_uploads}/fiidii_*.csv')
+          ))
+          print(f"  Scanning {len(_fiidii_csvs)} fii-dii CSVs from uploads/")
+          for _fp in _fiidii_csvs:
+              try:
+                  with open(_fp, newline='', encoding='utf-8-sig') as _fh:
+                      _raw = _fh.read()
+                  # Collapse newlines inside quoted fields
+                  _res=[]; _iq=False
+                  for _c in _raw:
+                      if _c=='"': _iq=not _iq; _res.append(_c)
+                      elif _c=='\n' and _iq: _res.append(' ')
+                      else: _res.append(_c)
+                  _cleaned=''.join(_res)
+                  _reader=csv.DictReader(io.StringIO(_cleaned))
+                  _rows=list(_reader)
+                  def _ck(k): return _re2.sub(r'[^a-z0-9]','',k.lower().replace('₹','')) if k else ''
+                  _fb=_fs=_db=_ds=_fn=_dn=0.0; _fd=None
+                  for _r in _rows:
+                      _nr={_ck(k):str(v).strip().strip('"') for k,v in _r.items() if k}
+                      def _fv(*ks):
+                          for _k in ks:
+                              _v=_nr.get(_k)
+                              if _v:
+                                  try: return float(_v.replace(',','').strip())
+                                  except: pass
+                          return 0.0
+                      _cat=_re2.sub(r'[^A-Z]','',_nr.get('category','').upper())
+                      _dr=_nr.get('date','').strip()
+                      if _dr and not _fd:
+                          for _fmt in ('%d-%b-%Y','%d-%B-%Y','%d/%m/%Y','%Y-%m-%d','%d-%m-%Y'):
+                              try: _fd=datetime.strptime(_dr,_fmt).strftime('%Y-%m-%d'); break
+                              except: continue
+                      _buy=_fv('buyvaluecrores','buyvalue','buy')
+                      _sell=_fv('sellvaluecrores','sellvalue','sell')
+                      _net=_fv('netvaluecrores','netvalue','net')
+                      if 'FII' in _cat: _fb,_fs,_fn=_buy,_sell,round(_buy-_sell,2) if (_buy or _sell) else round(_net,2)
+                      elif 'DII' in _cat: _db,_ds,_dn=_buy,_sell,round(_buy-_sell,2) if (_buy or _sell) else round(_net,2)
+                  # Try filename date as fallback
+                  if not _fd:
+                      _m=_re2.search(r'(\d{8})',os.path.basename(_fp))
+                      if _m:
+                          _ds2=_m.group(1)
+                          try:
+                              _cand=f"{_ds2[4:8]}-{_ds2[2:4]}-{_ds2[0:2]}"
+                              _pdt=datetime.strptime(_cand,'%Y-%m-%d')
+                              if _pdt<=datetime.utcnow(): _fd=_cand
+                          except: pass
+                  if _fd:
+                      _dl=datetime.strptime(_fd,'%Y-%m-%d').strftime('%a')
+                      five_day_map[_fd]={'date':_fd,'d':_dl,'fii':_fn,'dii':_dn}
+                      print(f"  CSV {os.path.basename(_fp)}: {_fd} FII={_fn:,.0f} DII={_dn:,.0f}")
+              except Exception as _e:
+                  print(f"  Skipped {os.path.basename(_fp)}: {_e}")
+
+          # 2. Merge history/*.json (auto-fetch snapshots) — don't overwrite CSV data
+          for hf in sorted(glob.glob('data-repo/data/history/*.json')):
               try:
                   with open(hf) as f: hd = json.load(f)
                   d = hd.get('fiiDii',{})
-                  if d:
+                  if d and (d.get('fii',0) or d.get('dii',0)):
                       day_label = os.path.basename(hf).replace('.json','')
-                      from datetime import datetime as dt2
-                      dl = dt2.strptime(day_label,'%Y-%m-%d').strftime('%a')
-                      five_day.append({'d':dl,'fii':d.get('fii',0),'dii':d.get('dii',0)})
+                      if day_label not in five_day_map:   # CSV data takes priority
+                          dl = datetime.strptime(day_label,'%Y-%m-%d').strftime('%a')
+                          five_day_map[day_label] = {
+                              'date': day_label, 'd': dl,
+                              'fii': d.get('fii',0), 'dii': d.get('dii',0)
+                          }
               except: continue
+
+          # 3. Add today's fetched data
           if fii_dii:
-              from datetime import datetime as dt2
-              five_day.append({'d':dt2.strptime(fetch_date_iso,'%Y-%m-%d').strftime('%a'),
-                               'fii':fii_dii.get('fii',0),'dii':fii_dii.get('dii',0)})
+              dl = datetime.strptime(fetch_date_iso,'%Y-%m-%d').strftime('%a')
+              five_day_map[fetch_date_iso] = {
+                  'date': fetch_date_iso, 'd': dl,
+                  'fii': fii_dii.get('fii',0), 'dii': fii_dii.get('dii',0)
+              }
+
+          five_day = sorted(five_day_map.values(), key=lambda x: x['date'])[-90:]   # keep 90 days in map
+          print(f"  fiiDiiHistory: {len(five_day)} days — {[r['date'] for r in five_day]}")
 
           # ── Guard: abort if NSE fetch returned too few stocks ─────
           # ── Retry + carry-forward if NSE fetch insufficient ────────────
@@ -1044,7 +1163,7 @@ jobs:
           output = {
               'signals': signals,
               'fiiDii': fii_dii,
-              'fiiDiiHistory': five_day[-5:],
+              'fiiDiiHistory': five_day[-90:],   # full 90-day history — was wrongly sliced to [-5:]
               'bulkDeals': bulk_deals,
               'blockDeals': block_deals,
               'insiderData': insider_data,        # NEW #2
@@ -1075,7 +1194,7 @@ jobs:
                              for f in glob.glob('data-repo/data/history/*.json')
                              if '.gitkeep' not in f])
           with open('data-repo/data/index.json','w') as f:
-              json.dump({'dates':all_hist[-30:],'lastUpdated':dt.utcnow().isoformat()+'Z',
+              json.dump({'dates':all_hist[-90:],'lastUpdated':dt.utcnow().isoformat()+'Z',
                          'totalUploads':len(all_hist),'latestDate':fetch_date_iso,
                          'latestStockCount':stock_count,'version':'V10'}, f, indent=2)
           print(f"Updated index.json ({len(all_hist)} dates)")
