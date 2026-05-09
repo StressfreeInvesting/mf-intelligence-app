@@ -496,7 +496,7 @@ button{cursor:pointer;font-family:inherit}
       <div class="logo">MF<span>Intelligence</span> <span style="font-size:.6rem;color:var(--text-muted);font-weight:400;font-family:'Space Mono',monospace">V10</span></div>
       <div class="header-right">
         <span id="foDataBadge" style="font-size:.62rem;color:var(--text-muted);font-family:'Space Mono',monospace;white-space:nowrap"></span>
-        <button id="refreshBtn" class="theme-btn" onclick="manualRefresh(this)" title="Refresh data from GitHub">↺ Refresh</button>
+        <button id="refreshBtn" class="theme-btn" onclick="manualRefresh(this,event?.shiftKey)" title="Refresh data. Shift+click to force reload from GitHub (overwrites local upload)">↺ Refresh</button>
         
       </div>
     </div>
@@ -531,7 +531,7 @@ button{cursor:pointer;font-family:inherit}
     <!-- Manual upload: accepts FOVOLT_*.csv and BhavCopy_NSE_FO_*.csv -->
     <label title="Upload BhavCopy_NSE_FO_*.csv or FOVOLT_*.csv to update F&amp;O prices" style="cursor:pointer;font-size:.65rem;padding:2px 8px;border-radius:10px;border:1px solid var(--border);color:var(--text-muted);background:transparent;white-space:nowrap;margin-left:6px;transition:border-color .15s" onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--accent)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-muted)'">
       📁 Upload CSV
-      <input type="file" accept=".csv" style="display:none" onchange="handleManualCSVUpload(this.files[0]);this.value=''"/>
+      <input type="file" accept=".csv" id="csvUploadInput" style="display:none" onchange="handleManualCSVUpload(this.files[0]);this.value=''" multiple/>
     </label>
   </div>
 
@@ -2526,10 +2526,10 @@ function renderCorrelation(){
 /* ═══════════════════════════════════════════
    MANUAL REFRESH
 ═══════════════════════════════════════════ */
-async function manualRefresh(btn){
+async function manualRefresh(btn,force=false){
   if(btn){btn.textContent='↺ …';btn.disabled=true;}
   try{
-    await fetchFOData();
+    await fetchFOData(force);
     await fetchTrends();
     // No live price fetch — FOVOLT is the only price source
     renderMarket();
@@ -2878,46 +2878,147 @@ function parseTradingDate(raw){
   return null;
 }
 
-function handleManualCSVUpload(file){
-  if(!file) return;
-  const reader=new FileReader();
+// ── parseFiiDiiFile: parse NSE fii-dii CSV in browser ─────────────────────
+function parseFiiDiiFile(text, filename){
+  const rows=parseCSVRows(text);
+  if(rows.length<2) return null;
+  // Collapse multi-line headers (quoted newlines)
+  const header=rows[0].map(h=>h.replace(/^"|"$/g,'').trim().toLowerCase().replace(/[^a-z0-9]/g,''));
+  // Check if this looks like a fii-dii file: should have 'category','buy','sell' or 'net' columns
+  const hasCat=header.some(h=>h.includes('category'));
+  const hasBuy=header.some(h=>h.includes('buy'));
+  if(!hasCat&&!hasBuy) return null; // not a fii-dii file
+
+  const iCat = header.findIndex(h=>h.includes('category'));
+  const iBuy = header.findIndex(h=>h.includes('buyvalue')||h.includes('buy'));
+  const iSell= header.findIndex(h=>h.includes('sellvalue')||h.includes('sell'));
+  const iNet = header.findIndex(h=>h.includes('netvalue')||h.includes('net'));
+  const iDt  = header.findIndex(h=>h.includes('date'));
+
+  let fiiNet=0, diiNet=0, fiiBuy=0, fiiSell=0, diiBuy=0, diiSell=0, fileDate=null;
+  const _f=v=>{const n=parseFloat(String(v||'').replace(/,/g,'').trim());return isNaN(n)?0:n;};
+
+  for(let ri=1;ri<rows.length;ri++){
+    const row=rows[ri];
+    if(!row||row.length<2) continue;
+    const cat=(row[iCat]||'').replace(/^"|"$/g,'').trim().toUpperCase().replace(/[^A-Z]/g,'');
+    const buy =iBuy >=0?_f(row[iBuy]) :0;
+    const sell=iSell>=0?_f(row[iSell]):0;
+    const net =iNet >=0?_f(row[iNet]) :0;
+    const dayNet=buy>0||sell>0?+(buy-sell).toFixed(2):+net.toFixed(2);
+    if(!fileDate&&iDt>=0){
+      const dRaw=(row[iDt]||'').replace(/^"|"$/g,'').trim();
+      fileDate=parseTradingDate(dRaw);
+    }
+    if(cat.includes('FII')){fiiBuy=buy;fiiSell=sell;fiiNet=dayNet;}
+    else if(cat.includes('DII')){diiBuy=buy;diiSell=sell;diiNet=dayNet;}
+  }
+
+  // Fallback: extract date from filename DDMMYYYY
+  if(!fileDate){
+    const m=filename.match(/(\d{8})/);
+    if(m){const ds=m[1];try{const c=`${ds.slice(4,8)}-${ds.slice(2,4)}-${ds.slice(0,2)}`;new Date(c);fileDate=c;}catch(e){}}
+  }
+
+  if(fiiNet===0&&diiNet===0) return null; // nothing parsed
+  return{date:fileDate,fii:fiiNet,dii:diiNet,fiiBuy,fiiSell,diiBuy,diiSell,source:'manual_html_upload'};
+}
+
+function handleManualCSVUpload(fileOrList){
+  // Accept single File or FileList (from multiple="true" input)
+  const files=fileOrList instanceof FileList?Array.from(fileOrList):[fileOrList];
+  if(!files.length||!files[0]) return;
+  // Process each file sequentially
+  let idx=0;
+  function processNext(){
+    const file=files[idx++];
+    if(!file) return;
+    const reader=new FileReader();
   reader.onload=e=>{
     const text=e.target.result;
+    const fname=file.name.toLowerCase();
+
+    // ── Detect file type by name first, then by content ─────────────
+    const isFiiDii = fname.includes('fii-dii')||fname.includes('fiidii')||fname.includes('fii_dii');
+
+    if(!STATE.foData) STATE.foData={signals:{},meta:{},fiiDii:{},fiiDiiHistory:[],bulkDeals:[],blockDeals:[],insiderData:[],pcr:{}};
+
+    if(isFiiDii){
+      // ── Parse as FII-DII CSV ──────────────────────────────────────
+      const fd=parseFiiDiiFile(text, file.name);
+      if(!fd||(!fd.fii&&!fd.dii)){
+        showToast('❌ Could not parse FII-DII data from '+file.name);
+        return;
+      }
+      // Update current fiiDii
+      STATE.foData.fiiDii={...fd};
+      // Merge into fiiDiiHistory (deduplicate by date)
+      const hist=STATE.foData.fiiDiiHistory||[];
+      const existIdx=fd.date?hist.findIndex(r=>r.date===fd.date):-1;
+      const entry={date:fd.date||'',d:fd.date?new Date(fd.date+'T00:00:00Z').toLocaleDateString('en-IN',{weekday:'short'}).slice(0,3):'',
+                   fii:fd.fii,dii:fd.dii};
+      if(existIdx>=0) hist[existIdx]=entry;
+      else hist.push(entry);
+      // Sort by date ascending
+      STATE.foData.fiiDiiHistory=hist.filter(r=>r.date).sort((a,b)=>a.date>b.date?1:-1);
+      updateFreshness();renderMarket();
+      showToast(`✅ FII/DII loaded: FII ${fd.fii>=0?'▲+':'▼'}${fd.fii.toFixed(0)}Cr  DII ${fd.dii>=0?'▲+':'▼'}${fd.dii.toFixed(0)}Cr${fd.date?' · '+fd.date:''}`);
+      return;
+    }
+
+    // ── Parse as FOVOLT / BhavCopy ───────────────────────────────────
     const result=parseBhavCopyFile(text, file.name);
     if(!result||result.error){
       showToast('❌ Parse error: '+(result?.error||'Unknown error'));
       console.error('CSV parse error:',result);
       return;
     }
-    // Merge into existing foData or create new
-    if(!STATE.foData) STATE.foData={signals:{},meta:{},fiiDii:{},fiiDiiHistory:[],bulkDeals:[],blockDeals:[],insiderData:[],pcr:{}};
-    // Signals: new data overrides existing
+    // Signals: new data overrides existing for this date
     Object.assign(STATE.foData.signals, result.signals);
     // Date: use TradDt from file (authoritative)
     if(result.tradingDate){
       STATE.foData.meta=STATE.foData.meta||{};
       STATE.foData.meta.date=result.tradingDate;
-      // Convert to display format DD-MMM-YYYY
       try{
         const [y,mo,d]=result.tradingDate.split('-');
         const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
         STATE.foData.meta.latestDate=`${d}-${months[+mo-1]}-${y}`;
       }catch(e){}
     }
-    STATE.foData.meta.source=`manual_html_upload_${result.isBhavCopy?'bhavcopy':'fovolt'}`;
+    STATE.foData.meta.source='manual_html_upload_fovolt';
     STATE.foData.meta.stockCount=Object.keys(STATE.foData.signals).length;
     updateFreshness();updateFoDataBadge();renderNiftyFromFOVOLT();renderMarket();renderIntelligence();renderPicks();checkPriceAlerts();checkExitSignals();
-    showToast(`✅ Loaded ${result.stockCount} stocks from ${file.name}${result.tradingDate?' · '+result.tradingDate:''}`);
+    showToast(`✅ ${result.stockCount} stocks from ${file.name}${result.tradingDate?' · '+result.tradingDate:''} · appAnnVol: ${result.signals[Object.keys(result.signals)[0]]?.appAnnVol??'—'}%`);
   };
-  reader.readAsText(file);
+      reader.onloadend=()=>{if(idx<files.length)processNext();};
+    reader.readAsText(file);
+  }
+  processNext();
 }
 
-async function fetchFOData(){
+async function fetchFOData(forceRemote=false){
   try{
+    // If user uploaded files via browser this session, don't overwrite with stale GitHub JSON
+    // unless explicitly forced (forceRemote=true via long-press or shift-click on Refresh)
+    const hasLocalUpload = STATE.foData?.meta?.source?.startsWith('manual_html_upload');
+    if(hasLocalUpload && !forceRemote){
+      console.log('fetchFOData: skipping remote fetch — local upload is active');
+      updateFreshness();updateFoDataBadge();renderNiftyFromFOVOLT();renderMarket();renderIntelligence();renderPicks();checkExitSignals();
+      return;
+    }
     const cfg=await fetch('/api/config').then(r=>r.json()).catch(()=>null);
     if(cfg?.dataUrl){
       const r=await fetch(cfg.dataUrl+'?t='+Date.now());
-      if(r.ok){STATE.foData=await r.json();updateFreshness();updateFoDataBadge();renderNiftyFromFOVOLT();renderMarket();renderIntelligence();renderPicks();checkExitSignals();return;}
+      if(r.ok){
+        const remoteData=await r.json();
+        // If we have a local fiiDiiHistory that's newer/richer, preserve it
+        if(hasLocalUpload && STATE.foData?.fiiDiiHistory?.length > (remoteData.fiiDiiHistory?.length||0)){
+          remoteData.fiiDiiHistory=STATE.foData.fiiDiiHistory;
+        }
+        STATE.foData=remoteData;
+        updateFreshness();updateFoDataBadge();renderNiftyFromFOVOLT();renderMarket();renderIntelligence();renderPicks();checkExitSignals();
+        return;
+      }
     }
     const r=await fetch('/api/history?type=trends&days=5');
     if(r.ok){STATE.trendsData=await r.json();}
