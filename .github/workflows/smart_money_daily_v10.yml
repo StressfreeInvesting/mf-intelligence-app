@@ -152,12 +152,17 @@ jobs:
               col_cl      = _col(['underlyingvalue(a)','underlynga','undrlygval(a)','underlyingvaluea'], 2)
               col_pr      = _col(['underlyingvalue(b)','underlyingb','undrlygval(b)','underlyingvalueb'], 3)
               col_logr    = _col(['logreturn','logret','logreturns'], 4)
-              col_prevvol = _col(['previousdayvolatility','prevdayvol','prevvol','previousvolatility'], 5)
-              col_curvol  = _col(['currentdaydailyvolatility','currentdayvol','dailyvolatility','currentvolatility'], 6)
-              col_vol     = _col(['annualisedvolatility','annualizedvolatility','annvol','annualisedvol'], 7)
-              col_fut     = _col(['futuresprice(g)','futurespriceg','futuresprice','futprice','closingpricefutures'], 8)
-              col_prevfut = _col(['futuresprice(h)','futurespriceh','previousfuturesprice','prevfutprice','previousfutclose'], 9)
-              print(f"  FOVOLT col map: sym={col_sym} cl={col_cl} pr={col_pr} logr={col_logr} prevVol={col_prevvol} curVol={col_curvol} vol={col_vol} fut={col_fut} prevFut={col_prevfut}")
+              col_prevvol    = _col(['previousdayunderlyingvolatility(d)','previousdayvolatility','prevdayvol','prevvol'], 5)
+              col_curvol     = _col(['currentdayunderlyingdailyvolatility(e)','currentdaydailyvolatility','currentdayvol','dailyvolatility'], 6)
+              col_vol        = _col(['underlyingannualisedvolatility(f)','annualisedvolatility','annualizedvolatility','annvol'], 7)
+              col_fut        = _col(['futurescloseprice(g)','futuresprice(g)','futurespriceg','futuresprice','futprice'], 8)
+              col_prevfut    = _col(['futurespreviousdaycloseprice(h)','futuresprice(h)','futurespriceh','previousfuturesprice','prevfutprice'], 9)
+              col_futlogr    = _col(['futureslogreturns(i)','futureslogreturn','futlogret','futlogreturns'], 10)          # K
+              col_prevfutvol = _col(['previousdayfuturesvolatility(j)','previousdayfuturesvolatility','prevdayfutvol','prevfutvol'], 11)  # L
+              col_curfutvol  = _col(['currentdayfuturesdailyvolatility(k)','currentdayfuturesvolatility','currentdayfutvol','curfutvol'], 12) # M
+              col_futannvol  = _col(['futuresannualisedvolatility(l)','futuresannualisedvolatility','futannvol'], 13)     # N
+              col_appannvol  = _col(['applicableannualisedvolatility(n)','applicableannualisedvolatility','appannvol'], 15)  # O (index 15)
+              print(f"  FOVOLT col map: cl={col_cl} pr={col_pr} logr={col_logr} vol={col_vol} fut={col_fut} prevFut={col_prevfut} futLogR={col_futlogr} futAnnVol={col_futannvol} appAnnVol={col_appannvol}")
 
               for row in reader:
                   try:
@@ -169,31 +174,43 @@ jobs:
                           try: return float(str(v).replace(',','').strip())
                           except: return None
 
-                      cl          = _f(row[col_cl])       # C: Spot close today
-                      pr          = _f(row[col_pr])       # D: Prev spot close
-                      log_ret     = _f(row[col_logr])     # E: Log return
-                      prev_vol    = _f(row[col_prevvol])  # F: Prev day daily vol ← NEW
-                      cur_vol     = _f(row[col_curvol])   # G: Curr day daily vol ← NEW
-                      vol_ann     = _f(row[col_vol])      # H: Annualised IV
-                      fut_cl      = _f(row[col_fut])      # I: Today futures close ← NEW
-                      prev_fut_cl = _f(row[col_prevfut]) if len(row) > col_prevfut else None  # J: Prev futures ← NEW
+                      cl           = _f(row[col_cl])                                          # C
+                      pr           = _f(row[col_pr])                                          # D
+                      log_ret      = _f(row[col_logr])                                        # E
+                      prev_vol     = _f(row[col_prevvol])                                     # F
+                      cur_vol      = _f(row[col_curvol])                                      # G
+                      vol_ann      = _f(row[col_vol])                                         # H: spot annualised vol
+                      fut_cl       = _f(row[col_fut])                                         # I
+                      prev_fut_cl  = _f(row[col_prevfut])  if len(row)>col_prevfut  else None # J
+                      fut_log_ret  = _f(row[col_futlogr])  if len(row)>col_futlogr  else None # K: fut log return
+                      prev_fut_vol = _f(row[col_prevfutvol])if len(row)>col_prevfutvol else None # L: prev fut daily vol
+                      cur_fut_vol  = _f(row[col_curfutvol]) if len(row)>col_curfutvol  else None # M: cur fut daily vol
+                      fut_ann_vol  = _f(row[col_futannvol]) if len(row)>col_futannvol  else None # N: fut annualised vol
+                      app_ann_vol  = _f(row[col_appannvol]) if len(row)>col_appannvol  else None # O: applicable annualised vol
 
                       if cl is None or cl == 0: continue
 
+                      # Spot 1-day return — prefer log return (exact), fallback simple %
                       try:
-                          d1 = round((math.exp(log_ret) - 1) * 100, 2) if log_ret else 0.0
-                      except:
-                          d1 = round(((cl - pr) / pr * 100), 2) if pr else 0.0
+                          d1 = round((math.exp(log_ret) - 1) * 100, 2) if log_ret else                                (round(((cl - pr) / pr * 100), 2) if pr else 0.0)
+                      except: d1 = 0.0
+
+                      # Futures 1-day return — prefer log return, fallback simple %
+                      try:
+                          fut_d1 = round((math.exp(fut_log_ret) - 1) * 100, 2) if fut_log_ret else                                    (round(((fut_cl - prev_fut_cl) / prev_fut_cl * 100), 2) if (fut_cl and prev_fut_cl and prev_fut_cl > 0) else None)
+                      except: fut_d1 = None
 
                       try:
                           prem = round((fut_cl - cl) / cl * 100, 3) if fut_cl and cl else 0.0
-                      except:
-                          prem = 0.0
+                      except: prem = 0.0
 
-                      vol       = round(vol_ann, 1) if vol_ann else 0.0
-                      pv        = round(prev_vol, 3) if prev_vol else None
-                      cv        = round(cur_vol, 3) if cur_vol else None
-                      vol_delta = round(cv - pv, 3) if (cv is not None and pv is not None) else None
+                      vol           = round(vol_ann,    1) if vol_ann    else 0.0
+                      pv            = round(prev_vol,   4) if prev_vol   else None
+                      cv            = round(cur_vol,    4) if cur_vol    else None
+                      pv_fut        = round(prev_fut_vol,4) if prev_fut_vol else None
+                      cv_fut        = round(cur_fut_vol, 4) if cur_fut_vol  else None
+                      vol_delta     = round(cv - pv,           4) if (cv is not None and pv is not None)             else None
+                      fut_vol_delta = round(cv_fut - pv_fut,   4) if (cv_fut is not None and pv_fut is not None)     else None
 
                       raw   = (d1 / 3.0) + (prem * 0.5)
                       score = round(max(-5.0, min(5.0, raw)), 2)
@@ -206,14 +223,14 @@ jobs:
 
                       signals[sym] = {
                           'score': score, 'label': label,
-                          'cl': cl,                    # C: Spot close
-                          'pr': pr,                    # D: Prev spot
-                          'futCl': fut_cl,             # I: Today futures close ← NEW
-                          'prevFutCl': prev_fut_cl,    # J: Prev day futures close ← NEW
-                          'prevVol': pv,               # F: Prev day daily vol ← NEW
-                          'curVol': cv,                # G: Curr day daily vol ← NEW
-                          'volDelta': vol_delta,       # G-F: vol direction ← NEW
-                          'd1': str(d1), 'd2': str(d1),
+                          'cl': cl,   'pr': pr,   'd1': str(d1),   'd2': str(d1),
+                          'futCl': fut_cl,         'prevFutCl': prev_fut_cl,
+                          'futD1': fut_d1,          # K derived — futures 1-day return %
+                          'prevVol': pv,            'curVol': cv,     'volDelta': vol_delta,
+                          'prevFutVol': pv_fut,     'curFutVol': cv_fut, 'futVolDelta': fut_vol_delta,
+                          'spotAnnVol': vol_ann,    # H
+                          'futAnnVol':  fut_ann_vol, # N
+                          'appAnnVol':  app_ann_vol, # O ← KEY: used by calcTargetSL and F3 scoring
                           'prem': str(prem), 'vol': str(vol)
                       }
                       stock_count += 1
@@ -529,7 +546,7 @@ jobs:
                                                       'fii': d.get('fii',0), 'dii': d.get('dii',0)}
               except: continue
 
-          five_day = sorted(five_day_map2.values(), key=lambda x: x['date'])[-90:]
+          five_day = sorted(five_day_map2.values(), key=lambda x: x['date'])[-30:]
           print(f"  fiiDiiHistory: {len(five_day)} days — {[r['date'] for r in five_day]}")
 
           # Use signals from upload if present, else carry from existing
@@ -542,7 +559,7 @@ jobs:
           output = {
               'signals':       final_signals,
               'fiiDii':        final_fii_dii,
-              'fiiDiiHistory': five_day[-90:],   # full 90-day history — all from uploads/ CSVs + history/*.json
+              'fiiDiiHistory': five_day[-30:],   # keep up to 30 days — all from uploads/ CSVs
               'bulkDeals':     existing.get('bulkDeals', []),
               'blockDeals':    existing.get('blockDeals', []),
               'insiderData':   existing.get('insiderData', []),
@@ -585,7 +602,7 @@ jobs:
                              for f in _glob.glob('data-repo/data/history/*.json')
                              if '.gitkeep' not in f])
           with open('data-repo/data/index.json', 'w') as fh:
-              json.dump({'dates': all_hist[-90:],
+              json.dump({'dates': all_hist[-30:],
                          'lastUpdated': datetime.utcnow().isoformat()+'Z',
                          'totalUploads': len(all_hist),
                          'latestDate': upload_date_iso,
@@ -724,12 +741,17 @@ jobs:
                   _col_cl      = _acol(['underlyingvalue(a)','underlynga','undrlygval(a)','underlyingvaluea'], 2)
                   _col_pr      = _acol(['underlyingvalue(b)','underlyingb','undrlygval(b)','underlyingvalueb'], 3)
                   _col_logr    = _acol(['logreturn','logret','logreturns'], 4)
-                  _col_prevvol = _acol(['previousdayvolatility','prevdayvol','prevvol','previousvolatility'], 5)
-                  _col_curvol  = _acol(['currentdaydailyvolatility','currentdayvol','dailyvolatility','currentvolatility'], 6)
-                  _col_vol     = _acol(['annualisedvolatility','annualizedvolatility','annvol'], 7)
-                  _col_fut     = _acol(['futuresprice(g)','futurespriceg','futuresprice','futprice','closingpricefutures'], 8)
-                  _col_prevfut = _acol(['futuresprice(h)','futurespriceh','previousfuturesprice','prevfutprice','previousfutclose'], 9)
-                  print(f"  FOVOLT col map: sym={_col_sym} cl={_col_cl} pr={_col_pr} logr={_col_logr} prevVol={_col_prevvol} curVol={_col_curvol} vol={_col_vol} fut={_col_fut} prevFut={_col_prevfut}")
+                  _col_prevvol    = _acol(['previousdayunderlyingvolatility(d)','previousdayvolatility','prevdayvol','prevvol'], 5)
+                  _col_curvol     = _acol(['currentdayunderlyingdailyvolatility(e)','currentdaydailyvolatility','currentdayvol','dailyvolatility'], 6)
+                  _col_vol        = _acol(['underlyingannualisedvolatility(f)','annualisedvolatility','annualizedvolatility','annvol'], 7)
+                  _col_fut        = _acol(['futurescloseprice(g)','futuresprice(g)','futurespriceg','futuresprice','futprice'], 8)
+                  _col_prevfut    = _acol(['futurespreviousdaycloseprice(h)','futuresprice(h)','futurespriceh','previousfuturesprice','prevfutprice'], 9)
+                  _col_futlogr    = _acol(['futureslogreturns(i)','futureslogreturn','futlogret','futlogreturns'], 10)
+                  _col_prevfutvol = _acol(['previousdayfuturesvolatility(j)','previousdayfuturesvolatility','prevdayfutvol','prevfutvol'], 11)
+                  _col_curfutvol  = _acol(['currentdayfuturesdailyvolatility(k)','currentdayfuturesvolatility','currentdayfutvol','curfutvol'], 12)
+                  _col_futannvol  = _acol(['futuresannualisedvolatility(l)','futuresannualisedvolatility','futannvol'], 13)
+                  _col_appannvol  = _acol(['applicableannualisedvolatility(n)','applicableannualisedvolatility','appannvol'], 15)
+                  print(f"  FOVOLT col map: cl={_col_cl} vol={_col_vol} fut={_col_fut} futLogR={_col_futlogr} futAnnVol={_col_futannvol} appAnnVol={_col_appannvol}")
 
                   for row in reader:
                       try:
@@ -741,31 +763,41 @@ jobs:
                               try: return float(str(v).replace(',','').strip())
                               except: return None
 
-                          cl          = _f(row[_col_cl])       # C: Spot close today
-                          pr          = _f(row[_col_pr])       # D: Prev spot close
-                          log_ret     = _f(row[_col_logr])     # E: Log return
-                          prev_vol    = _f(row[_col_prevvol])  # F: Prev day daily vol ← NEW
-                          cur_vol     = _f(row[_col_curvol])   # G: Curr day daily vol ← NEW
-                          vol_ann     = _f(row[_col_vol])      # H: Annualised IV
-                          fut_cl      = _f(row[_col_fut])      # I: Today futures close ← NEW
-                          prev_fut_cl = _f(row[_col_prevfut]) if len(row) > _col_prevfut else None  # J ← NEW
+                          cl           = _f(row[_col_cl])                                              # C
+                          pr           = _f(row[_col_pr])                                              # D
+                          log_ret      = _f(row[_col_logr])                                            # E
+                          prev_vol     = _f(row[_col_prevvol])                                         # F
+                          cur_vol      = _f(row[_col_curvol])                                          # G
+                          vol_ann      = _f(row[_col_vol])                                             # H
+                          fut_cl       = _f(row[_col_fut])                                             # I
+                          prev_fut_cl  = _f(row[_col_prevfut])   if len(row)>_col_prevfut   else None  # J
+                          fut_log_ret  = _f(row[_col_futlogr])   if len(row)>_col_futlogr   else None  # K
+                          prev_fut_vol = _f(row[_col_prevfutvol])if len(row)>_col_prevfutvol else None # L
+                          cur_fut_vol  = _f(row[_col_curfutvol]) if len(row)>_col_curfutvol  else None # M
+                          fut_ann_vol  = _f(row[_col_futannvol]) if len(row)>_col_futannvol  else None # N
+                          app_ann_vol  = _f(row[_col_appannvol]) if len(row)>_col_appannvol  else None # O
 
                           if cl is None or cl == 0: continue
 
                           try:
-                              d1 = round((_math.exp(log_ret) - 1) * 100, 2) if log_ret else 0.0
-                          except:
-                              d1 = round(((cl - pr) / pr * 100), 2) if pr else 0.0
+                              d1 = round((_math.exp(log_ret) - 1) * 100, 2) if log_ret else                                    (round(((cl - pr) / pr * 100), 2) if pr else 0.0)
+                          except: d1 = 0.0
+
+                          try:
+                              fut_d1 = round((_math.exp(fut_log_ret) - 1) * 100, 2) if fut_log_ret else                                        (round(((fut_cl - prev_fut_cl) / prev_fut_cl * 100), 2) if (fut_cl and prev_fut_cl and prev_fut_cl > 0) else None)
+                          except: fut_d1 = None
 
                           try:
                               prem = round((fut_cl - cl) / cl * 100, 3) if fut_cl and cl else 0.0
-                          except:
-                              prem = 0.0
+                          except: prem = 0.0
 
-                          vol       = round(vol_ann, 1) if vol_ann else 0.0
-                          pv        = round(prev_vol, 3) if prev_vol else None
-                          cv        = round(cur_vol, 3) if cur_vol else None
-                          vol_delta = round(cv - pv, 3) if (cv is not None and pv is not None) else None
+                          vol           = round(vol_ann,      1) if vol_ann      else 0.0
+                          pv            = round(prev_vol,     4) if prev_vol     else None
+                          cv            = round(cur_vol,      4) if cur_vol      else None
+                          pv_fut        = round(prev_fut_vol, 4) if prev_fut_vol else None
+                          cv_fut        = round(cur_fut_vol,  4) if cur_fut_vol  else None
+                          vol_delta     = round(cv - pv,           4) if (cv is not None and pv is not None)         else None
+                          fut_vol_delta = round(cv_fut - pv_fut,   4) if (cv_fut is not None and pv_fut is not None) else None
 
                           raw   = (d1 / 3.0) + (prem * 0.5)
                           score = round(max(-5.0, min(5.0, raw)), 2)
@@ -777,11 +809,15 @@ jobs:
                                    'Mild Bearish'   if score <= -0.5 else 'Neutral')
 
                           signals[sym] = {
-                              'score':score,'label':label,
-                              'cl':cl,'pr':pr,
-                              'futCl':fut_cl,'prevFutCl':prev_fut_cl,
-                              'prevVol':pv,'curVol':cv,'volDelta':vol_delta,
-                              'd1':str(d1),'d2':str(d1),'prem':str(prem),'vol':str(vol)
+                              'score': score, 'label': label,
+                              'cl': cl,    'pr': pr,    'd1': str(d1), 'd2': str(d1),
+                              'futCl': fut_cl,          'prevFutCl': prev_fut_cl,
+                              'futD1': fut_d1,
+                              'prevVol': pv,            'curVol': cv,      'volDelta': vol_delta,
+                              'prevFutVol': pv_fut,     'curFutVol': cv_fut, 'futVolDelta': fut_vol_delta,
+                              'spotAnnVol': vol_ann,    'futAnnVol': fut_ann_vol,
+                              'appAnnVol':  app_ann_vol,
+                              'prem': str(prem), 'vol': str(vol)
                           }
                           stock_count += 1
                       except: continue
@@ -1132,7 +1168,7 @@ jobs:
                   'fii': fii_dii.get('fii',0), 'dii': fii_dii.get('dii',0)
               }
 
-          five_day = sorted(five_day_map.values(), key=lambda x: x['date'])[-90:]   # keep 90 days in map
+          five_day = sorted(five_day_map.values(), key=lambda x: x['date'])[-30:]
           print(f"  fiiDiiHistory: {len(five_day)} days — {[r['date'] for r in five_day]}")
 
           # ── Guard: abort if NSE fetch returned too few stocks ─────
@@ -1163,7 +1199,7 @@ jobs:
           output = {
               'signals': signals,
               'fiiDii': fii_dii,
-              'fiiDiiHistory': five_day[-90:],   # full 90-day history — was wrongly sliced to [-5:]
+              'fiiDiiHistory': five_day[-5:],
               'bulkDeals': bulk_deals,
               'blockDeals': block_deals,
               'insiderData': insider_data,        # NEW #2
@@ -1194,7 +1230,7 @@ jobs:
                              for f in glob.glob('data-repo/data/history/*.json')
                              if '.gitkeep' not in f])
           with open('data-repo/data/index.json','w') as f:
-              json.dump({'dates':all_hist[-90:],'lastUpdated':dt.utcnow().isoformat()+'Z',
+              json.dump({'dates':all_hist[-30:],'lastUpdated':dt.utcnow().isoformat()+'Z',
                          'totalUploads':len(all_hist),'latestDate':fetch_date_iso,
                          'latestStockCount':stock_count,'version':'V10'}, f, indent=2)
           print(f"Updated index.json ({len(all_hist)} dates)")
