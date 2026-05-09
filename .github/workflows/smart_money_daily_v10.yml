@@ -18,6 +18,15 @@ name: Smart Money Daily Fetch V10
 on:
   schedule:
     - cron: '30 13 * * 1-5'   # 7:00 PM IST Mon–Fri (after market close)
+  push:
+    paths:
+      - 'data/uploads/FOVOLT_*.csv'
+      - 'data/uploads/fii-dii_*.csv'
+      - 'data/uploads/fii-dii-*.csv'
+      - 'data/uploads/FIIDII_*.csv'
+      - 'data/uploads/fiidii_*.csv'
+    # Any CSV pushed to data/uploads/ auto-triggers the pipeline immediately.
+    # No need to manually run the workflow after uploading files.
   workflow_dispatch:
     inputs:
       date_override:
