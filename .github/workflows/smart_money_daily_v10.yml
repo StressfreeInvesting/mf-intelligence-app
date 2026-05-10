@@ -25,6 +25,9 @@ on:
       - 'data/uploads/fii-dii-*.csv'
       - 'data/uploads/FIIDII_*.csv'
       - 'data/uploads/fiidii_*.csv'
+      - 'data/uploads/sec_bhavdata_full_*.csv'
+      - 'data/uploads/sec_bhavdata_*.csv'
+      - 'data/uploads/cm_bhav_*.csv'
     # Any CSV pushed to data/uploads/ auto-triggers the pipeline immediately.
     # No need to manually run the workflow after uploading files.
   workflow_dispatch:
@@ -104,17 +107,28 @@ jobs:
           #   fiidii_DDMMYYYY.csv    — lowercase variant
           # Date validation: filenames with future dates are flagged as typos
           fovolt_files = sorted(glob.glob(f'{uploads_dir}/FOVOLT_*.csv'))
-          # New NSE BhavCopy format: BhavCopy_NSE_FO_*.csv
+          # F&O BhavCopy (new NSE format): BhavCopy_NSE_FO_*.csv
+          # Contains: spot close, futures close, OI, OI change, volume per symbol
           bhavcopy_files = sorted(glob.glob(f'{uploads_dir}/BhavCopy_NSE_FO_*.csv'))
           fiidii_files = sorted(set(
-              glob.glob(f'{uploads_dir}/fii-dii_*.csv') +   # fii-dii_DDMMYYYY.csv  (NSE standard)
-              glob.glob(f'{uploads_dir}/fii-dii-*.csv') +   # fii-dii-DDMMYYYY.csv  (hyphen variant)
-              glob.glob(f'{uploads_dir}/FIIDII_*.csv')  +   # FIIDII_DDMMYYYY.csv
-              glob.glob(f'{uploads_dir}/fiidii_*.csv')       # fiidii_DDMMYYYY.csv
+              glob.glob(f'{uploads_dir}/fii-dii_*.csv') +
+              glob.glob(f'{uploads_dir}/fii-dii-*.csv') +
+              glob.glob(f'{uploads_dir}/FIIDII_*.csv')  +
+              glob.glob(f'{uploads_dir}/fiidii_*.csv')
+          ))
+          # CM (equity) Bhavcopy with delivery — sec_bhavdata_full_DDMMYYYY.csv
+          # Contains: SYMBOL, TTL_TRD_QNTY, DELIV_QTY, DELIV_PER → delivery %
+          # Download: https://archives.nseindia.com → Capital Market → Bhavcopy with Delivery
+          cm_bhav_files = sorted(set(
+              glob.glob(f'{uploads_dir}/sec_bhavdata_full_*.csv') +
+              glob.glob(f'{uploads_dir}/sec_bhavdata_*.csv') +
+              glob.glob(f'{uploads_dir}/cm_bhav_*.csv') +
+              glob.glob(f'{uploads_dir}/bhav_cm_*.csv')
           ))
 
           has_fovolt   = bool(fovolt_files or bhavcopy_files)
           has_fiidii   = bool(fiidii_files)
+          has_cm_bhav  = bool(cm_bhav_files)
 
           if not has_fovolt and not has_fiidii:
               print("No CSVs in uploads/ — NSE auto-fetch will run.")
@@ -360,6 +374,42 @@ jobs:
               bhavcopy_basename = os.path.basename(bhavcopy_path)
               print(f"  BhavCopy processed: {bhavcopy_basename} (stays in uploads/)")
 
+              # ── Extract OI from BhavCopy_NSE_FO (OpnIntrst + ChngInOpnIntrst) ──
+              # Near-month STF (stock futures) rows only — first expiry per symbol
+              oi_data = {}  # sym -> {oi, oiChg, vol}
+              try:
+                  with open(bhavcopy_path, newline="", encoding="utf-8-sig") as fhoi:
+                      _oi_reader = csv.DictReader(fhoi)
+                      _stf_rows = sorted(
+                          (r for r in _oi_reader if r.get("FinInstrmTp","").strip()=="STF"),
+                          key=lambda r: r.get("XpryDt","9999")
+                      )
+                      _seen_oi = set()
+                      for _r in _stf_rows:
+                          _sym = _r.get("TckrSymb","").strip().upper()
+                          if not _sym or _sym in INDEX_SYMS or _sym in _seen_oi: continue
+                          _seen_oi.add(_sym)
+                          def _foi(v):
+                              try: return float(str(v).replace(",","").strip())
+                              except: return None
+                          _oi    = _foi(_r.get("OpnIntrst",""))
+                          _oiChg = _foi(_r.get("ChngInOpnIntrst",""))
+                          _vol   = _foi(_r.get("TtlTradgVol",""))
+                          if _oi is not None:
+                              oi_data[_sym] = {"oi": _oi, "oiChg": _oiChg, "vol": _vol}
+              except Exception as _oe:
+                  print(f"  OI parse error: {_oe}")
+              for _sym, _od in oi_data.items():
+                  if _sym in signals:
+                      signals[_sym]["oi"]    = _od["oi"]
+                      signals[_sym]["oiChg"] = _od["oiChg"]
+                      if _od["vol"] is not None: signals[_sym]["oiVol"] = _od["vol"]
+              print(f"  OI injected for {len(oi_data)} stocks")
+              if "SUNPHARMA" in oi_data:
+                  _s = oi_data["SUNPHARMA"]
+                  print(f"  SUNPHARMA OI: {_s['oi']:.0f}  oiChg: {_s['oiChg']}")
+
+
           # ── Parse FII-DII CSV ─────────────────────────────────────
           # Real NSE FII-DII download format (fii-dii_DDMMYYYY.csv):
           #   Headers contain embedded newlines inside quotes — e.g.:
@@ -484,6 +534,57 @@ jobs:
                       seen[r['date']] = r
                   fiidii_rows = sorted(seen.values(), key=lambda x: x['date'])
                   print(f"  Total FII-DII rows after dedup: {len(fiidii_rows)} days")
+
+          # ── Parse CM Bhavcopy with Delivery (sec_bhavdata_full_DDMMYYYY.csv) ──
+          # Source: NSE Archives → Capital Market → Bhavcopy with Delivery
+          # URL: https://archives.nseindia.com/products/content/sec_bhavdata_full_DDMMYYYY.csv
+          # Columns: SYMBOL, SERIES, TTL_TRD_QNTY, DELIV_QTY, DELIV_PER
+          # Score impact: +4 pts if DELIV_PER>=60, +2 if >=45, -3 if <20 (with bullish F&O)
+          delivery_data = {}   # sym -> delPct (float)
+          if cm_bhav_files:
+              cm_path = cm_bhav_files[-1]  # use newest
+              print(f"Processing CM Bhavcopy: {os.path.basename(cm_path)}")
+              try:
+                  with open(cm_path, newline="", encoding="utf-8-sig") as fhcm:
+                      _cm_reader = csv.DictReader(fhcm)
+                      _cm_hdr = {str(h).strip().upper(): str(h).strip() for h in (_cm_reader.fieldnames or [])}
+                      print(f"  CM header: {list(_cm_hdr.keys())[:8]}")
+                      # Handle both old (DELIV_PER) and new (DELIV_QTY / TTL_TRD_QNTY) formats
+                      _has_deliv_per = any("DELIV_PER" in h.upper() for h in (_cm_reader.fieldnames or []))
+                      _fhcm2 = open(cm_path, newline="", encoding="utf-8-sig")
+                      _cm_reader2 = csv.DictReader(_fhcm2)
+                      for _r in _cm_reader2:
+                          try:
+                              # Normalize key names — strip whitespace
+                              _nr = {str(k).strip().upper(): str(v).strip() for k,v in _r.items() if k}
+                              _sym = _nr.get("SYMBOL","").strip().upper()
+                              _ser = _nr.get("SERIES","").strip().upper()
+                              if not _sym or _ser not in ("EQ","BE","BZ","SM"): continue
+                              if _has_deliv_per:
+                                  # sec_bhavdata_full format has DELIV_PER directly
+                                  _dp = _nr.get("DELIV_PER","") or _nr.get("DELIV_PER ","") or ""
+                                  _dp_val = float(_dp.replace(",","").strip()) if _dp.replace(",","").strip() else None
+                              else:
+                                  # Compute from TTL_TRD_QNTY and DELIV_QTY
+                                  def _fcm(k): return float((_nr.get(k,"") or "0").replace(",","").strip() or 0)
+                                  _tot = _fcm("TTL_TRD_QNTY") or _fcm("TOTTRDQTY")
+                                  _del = _fcm("DELIV_QTY")
+                                  _dp_val = round(_del / _tot * 100, 1) if _tot > 0 else None
+                              if _dp_val is not None and 0 <= _dp_val <= 100:
+                                  delivery_data[_sym] = _dp_val
+                          except: continue
+                      _fhcm2.close()
+                  # Inject delivery% into signals
+                  for _sym, _dp in delivery_data.items():
+                      if _sym in signals:
+                          signals[_sym]["delPct"] = _dp
+                  print(f"  Delivery% injected for {len(delivery_data)} stocks")
+                  # Spot check
+                  for _chk in ["SUNPHARMA","RELIANCE","HDFCBANK"]:
+                      if _chk in delivery_data:
+                          print(f"  {_chk} delPct={delivery_data[_chk]}%  signal_del={signals.get(_chk,{}).get('delPct')}")
+              except Exception as _cme:
+                  print(f"  CM Bhavcopy parse error: {_cme}")
 
           # ── Merge with existing fno_signals.json ─────────────────
           # Load existing data so we preserve bulk/block/insider/pcr/history
