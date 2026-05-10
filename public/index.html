@@ -192,6 +192,7 @@ button{cursor:pointer;font-family:inherit}
 .oi-badge-short{background:rgba(255,69,96,.12);color:var(--red);border:1px solid rgba(255,69,96,.2)}
 .oi-badge-neutral{background:var(--border);color:var(--text-muted)}
 .oi-badge-cover{background:rgba(255,184,48,.12);color:var(--amber);border:1px solid rgba(255,184,48,.25)}
+.oi-badge-unwind{background:rgba(255,69,96,.08);color:var(--red);border:1px solid rgba(255,69,96,.2)}
 .oi-stat{font-size:.7rem;color:var(--text-muted);font-family:'Space Mono',monospace}
 .oi-stat strong{font-weight:700}
 .price-cmp{font-family:'Space Mono',monospace;font-weight:700;font-size:.78rem;color:var(--text)}
@@ -1117,9 +1118,15 @@ function computeProbScore(stock,mfPick,foSignal,trend){
   }
   // Delivery % bonus (if available) — institutional conviction signal
   const delPct=parseFloat(foSignal?.delPct||0);
-  if(delPct>=60)finalTotal=Math.min(100,finalTotal+4);
-  else if(delPct>=45)finalTotal=Math.min(100,finalTotal+2);
-  else if(delPct<20&&foSignal&&foSignal.score>0.5)finalTotal=Math.max(0,finalTotal-3);
+  const hasDelPct=(foSignal?.delPct!=null);
+  let delAdj=0;
+  if(hasDelPct){
+    if(delPct>=60){delAdj=4;}
+    else if(delPct>=45){delAdj=2;}
+    else if(delPct<20&&foSignal?.score>0.5){delAdj=-3;}
+    finalTotal=Math.min(100,Math.max(0,finalTotal+delAdj));
+  }
+  bd.delivery={score:delAdj,value:hasDelPct?delPct:null,hasData:hasDelPct};
   // MF floor — strong MF conviction should never score below 35
   if(mfPick&&mfPick.ms>=3&&finalTotal<35)finalTotal=35;
   // Insider buy bonus
@@ -1295,6 +1302,15 @@ function priceTrio(fo, d1){
       <span style="font-family:'Space Mono',monospace;font-size:.68rem;font-weight:700;color:${displayVol<30?'var(--green)':displayVol<50?'var(--amber)':'var(--red)'}">${displayVol.toFixed(1)}%</span>
     </div>`:''}
     ${volBadge||futVolBadge?`<div class="price-trio-row" style="gap:4px;margin-top:2px">${volBadge}${futVolBadge}</div>`:''}
+    ${(()=>{
+      // Delivery % from CM Bhavcopy (sec_bhavdata_full)
+      const dp=fo.delPct!=null?+fo.delPct:null;
+      const dpChip=dp!=null?`<span class="vol-delta ${dp>=60?'rising':dp<25?'falling':'flat'}" title="Delivery ${dp.toFixed(1)}% from CM Bhavcopy — ${dp>=60?'institutional conviction':dp<25?'speculative':'normal'}">Del ${dp.toFixed(1)}%</span>`:'';
+      // OI change from BhavCopy_NSE_FO (real open interest)
+      const oiC=fo.oiChg!=null?+fo.oiChg:null;
+      const oiChip=oiC!=null?`<span class="vol-delta ${oiC>0?'rising':'falling'}" title="OI change: ${oiC>0?'+':''}${(oiC/1e5).toFixed(1)}L lots | Total OI: ${fo.oi!=null?((+fo.oi/1e7).toFixed(2))+'Cr':'?'}">OI${oiC>0?'▲':'▼'}${Math.abs(oiC/1e5).toFixed(1)}L</span>`:'';
+      return(dpChip||oiChip)?`<div class="price-trio-row" style="gap:4px;margin-top:2px">${dpChip}${oiChip}</div>`:'';
+    })()}
   </div>`;
 }
 
@@ -1845,13 +1861,31 @@ function renderIntelFO(){
     const prob=computeProbScore(sym,mfPick,fo,trend);
     const sec=(mfPick?.sec||'').toLowerCase(),mfScore=mfPick?.ms||0,foScore=fo?.score||0;
     const d1=parseFloat(fo?.d1)||0,prem=parseFloat(fo?.prem)||0;
-    const _fd1=parseFloat(fo?.futD1??'NaN'),_hfd=!isNaN(_fd1);
-    // Long/Short classification: use futD1 (FOVOLT col K) when available
-    // futD1>0 = futures OI/momentum up, futD1<0 = futures lagging/falling
-    const isLong      =_hfd?(_fd1>0&&d1>0&&prem>-0.2)      :(prem>0.05&&foScore>1&&d1>0);
-    const isShort     =_hfd?(_fd1<0&&d1<0)                  :(prem<-0.05&&foScore<-1);
-    const isShortCover=_hfd&&d1>0&&_fd1<-0.1; // price up but futures lagging = shorts covering
-    const oiSig=isShortCover?'Short Covering':isLong?'Long Buildup':isShort?'Short Buildup':'Neutral';
+    // OI classification — priority: real oi/oiChg from BhavCopy > futD1 from FOVOLT > prem proxy
+    const realOI     = fo?.oi    ?? null;
+    const realOIChg  = fo?.oiChg ?? null;
+    const hasRealOI  = realOIChg !== null;
+    const _fd1       = parseFloat(fo?.futD1??'NaN'), _hfd=!isNaN(_fd1);
+    let isLong, isShort, isShortCover, isLongUnwind;
+    if(hasRealOI){
+      // Real OI: price direction × OI change direction → 4-quadrant classification
+      const oiRising  = realOIChg > 0;
+      const oiFalling = realOIChg < 0;
+      isLong       = d1>0  && oiRising;   // price↑ + OI↑ = new longs entering ✓
+      isShort      = d1<0  && oiRising;   // price↓ + OI↑ = new shorts entering
+      isShortCover = d1>0  && oiFalling;  // price↑ + OI↓ = shorts exiting (less conviction)
+      isLongUnwind = d1<0  && oiFalling;  // price↓ + OI↓ = longs exiting (bearish)
+    } else if(_hfd){
+      isLong       = _fd1>0&&d1>0&&prem>-0.2;
+      isShort      = _fd1<0&&d1<0;
+      isShortCover = d1>0&&_fd1<-0.1;
+      isLongUnwind = d1<0&&_fd1<-0.1;
+    } else {
+      isLong       = prem>0.05&&foScore>1&&d1>0;
+      isShort      = prem<-0.05&&foScore<-1;
+      isShortCover = false; isLongUnwind = false;
+    }
+    const oiSig = isLong?'Long Buildup':isShort?'Short Buildup':isShortCover?'Short Covering':isLongUnwind?'Long Unwinding':'Neutral';
     // Include all MF stocks when no F&O data (show by mfScore), or FO-filtered when data present
     const passFilter=hasLiveData?foScore>0.3:mfScore>0;
     if(passFilter)items.push({sym,sec,fo,mfPick,trend,prob,mfScore,foScore,combined:Math.round((mfScore+foScore)*100)/100,d1,oiSig,prem});
@@ -1881,7 +1915,7 @@ function renderIntelFO(){
       </div>
       <div class="oi-price-row">
         <div class="oi-cell">
-          <span class="oi-type-badge ${isLong?'oi-badge-long':isShort?'oi-badge-short':isShortCover?'oi-badge-cover':'oi-badge-neutral'}">${isLong?'▲':isShort?'▼':isShortCover?'↑':'—'} ${oiSig}</span>
+          <span class="oi-type-badge ${isLong?'oi-badge-long':isShort?'oi-badge-short':isShortCover?'oi-badge-cover':isLongUnwind?'oi-badge-unwind':'oi-badge-neutral'}" title="${hasRealOI?`OI: ${(realOI/1e7).toFixed(2)}Cr | OI Chg: ${realOIChg>0?'+':''}${(realOIChg/1e5).toFixed(1)}L`:'OI: estimated'}">${isLong?'▲':isShort?'▼':isShortCover?'↑':isLongUnwind?'↘':'—'} ${oiSig}${hasRealOI?' ·':''}</span>
           <span class="oi-stat">Prem <strong style="color:${prem>0?'var(--green)':'var(--red)'}">${prem>0?'+':''}${parseFloat(fo?.prem||0).toFixed(3)}%</strong></span>
           ${diverge?`<span class="oi-diverge">⚠ OI/Price diverge</span>`:''}
         </div>
@@ -2018,13 +2052,31 @@ function buildPicksUniverse(){
     const sec=(mfPick?.sec||'').toLowerCase();
     const mfScore=mfPick?.ms||0,foScore=fo?.score||0;
     const d1=parseFloat(fo?.d1)||0,prem=parseFloat(fo?.prem)||0,vol=parseFloat(fo?.vol||0);
-    const _fd1=parseFloat(fo?.futD1??'NaN'),_hfd=!isNaN(_fd1);
-    // Long/Short classification: use futD1 (FOVOLT col K) when available
-    // futD1>0 = futures OI/momentum up, futD1<0 = futures lagging/falling
-    const isLong      =_hfd?(_fd1>0&&d1>0&&prem>-0.2)      :(prem>0.05&&foScore>1&&d1>0);
-    const isShort     =_hfd?(_fd1<0&&d1<0)                  :(prem<-0.05&&foScore<-1);
-    const isShortCover=_hfd&&d1>0&&_fd1<-0.1; // price up but futures lagging = shorts covering
-    const oiSig=isShortCover?'Short Covering':isLong?'Long Buildup':isShort?'Short Buildup':'Neutral';
+    // OI classification — priority: real oi/oiChg from BhavCopy > futD1 from FOVOLT > prem proxy
+    const realOI     = fo?.oi    ?? null;
+    const realOIChg  = fo?.oiChg ?? null;
+    const hasRealOI  = realOIChg !== null;
+    const _fd1       = parseFloat(fo?.futD1??'NaN'), _hfd=!isNaN(_fd1);
+    let isLong, isShort, isShortCover, isLongUnwind;
+    if(hasRealOI){
+      // Real OI: price direction × OI change direction → 4-quadrant classification
+      const oiRising  = realOIChg > 0;
+      const oiFalling = realOIChg < 0;
+      isLong       = d1>0  && oiRising;   // price↑ + OI↑ = new longs entering ✓
+      isShort      = d1<0  && oiRising;   // price↓ + OI↑ = new shorts entering
+      isShortCover = d1>0  && oiFalling;  // price↑ + OI↓ = shorts exiting (less conviction)
+      isLongUnwind = d1<0  && oiFalling;  // price↓ + OI↓ = longs exiting (bearish)
+    } else if(_hfd){
+      isLong       = _fd1>0&&d1>0&&prem>-0.2;
+      isShort      = _fd1<0&&d1<0;
+      isShortCover = d1>0&&_fd1<-0.1;
+      isLongUnwind = d1<0&&_fd1<-0.1;
+    } else {
+      isLong       = prem>0.05&&foScore>1&&d1>0;
+      isShort      = prem<-0.05&&foScore<-1;
+      isShortCover = false; isLongUnwind = false;
+    }
+    const oiSig = isLong?'Long Buildup':isShort?'Short Buildup':isShortCover?'Short Covering':isLongUnwind?'Long Unwinding':'Neutral';
     // Signal layer flags
     const hasBulk=bulkSyms.has(sym),hasBlock=blockSyms.has(sym);
     // volSpike: futures vol delta preferred (col K-J), then spot vol delta (col G-F), then annualised fallback
@@ -2126,7 +2178,7 @@ function renderPickCard(item,idx,mode){
     <div class="rank-layers">${layerBadges}</div>
     ${fo?`<div class="oi-price-row">
       <div class="oi-cell">
-        <span class="oi-type-badge ${isLong?'oi-badge-long':isShort?'oi-badge-short':isShortCover?'oi-badge-cover':'oi-badge-neutral'}">${isLong?'▲':isShort?'▼':isShortCover?'↑':'—'} ${oiSig}</span>
+        <span class="oi-type-badge ${isLong?'oi-badge-long':isShort?'oi-badge-short':isShortCover?'oi-badge-cover':isLongUnwind?'oi-badge-unwind':'oi-badge-neutral'}" title="${hasRealOI?`OI: ${(realOI/1e7).toFixed(2)}Cr | OI Chg: ${realOIChg>0?'+':''}${(realOIChg/1e5).toFixed(1)}L`:'OI: estimated'}">${isLong?'▲':isShort?'▼':isShortCover?'↑':isLongUnwind?'↘':'—'} ${oiSig}${hasRealOI?' ·':''}</span>
         <span class="oi-stat">Prem <strong style="color:${prem>0?'var(--green)':'var(--red)'}">${prem>0?'+':''}${parseFloat(fo?.prem||0).toFixed(3)}%</strong></span>
         ${volSpike?`<span class="oi-diverge" style="background:rgba(255,69,96,.1);border-color:rgba(255,69,96,.25);color:var(--red)">${futVolDelta!=null?'FutVol↑ +'+(futVolDelta*100).toFixed(2)+'%':volDelta!=null?'Vol↑ +'+(volDelta*100).toFixed(2)+'%':'Vol↑ Ann.IV '+fo.vol+'%'}</span>`:''}
         ${volCompressing&&!volSpike?`<span class="oi-diverge" style="background:rgba(0,229,153,.08);border-color:rgba(0,229,153,.25);color:var(--green)" title="Spot daily vol compressing — coiling before the move">SpringCoil ↓Vol</span>`:''}
@@ -2147,6 +2199,7 @@ function renderPickCard(item,idx,mode){
       <div class="expand-line"><span class="expand-label">F5 · Trend Consistency (${prob.breakdown.consistency?.daysTracked??0}d tracked)</span><span class="expand-val">${prob.breakdown.consistency?.score??0}/15</span></div>
       <div class="expand-line"><span class="expand-label">F6 · Entry Timing${prob.breakdown.timing?.compressing?' · Vol compressing ✓':''}</span><span class="expand-val">${prob.breakdown.timing?.score??0}/5</span></div>
       ${prob.breakdown.pcr?.value!=null?`<div class="expand-line"><span class="expand-label">PCR Adj · ${prob.breakdown.pcr.value.toFixed(2)}</span><span class="expand-val" style="color:${prob.breakdown.pcr.score>=0?'var(--green)':'var(--red)'}">${prob.breakdown.pcr.score>=0?'+':''}${prob.breakdown.pcr.score}</span></div>`:''}
+${prob.breakdown.delivery?.hasData?`<div class="expand-line"><span class="expand-label">Delivery ${prob.breakdown.delivery.value.toFixed(1)}%</span><span class="expand-val" style="color:${prob.breakdown.delivery.score>0?'var(--green)':prob.breakdown.delivery.score<0?'var(--red)':'var(--text-muted)'}">${prob.breakdown.delivery.score>0?'+':''}${prob.breakdown.delivery.score}</span></div>`:`<div class="expand-line" style="opacity:.5"><span class="expand-label" style="font-size:.6rem">Delivery — upload CM Bhavcopy</span><span class="expand-val">+0</span></div>`}
       ${prob.breakdown.hardFilter?`<div class="expand-line" style="color:var(--red)"><span class="expand-label">⚠ Hard Filter: ${prob.breakdown.hardFilter} — score capped</span></div>`:''}
       ${basisAlert==='contango'?`<div class="expand-line"><span class="expand-label" style="color:var(--amber)">⚠ Basis: Unusual contango ${basisPct}% — elevated cost-of-carry, watch for roll decay</span></div>`:''}
       ${basisAlert==='backwardation'?`<div class="expand-line"><span class="expand-label" style="color:var(--green)">◆ Basis: Backwardation ${basisPct}% — demand pressure (futures below spot)</span></div>`:''}
