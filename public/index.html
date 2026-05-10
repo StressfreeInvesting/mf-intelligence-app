@@ -2529,13 +2529,29 @@ function renderCorrelation(){
 async function manualRefresh(btn,force=false){
   if(btn){btn.textContent='↺ …';btn.disabled=true;}
   try{
+    const beforeDate=STATE.foData?.meta?.date||'';
     await fetchFOData(force);
     await fetchTrends();
-    // No live price fetch — FOVOLT is the only price source
     renderMarket();
     if(STATE.activeTab==='intelligence')renderIntelligence();
     if(STATE.activeTab==='picks')renderPicks();
-    if(btn){btn.textContent='↺ Done';setTimeout(()=>{btn.textContent='↺ Refresh';btn.disabled=false;},2000);}
+    const afterDate=STATE.foData?.meta?.date||'';
+    const histLen=(STATE.foData?.fiiDiiHistory||[]).length;
+    if(btn){
+      if(afterDate&&afterDate!==beforeDate){
+        btn.textContent='↺ Updated!';
+        showToast(`Data updated — ${afterDate} | FII/DII: ${histLen} days in chart`);
+      } else {
+        btn.textContent='↺ Current';
+        if(afterDate){
+          const diffMs=Date.now()-new Date(afterDate+'T00:00:00Z').getTime();
+          const diffDays=Math.floor(diffMs/86400000);
+          if(diffDays>=1) showToast(`Data is from ${afterDate}. If you just pushed CSVs to GitHub, wait ~2 min for the workflow to complete, then refresh again.`,'warn');
+          else showToast(`Data is current (${afterDate})`);
+        }
+      }
+      setTimeout(()=>{btn.textContent='↺ Refresh';btn.disabled=false;},3000);
+    }
   }catch(e){
     if(btn){btn.textContent='↺ Error';setTimeout(()=>{btn.textContent='↺ Refresh';btn.disabled=false;},2000);}
   }
@@ -2626,6 +2642,21 @@ function updateFreshness(){
   // missedDays = how many trading days the data is behind
   const missedDays=dataDt?tradingDaysBetween(dataDt,latestTD):99;
 
+  // FII-DII date tracking: history[] > meta.fiiDiiDate > fiiDii.date
+  const _h=STATE.foData?.fiiDiiHistory||[];
+  const _sh=[..._h].filter(r=>r.date).sort((a,b)=>a.date>b.date?1:-1);
+  const _fiso=_sh.length?_sh[_sh.length-1].date:(STATE.foData?.meta?.fiiDiiDate||STATE.foData?.fiiDii?.date||null);
+  const fiiDiiDt=_fiso?new Date(_fiso+'T00:00:00Z'):null;
+  const fiiDiiMissed=fiiDiiDt?tradingDaysBetween(fiiDiiDt,latestTD):99;
+  const fiiDiiLabel=fiiDiiDt?fiiDiiDt.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'2-digit'}):'no data';
+  // Update trends dot
+  const _tdot=document.getElementById('trendsDot'),_tlbl=document.getElementById('trendsLabel');
+  if(_tdot&&_tlbl){
+    _tdot.className='fresh-dot '+(_sh.length>=3?'fresh-green':_sh.length>=1?'fresh-amber':'fresh-red');
+    _tlbl.textContent=_sh.length>=1?_sh.length+'d':'—';
+  }
+
+
   // Dot colour in freshness strip: green if 0 missed, amber if 1, red if 2+
   const dot=document.getElementById('foDot');
   if(dot) dot.className='fresh-dot '+(missedDays<=0||(missedDays===1&&isManual)?'fresh-green':missedDays===1?'fresh-amber':'fresh-red');
@@ -2644,25 +2675,25 @@ function updateFreshness(){
     if(strip) strip.after(banner);
   }
 
-  if(!dataDate){
+  const foStale=missedDays>1, fiiStale=fiiDiiMissed>1;
+  if(!dataDate&&fiiDiiMissed===99){
     banner.style.background='rgba(255,184,48,.08)';banner.style.color='var(--amber)';
-    banner.textContent='⏱ F&O data date unknown';
-  } else if(missedDays<=0){
-    // Data covers today's (or the latest) trading session — always green
-    const src=isManual?'📁 manual upload':'⚡ auto-fetch';
+    banner.textContent='No F&O or FII-DII data — use the Upload button or push CSVs to data/uploads/';
+  } else if(!foStale&&!fiiStale){
+    const src=isManual?'browser upload':'auto-fetch';
     banner.style.background='rgba(0,229,153,.06)';banner.style.color='var(--green)';
-    banner.textContent=`✓ F&O signals current — ${dateLabel} · ${src}`;
-  } else if(missedDays===1){
-    // Missing exactly 1 trading day — normal for post-market upload viewed next morning/day
-    const src=isManual?'📁 manual upload':'GitHub Actions';
-    banner.style.background='rgba(0,229,153,.06)';banner.style.color='var(--green)';
-    banner.textContent=`✓ F&O signals current — ${dateLabel} · ${src}`;
-  } else if(missedDays===2){
+    banner.textContent=`✓ F&O ${dateLabel} · FII/DII ${fiiDiiLabel} · ${src}`;
+  } else if(foStale&&fiiStale){
+    const urg=missedDays>=3||fiiDiiMissed>=3;
+    banner.style.background=urg?'rgba(255,69,96,.1)':'rgba(255,184,48,.08)';
+    banner.style.color=urg?'var(--red)':'var(--amber)';
+    banner.textContent=`${urg?"":"⚠ "}FOVOLT ${dateLabel} (${missedDays}d) · FII/DII ${fiiDiiLabel} (${fiiDiiMissed}d) — upload both CSVs`;
+  } else if(foStale){
     banner.style.background='rgba(255,184,48,.08)';banner.style.color='var(--amber)';
-    banner.textContent=`⚠ F&O data from ${dateLabel} — upload today's FOVOLT + fii-dii CSVs`;
+    banner.textContent=`⚠ FOVOLT ${missedDays}d old (${dateLabel}) · FII/DII current (${fiiDiiLabel}) — upload FOVOLT`;
   } else {
-    banner.style.background='rgba(255,69,96,.1)';banner.style.color='var(--red)';
-    banner.textContent=`🔴 F&O data is ${missedDays} trading days old (${dateLabel}) — upload required`;
+    banner.style.background='rgba(255,184,48,.08)';banner.style.color='var(--amber)';
+    banner.textContent=`⚠ FII/DII ${fiiDiiMissed}d old (${fiiDiiLabel}) · F&O current (${dateLabel}) — upload fii-dii CSV`;
   }
 }
 
@@ -2868,13 +2899,24 @@ function parseBhavCopyFile(text, filename){
 
 function parseTradingDate(raw){
   if(!raw) return null;
-  // YYYY-MM-DD
-  if(/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
-  // DD-MMM-YYYY
-  const m1=raw.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
-  if(m1){const months={Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12'};const mo=months[m1[2].charAt(0).toUpperCase()+m1[2].slice(1).toLowerCase()];if(mo)return`${m1[3]}-${mo}-${m1[1].padStart(2,'0')}`;}
+  const s=String(raw).replace(/^"|"$/g,'').trim();
+  if(!s) return null;
+  if(/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // DD-MMM-YYYY  or  D-MMM-YYYY  or  DD-Month-YYYY
+  const m1=s.match(/^(\d{1,2})-([A-Za-z]{3,9})-(\d{4})$/);
+  if(m1){const MN={Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12',
+               January:'01',February:'02',March:'03',April:'04',June:'06',July:'07',August:'08',September:'09',October:'10',November:'11',December:'12'};
+    const key=m1[2].charAt(0).toUpperCase()+m1[2].slice(1,3).toLowerCase();
+    const mo=MN[key]||MN[m1[2].charAt(0).toUpperCase()+m1[2].slice(1).toLowerCase()];
+    if(mo) return`${m1[3]}-${mo}-${m1[1].padStart(2,'0')}`;}
+  // DD/MM/YYYY
+  const m2=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if(m2) return`${m2[3]}-${m2[2].padStart(2,'0')}-${m2[1].padStart(2,'0')}`;
+  // DD-MM-YYYY (numeric month)
+  const m3=s.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if(m3&&+m3[2]<=12) return`${m3[3]}-${m3[2]}-${m3[1]}`;
   // YYYYMMDD
-  if(/^\d{8}$/.test(raw)) return`${raw.slice(0,4)}-${raw.slice(4,6)}-${raw.slice(6,8)}`;
+  if(/^\d{8}$/.test(s)) return`${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`;
   return null;
 }
 
@@ -2952,17 +2994,20 @@ function handleManualCSVUpload(fileOrList){
       }
       // Update current fiiDii
       STATE.foData.fiiDii={...fd};
-      // Merge into fiiDiiHistory (deduplicate by date)
-      const hist=STATE.foData.fiiDiiHistory||[];
-      const existIdx=fd.date?hist.findIndex(r=>r.date===fd.date):-1;
-      const entry={date:fd.date||'',d:fd.date?new Date(fd.date+'T00:00:00Z').toLocaleDateString('en-IN',{weekday:'short'}).slice(0,3):'',
-                   fii:fd.fii,dii:fd.dii};
-      if(existIdx>=0) hist[existIdx]=entry;
-      else hist.push(entry);
-      // Sort by date ascending
-      STATE.foData.fiiDiiHistory=hist.filter(r=>r.date).sort((a,b)=>a.date>b.date?1:-1);
-      updateFreshness();renderMarket();
-      showToast(`✅ FII/DII loaded: FII ${fd.fii>=0?'▲+':'▼'}${fd.fii.toFixed(0)}Cr  DII ${fd.dii>=0?'▲+':'▼'}${fd.dii.toFixed(0)}Cr${fd.date?' · '+fd.date:''}`);
+      STATE.foData.meta=STATE.foData.meta||{};
+      if(fd.date) STATE.foData.meta.fiiDiiDate=fd.date;
+      if(!STATE.foData.fiiDiiHistory) STATE.foData.fiiDiiHistory=[];
+      const hist=STATE.foData.fiiDiiHistory;
+      const wd=fd.date?['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(fd.date+'T00:00:00Z').getUTCDay()]:'';
+      const ne={date:fd.date||'',d:wd,fii:fd.fii,dii:fd.dii,fiiBuy:fd.fiiBuy||0,fiiSell:fd.fiiSell||0,diiBuy:fd.diiBuy||0,diiSell:fd.diiSell||0};
+      const ei=fd.date?hist.findIndex(r=>r.date===fd.date):-1;
+      if(ei>=0) hist[ei]=ne; else hist.push(ne);
+      STATE.foData.fiiDiiHistory=hist.filter(r=>r.date).sort((a,b)=>a.date>b.date?1:-1).slice(-30);
+      updateFreshness();
+      renderMarket();
+      renderFiiDiiChart();
+      const fs=fd.fii>=0?'+':'',ds=fd.dii>=0?'+':'';
+      showToast(`FII/DII ${fd.date||'?'} loaded — FII ${fs}${fd.fii.toFixed(0)}Cr DII ${ds}${fd.dii.toFixed(0)}Cr · ${STATE.foData.fiiDiiHistory.length} days in chart`);
       return;
     }
 
@@ -2988,7 +3033,7 @@ function handleManualCSVUpload(fileOrList){
     STATE.foData.meta.source='manual_html_upload_fovolt';
     STATE.foData.meta.stockCount=Object.keys(STATE.foData.signals).length;
     updateFreshness();updateFoDataBadge();renderNiftyFromFOVOLT();renderMarket();renderIntelligence();renderPicks();checkPriceAlerts();checkExitSignals();
-    showToast(`✅ ${result.stockCount} stocks from ${file.name}${result.tradingDate?' · '+result.tradingDate:''} · appAnnVol: ${result.signals[Object.keys(result.signals)[0]]?.appAnnVol??'—'}%`);
+    showToast(`FOVOLT ${result.tradingDate||'date?'} · ${result.stockCount} stocks loaded`);
   };
       reader.onloadend=()=>{if(idx<files.length)processNext();};
     reader.readAsText(file);
@@ -2998,22 +3043,36 @@ function handleManualCSVUpload(fileOrList){
 
 async function fetchFOData(forceRemote=false){
   try{
-    // If user uploaded files via browser this session, don't overwrite with stale GitHub JSON
-    // unless explicitly forced (forceRemote=true via long-press or shift-click on Refresh)
+    // If user uploaded files via the browser this session, don't overwrite with GitHub JSON
+    // unless explicitly forced (Shift+click Refresh)
     const hasLocalUpload = STATE.foData?.meta?.source?.startsWith('manual_html_upload');
     if(hasLocalUpload && !forceRemote){
-      console.log('fetchFOData: skipping remote fetch — local upload is active');
       updateFreshness();updateFoDataBadge();renderNiftyFromFOVOLT();renderMarket();renderIntelligence();renderPicks();checkExitSignals();
       return;
     }
     const cfg=await fetch('/api/config').then(r=>r.json()).catch(()=>null);
     if(cfg?.dataUrl){
-      const r=await fetch(cfg.dataUrl+'?t='+Date.now());
+      // Use Cache-Control: no-cache so the CDN (raw.githubusercontent.com) is bypassed
+      // ?_cb= ensures even aggressive proxies see a new URL on every call
+      const bust=cfg.dataUrl+(cfg.dataUrl.includes('?')?'&':'?')+'_cb='+Date.now();
+      const r=await fetch(bust,{cache:'no-store',headers:{'Cache-Control':'no-cache','Pragma':'no-cache'}});
       if(r.ok){
         const remoteData=await r.json();
-        // If we have a local fiiDiiHistory that's newer/richer, preserve it
-        if(hasLocalUpload && STATE.foData?.fiiDiiHistory?.length > (remoteData.fiiDiiHistory?.length||0)){
-          remoteData.fiiDiiHistory=STATE.foData.fiiDiiHistory;
+        const remoteDate=remoteData?.meta?.date||'';
+        const localDate =STATE.foData?.meta?.date||'';
+        // If remote is OLDER than what we already have (local or previous fetch), keep current
+        // This prevents a CDN-cached stale response from downgrading fresh data
+        if(!forceRemote && localDate && remoteDate && remoteDate < localDate){
+          console.warn(`fetchFOData: remote date ${remoteDate} < local ${localDate} — keeping current`);
+          updateFreshness();return;
+        }
+        // Preserve local fiiDiiHistory if it has more days than the remote JSON
+        const localHist = STATE.foData?.fiiDiiHistory||[];
+        if(localHist.length > (remoteData.fiiDiiHistory?.length||0)){
+          // Merge: remote + local, deduplicated by date, sorted
+          const merged={...Object.fromEntries((remoteData.fiiDiiHistory||[]).map(r=>[r.date,r])),
+                        ...Object.fromEntries(localHist.filter(r=>r.date).map(r=>[r.date,r]))};
+          remoteData.fiiDiiHistory=Object.values(merged).sort((a,b)=>a.date>b.date?1:-1).slice(-30);
         }
         STATE.foData=remoteData;
         updateFreshness();updateFoDataBadge();renderNiftyFromFOVOLT();renderMarket();renderIntelligence();renderPicks();checkExitSignals();
@@ -3336,9 +3395,16 @@ function checkPriceAlerts(){
     }
   });
 }
-function showToast(msg,ms=3000){
+function showToast(msg,type,ms){
+  if(typeof type==='number'){ms=type;type='ok';} // backward compat: showToast(msg,3000)
+  ms=ms||4000;
   let t=document.getElementById('mfiToast');
-  if(!t){t=document.createElement('div');t.id='mfiToast';t.style.cssText='position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--surface);border:1px solid var(--accent);color:var(--text);padding:10px 18px;border-radius:10px;font-size:.82rem;font-weight:600;z-index:9999;box-shadow:0 4px 20px rgba(0,0,0,.4);opacity:0;transition:opacity .2s;pointer-events:none';document.body.appendChild(t);}
+  if(!t){t=document.createElement('div');t.id='mfiToast';
+    t.style.cssText='position:fixed;bottom:20px;left:50%;transform:translateX(-50%);max-width:90vw;padding:10px 18px;border-radius:8px;font-size:.8rem;z-index:9999;box-shadow:0 4px 20px rgba(0,0,0,.3);transition:opacity .3s;pointer-events:none;text-align:center';document.body.appendChild(t);}
+  const bg={warn:'rgba(255,184,48,.15)',err:'rgba(255,69,96,.12)'}[type]||'var(--surface2)';
+  const col={warn:'var(--amber)',err:'var(--red)'}[type]||'var(--text)';
+  const bdr={warn:'rgba(255,184,48,.3)',err:'rgba(255,69,96,.25)'}[type]||'var(--border)';
+  t.style.background=bg;t.style.color=col;t.style.border=`1px solid ${bdr}`;
   t.textContent=msg;t.style.opacity='1';
   clearTimeout(t._timer);t._timer=setTimeout(()=>{t.style.opacity='0';},ms);
 }
