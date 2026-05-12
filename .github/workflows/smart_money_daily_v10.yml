@@ -586,6 +586,95 @@ jobs:
               except Exception as _cme:
                   print(f"  CM Bhavcopy parse error: {_cme}")
 
+          # ── Build trendSeries from ALL FOVOLT files in uploads/ ──────
+          # Each FOVOLT = one trading day. Loop oldest to newest, extract per-stock
+          # score+d1, build scoreSeries, compute consistencyPct + momentum.
+          # Makes F5 (Trend Consistency, 0-15 pts) work without Vercel API.
+          import math as _math2
+
+          def _parse_fovolt_date_fn(bn):
+              try:
+                  ds = bn.replace("FOVOLT_","").replace(".csv","")
+                  if len(ds)==8: return f"{ds[4:8]}-{ds[2:4]}-{ds[0:2]}"
+              except: pass
+              return None
+
+          def _parse_fovolt_scores(path):
+              result = {}
+              try:
+                  with open(path, newline="", encoding="utf-8-sig") as fh:
+                      reader = csv.reader(fh)
+                      hdr = next(reader, None)
+                      cs, ccl, cpr, clr, cft = 1, 2, 3, 4, 8
+                      if hdr:
+                          hl = [str(h).lower().replace(" ","").replace("_","") for h in hdr]
+                          def _fc(opts, dfl):
+                              for o in opts:
+                                  for i,h in enumerate(hl):
+                                      if o in h: return i
+                              return dfl
+                          cs  = _fc(["symbol","sym"], 1)
+                          ccl = _fc(["underlyingvalue(a)","underlynga","underlyingvaluea"], 2)
+                          cpr = _fc(["underlyingvalue(b)","underlyingb","underlyingvalueb"], 3)
+                          clr = _fc(["logreturn","logret","logreturns"], 4)
+                          cft = _fc(["futuresprice(g)","futurespriceg","futuresprice","futprice"], 8)
+                      for row in reader:
+                          try:
+                              if len(row) < 9: continue
+                              sym = row[cs].strip().upper()
+                              if not sym or sym in INDEX_SYMS: continue
+                              def _f(v):
+                                  try: return float(str(v).replace(",","").strip())
+                                  except: return None
+                              cl = _f(row[ccl]); pr = _f(row[cpr])
+                              lr = _f(row[clr]); ft = _f(row[cft])
+                              if not cl or cl <= 0: continue
+                              try:
+                                  d1 = round((_math2.exp(lr)-1)*100,2) if lr else (round((cl-pr)/pr*100,2) if pr else 0.0)
+                              except: d1 = 0.0
+                              prem = round((ft-cl)/cl*100,3) if ft and cl else 0.0
+                              score = round(max(-5.0,min(5.0,(d1/3.0)+(prem*0.5))),2)
+                              result[sym] = {"score": score, "d1": d1}
+                          except: continue
+              except Exception as e:
+                  print(f"  trendSeries parse error {os.path.basename(path)}: {e}")
+              return result
+
+          trend_series = {}
+          all_fovolt_sorted = sorted(fovolt_files)
+          print(f"  Building trendSeries from {len(all_fovolt_sorted)} FOVOLT files...")
+          for _fp in all_fovolt_sorted:
+              _date = _parse_fovolt_date_fn(os.path.basename(_fp))
+              if not _date: continue
+              for sym, sd in _parse_fovolt_scores(_fp).items():
+                  if sym not in trend_series: trend_series[sym] = []
+                  trend_series[sym].append({"date": _date, "score": sd["score"], "d1": sd["d1"]})
+
+          for sym in trend_series:
+              trend_series[sym] = sorted(trend_series[sym], key=lambda x: x["date"])[-30:]
+
+          trend_stats = {}
+          for sym, series in trend_series.items():
+              scores = [e["score"] for e in series]
+              n = len(scores)
+              consist_pct = round(sum(1 for s in scores if s > 0) / n * 100, 1)
+              if n >= 4:
+                  r_avg = sum(scores[-3:])/3; p_avg = sum(scores[-6:-3])/max(1,len(scores[-6:-3]))
+                  mom = "improving" if r_avg > p_avg+0.2 else "declining" if r_avg < p_avg-0.2 else "stable"
+              else:
+                  mom = "improving" if scores[-1]>scores[0] else "declining" if scores[-1]<scores[0] else "stable"
+              avg_s = sum(scores)/n
+              pos = "Strong" if avg_s>=1.5 and consist_pct>=70 else "Moderate" if avg_s>=0.5 and consist_pct>=55 else "Weak"
+              trend_stats[sym] = {"daysTracked": n, "consistencyPct": consist_pct,
+                                  "momentum": mom, "positionalStrength": pos,
+                                  "scoreSeries": series[-10:]}
+
+          print(f"  trendSeries: {len(trend_stats)} stocks")
+          for _chk in ["SUNPHARMA","RELIANCE","HDFCBANK"]:
+              if _chk in trend_stats:
+                  ts = trend_stats[_chk]
+                  print(f"  TREND {_chk}: {ts['daysTracked']}d consist={ts['consistencyPct']}% {ts['momentum']} {ts['positionalStrength']}")
+
           # ── Merge with existing fno_signals.json ─────────────────
           # Load existing data so we preserve bulk/block/insider/pcr/history
           existing = {}
@@ -666,24 +755,43 @@ jobs:
           # Use fii_dii from upload if present, else keep existing
           final_fii_dii = fii_dii_raw if fii_dii_raw else existing.get('fiiDii', {})
 
+          # ── Build deliveryHistory (rolling, from all CM bhavcopy uploads) ──
+          # Merge today's delivery_data with existing deliveryHistory
+          existing_del_hist = existing.get("deliveryHistory", {})  # {date: {sym: delPct}}
+          if delivery_data and upload_date_iso:
+              existing_del_hist[upload_date_iso] = delivery_data
+          # Keep last 30 dates
+          del_hist_sorted = dict(sorted(existing_del_hist.items())[-30:])
+          print(f"  deliveryHistory: {len(del_hist_sorted)} days")
+
+          # ── Inject OI into signals and also rebuild OI classification ────────
+          # oiChg already injected into signals[] above from BhavCopy parser
+          # Now add trendStat into each signal for HTML scoring
+          for sym, ts in trend_stats.items():
+              if sym in final_signals:
+                  final_signals[sym]["trend"] = ts
+
           output = {
-              'signals':       final_signals,
-              'fiiDii':        final_fii_dii,
-              'fiiDiiHistory': five_day[-30:],   # keep up to 30 days — all from uploads/ CSVs
-              'bulkDeals':     existing.get('bulkDeals', []),
-              'blockDeals':    existing.get('blockDeals', []),
-              'insiderData':   existing.get('insiderData', []),
-              'pcr':           existing.get('pcr', {}),
-              'meta': {
-                  'date':              upload_date_iso,
-                  'latestDate':        fetch_date_str,
-                  'updatedAt':         datetime.utcnow().isoformat() + 'Z',
-                  'stockCount':        final_count,
-                  'workflowCompletedAt': datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
-                  'carriedForwardFrom': None,
-                  'files':             [fetch_date_str],
-                  'version':           'V10',
-                  'source':            'manual_upload'
+              "signals":        final_signals,
+              "fiiDii":         final_fii_dii,
+              "fiiDiiHistory":  five_day[-30:],
+              "trendStats":     trend_stats,          # per-stock trend from all FOVOLTs
+              "deliveryHistory": del_hist_sorted,     # per-date delivery% from all CM bhavcopy
+              "bulkDeals":      existing.get("bulkDeals", []),
+              "blockDeals":     existing.get("blockDeals", []),
+              "insiderData":    existing.get("insiderData", []),
+              "pcr":            existing.get("pcr", {}),
+              "meta": {
+                  "date":               upload_date_iso,
+                  "latestDate":         fetch_date_str,
+                  "updatedAt":          datetime.utcnow().isoformat() + "Z",
+                  "stockCount":         final_count,
+                  "trendDays":          max((v["daysTracked"] for v in trend_stats.values()), default=0),
+                  "fovoltFiles":        len(fovolt_files),
+                  "workflowCompletedAt": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                  "carriedForwardFrom": None,
+                  "source":             "manual_upload",
+                  "version":            "V10"
               }
           }
 
@@ -1307,23 +1415,75 @@ jobs:
 
           # ── Assemble and write JSON ───────────────────────────────
           from datetime import datetime as dt
+
+          # ── Auto-fetch also reads uploads/ FOVOLTs for trendSeries ─────
+          import glob as _aglob
+          _af_fovolt = sorted(_aglob.glob("data-repo/data/uploads/FOVOLT_*.csv"))
+          _af_trend_series = {}
+          for _fp2 in _af_fovolt:
+              _bn2 = os.path.basename(_fp2)
+              ds2 = _bn2.replace("FOVOLT_","").replace(".csv","")
+              _date2 = f"{ds2[4:8]}-{ds2[2:4]}-{ds2[0:2]}" if len(ds2)==8 else None
+              if not _date2: continue
+              try:
+                  with open(_fp2, newline="", encoding="utf-8-sig") as fh2:
+                      _r2 = csv.reader(fh2); next(_r2,None)
+                      for row2 in _r2:
+                          try:
+                              sym2=row2[1].strip().upper()
+                              if not sym2 or sym2 in INDEX_SYMS: continue
+                              def _f2(v):
+                                  try: return float(str(v).replace(",","").strip())
+                                  except: return None
+                              cl2=_f2(row2[2]);pr2=_f2(row2[3]);lr2=_f2(row2[4]);ft2=_f2(row2[8])
+                              if not cl2 or cl2<=0: continue
+                              import math as _m3
+                              d12=round((_m3.exp(lr2)-1)*100,2) if lr2 else (round((cl2-pr2)/pr2*100,2) if pr2 else 0.0)
+                              pm2=round((ft2-cl2)/cl2*100,3) if ft2 and cl2 else 0.0
+                              sc2=round(max(-5.0,min(5.0,(d12/3.0)+(pm2*0.5))),2)
+                              if sym2 not in _af_trend_series: _af_trend_series[sym2]=[]
+                              _af_trend_series[sym2].append({"date":_date2,"score":sc2,"d1":d12})
+                          except: continue
+              except: continue
+          _af_trend_stats = {}
+          for sym2,ser2 in _af_trend_series.items():
+              ser2=sorted(ser2,key=lambda x:x["date"])[-30:]
+              sc2=[e["score"] for e in ser2]; n2=len(sc2)
+              cp2=round(sum(1 for s in sc2 if s>0)/n2*100,1)
+              ra2=sum(sc2[-3:])/3 if n2>=3 else sc2[-1]
+              pa2=sum(sc2[-6:-3])/max(1,len(sc2[-6:-3])) if n2>=4 else sc2[0]
+              mom2="improving" if ra2>pa2+0.2 else "declining" if ra2<pa2-0.2 else "stable"
+              av2=sum(sc2)/n2
+              pos2="Strong" if av2>=1.5 and cp2>=70 else "Moderate" if av2>=0.5 and cp2>=55 else "Weak"
+              _af_trend_stats[sym2]={"daysTracked":n2,"consistencyPct":cp2,"momentum":mom2,"positionalStrength":pos2,"scoreSeries":ser2[-10:]}
+          # Inject trend into signals
+          for sym2,ts2 in _af_trend_stats.items():
+              if sym2 in signals: signals[sym2]["trend"]=ts2
+          print(f"  auto-fetch trendSeries: {len(_af_trend_stats)} stocks from {len(_af_fovolt)} FOVOLTs")
+
+          # ── Assemble and write JSON ───────────────────────────────
+          from datetime import datetime as dt
           output = {
-              'signals': signals,
-              'fiiDii': fii_dii,
-              'fiiDiiHistory': five_day[-5:],
-              'bulkDeals': bulk_deals,
-              'blockDeals': block_deals,
-              'insiderData': insider_data,        # NEW #2
-              'pcr': pcr_data,                    # NEW #11
+              'signals':        signals,
+              'fiiDii':         fii_dii,
+              'fiiDiiHistory':  five_day[-30:],
+              'trendStats':     _af_trend_stats,
+              'deliveryHistory': {},
+              'bulkDeals':      bulk_deals,
+              'blockDeals':     block_deals,
+              'insiderData':    insider_data,
+              'pcr':            pcr_data,
               'meta': {
-                  'date': fetch_date_iso,
-                  'latestDate': fetch_date_str,
-                  'updatedAt': dt.utcnow().isoformat() + 'Z',
+                  'date':               fetch_date_iso,
+                  'latestDate':         fetch_date_str,
+                  'updatedAt':          dt.utcnow().isoformat() + 'Z',
                   'workflowCompletedAt': datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
-                  'stockCount': stock_count,
+                  'stockCount':         stock_count,
+                  'trendDays':          max((_af_trend_stats[s]['daysTracked'] for s in _af_trend_stats),default=0),
+                  'fovoltFiles':        len(_af_fovolt),
+                  'source':             'nse_auto_fetch',
                   'carriedForwardFrom': carry_from if 'carry_from' in dir() and carry_from else None,
-                  'files': [fetch_date_str],
-                  'version': 'V10'
+                  'version':            'V10'
               }
           }
 
