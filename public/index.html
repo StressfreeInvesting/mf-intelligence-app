@@ -530,10 +530,6 @@ button{cursor:pointer;font-family:inherit}
     <span><span class="fresh-dot fresh-amber" id="trendsDot"></span>Trends: <span id="trendsLabel">—</span></span>
     <span id="dataAgeBadge" style="margin-left:auto;font-size:.68rem"></span>
     <!-- Manual upload: accepts FOVOLT_*.csv and BhavCopy_NSE_FO_*.csv -->
-    <label title="Upload BhavCopy_NSE_FO_*.csv or FOVOLT_*.csv to update F&amp;O prices" style="cursor:pointer;font-size:.65rem;padding:2px 8px;border-radius:10px;border:1px solid var(--border);color:var(--text-muted);background:transparent;white-space:nowrap;margin-left:6px;transition:border-color .15s" onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--accent)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-muted)'">
-      📁 Upload CSV
-      <input type="file" accept=".csv" id="csvUploadInput" style="display:none" onchange="handleManualCSVUpload(this.files[0]);this.value=''" multiple/>
-    </label>
   </div>
 
   <!-- EXIT ALERT BAR -->
@@ -1586,6 +1582,16 @@ function renderFiiDiiChart(){
     if(N<=7||i%2===0||i===N-1)
       svg+=`<text x="${xOf(i).toFixed(1)}" y="${(PT+IH+PB-2).toFixed(1)}" text-anchor="middle" font-size="8" fill="rgba(139,154,180,.85)" font-family="DM Sans,sans-serif">${fmtDate(r.date)}</text>`;
   });
+  if(N>=2){
+    let _run=0;
+    const _cum=rows.map(r=>{_run+=(r.fii||0)+(r.dii||0);return _run;});
+    const _cmin=Math.min(0,..._cum),_cmax=Math.max(0,..._cum),_crng=Math.max(1,_cmax-_cmin);
+    const _cy=v=>PT+IH-(((v-_cmin)/_crng)*IH);
+    const _pts=_cum.map((v,i)=>`${xOf(i).toFixed(1)},${_cy(v).toFixed(1)}`).join(' ');
+    svg+=`<polyline points="${_pts}" fill="none" stroke="var(--amber)" stroke-width="1.5" stroke-dasharray="3,2" opacity="0.85"/>`;
+    const _lv=_cum[_cum.length-1];
+    svg+=`<text x="${(PT+IW+2)}" y="${(_cy(_lv)+3).toFixed(1)}" font-size="7" fill="var(--amber)">${_lv>=0?'+':''}${Math.round(_lv)}Cr</text>`;
+  }
   svg+='</svg>';
 
   const summaryRows=rows.slice(-10).map(r=>{
@@ -2037,6 +2043,15 @@ function renderIntelSectors(){
 /* ═══════════════════════════════════════════
    PICKS TAB — Unified Best Trades Engine
 ═══════════════════════════════════════════ */
+/* ── Rank cache: recompute only when data date changes ── */
+const _rankCache={date:null,ranks:[]};
+function getRankedPicks(){
+  const d=STATE.foData?.meta?.date||'';
+  if(_rankCache.date===d&&_rankCache.ranks.length) return _rankCache.ranks;
+  const r=getRankedPicks();
+  _rankCache.date=d;_rankCache.ranks=r;
+  return r;
+}
 function buildPicksUniverse(){
   const mfData=computeMFData(),mfPicks=computeMFPicks(mfData);
   const signals=STATE.foData?.signals||STATE.trendsData?.latestSignals||{};
@@ -2102,7 +2117,7 @@ function buildPicksUniverse(){
 function renderPicks(){
   const container=document.getElementById('picksContent');
   const tab=STATE.picksTab,sector=STATE.sector;
-  let items=buildPicksUniverse();
+  let items=getRankedPicks();
   if(sector!=='all')items=items.filter(i=>i.sec.toLowerCase().includes(sector));
 
   if(tab==='best'){
@@ -2593,7 +2608,8 @@ async function manualRefresh(btn,force=false){
     if(btn){
       if(afterDate&&afterDate!==beforeDate){
         btn.textContent='↺ Updated!';
-        showToast(`Data updated — ${afterDate} | FII/DII: ${histLen} days in chart`);
+        const _trd=STATE.foData?.meta?.trendDays||0,_fvf=STATE.foData?.meta?.fovoltFiles||0,_dlh=Object.keys(STATE.foData?.deliveryHistory||{}).length;
+        showToast(`Updated: ${afterDate} · FII/DII ${histLen}d · Trend ${_trd}d (${_fvf} FOVOLTs) · Del ${_dlh}d`);
       } else {
         btn.textContent='↺ Current';
         if(afterDate){
@@ -2650,7 +2666,7 @@ function updateFreshness(){
   // Display date label in freshness strip
   const dateLabel=dataDate?dataDate.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'2-digit'}):'—';
   const foDateEl=document.getElementById('foDate');
-  if(foDateEl) foDateEl.textContent=dateLabel+(isManual?' 📁':'');
+  if(foDateEl){const _td=STATE.foData?.meta?.trendDays||0;foDateEl.textContent=dateLabel+(isManual?' 📁':'')+(_td>1?' · '+_td+'d trend':'');}
 
   // ── Trading-date staleness (not wall-clock hours) ─────────────────
   // Logic: data is "current" if it covers the latest completed trading day.
@@ -2821,135 +2837,6 @@ function parseCSVRows(text){
   }).filter(r=>r.length>1&&r.some(c=>c));
 }
 
-function parseBhavCopyFile(text, filename){
-  const rows=parseCSVRows(text);
-  if(!rows.length) return null;
-  const header=rows[0].map(h=>h.replace(/^"|"$/g,'').trim().toLowerCase().replace(/[^a-z0-9]/g,''));
-  // Detect format
-  const hasTckr=header.some(h=>h.includes('tckrsymb')||h.includes('symbol'));
-  const hasUndrl=header.some(h=>h.includes('undrlygpric')||h.includes('underlyingprice'));
-  const isBhavCopy=hasTckr&&hasUndrl;
-
-  function colIdx(...names){
-    for(const n of names){const i=header.findIndex(h=>h.includes(n));if(i>=0)return i;}
-    return -1;
-  }
-
-  const signals={}, errors=[];
-  let tradingDate=null;
-
-  if(isBhavCopy){
-    // ── New BhavCopy_NSE_FO_* format ──────────────────────────────
-    const iSym  = colIdx('tckrsymb','symbol','sym');
-    const iDt   = colIdx('traddt','tradingdate','trddt','bizdt','date');
-    const iUndrl= colIdx('undrlygpric','underlyingprice','underlyingvalue');
-    const iInst = colIdx('fininstrmn','instrumenttype','instrmtype');
-    if(iSym<0||iUndrl<0) return{error:'Required columns not found (TckrSymb, UndrlygPric). Check file format.'};
-
-    const INDEX_SYMS=new Set(['NIFTY','BANKNIFTY','SENSEX','FINNIFTY','NIFTYNXT50','MIDCPNIFTY','BANKEX','SX40','SENSEX50']);
-    for(let ri=1;ri<rows.length;ri++){
-      const row=rows[ri];
-      try{
-        const sym=(row[iSym]||'').replace(/^"|"$/g,'').trim().toUpperCase();
-        if(!sym||INDEX_SYMS.has(sym)) continue;
-        // Only process FUTSTK rows
-        if(iInst>=0){const inst=(row[iInst]||'').replace(/^"|"$/g,'').trim().toUpperCase();if(inst!=='FUTSTK')continue;}
-        const spotRaw=(row[iUndrl]||'').replace(/^"|"$/g,'').replace(/,/g,'').trim();
-        const spot=parseFloat(spotRaw);
-        if(!spot||spot<=0) continue;
-        // Date from TradDt
-        if(iDt>=0&&!tradingDate){
-          const dRaw=(row[iDt]||'').replace(/^"|"$/g,'').trim();
-          tradingDate=parseTradingDate(dRaw);
-        }
-        if(!(sym in signals)){
-          signals[sym]={score:0,label:'Neutral',cl:spot,pr:spot,d1:'0',d2:'0',prem:'0',vol:'0'};
-        }
-      }catch(e){errors.push(ri);}
-    }
-    console.log(`BhavCopy parsed: ${Object.keys(signals).length} stocks, date=${tradingDate}`);
-  } else {
-    // ── FOVOLT format — all 16 columns (0-indexed) ────────────────
-    // Col 0=Date  1=Symbol  2=SpotClose(A)  3=PrevClose(B)  4=LogRet(C)
-    // Col 5=PrevDailyVol(D)  6=CurDailyVol(E)  7=SpotAnnVol(F)
-    // Col 8=FutClose(G)  9=PrevFutClose(H)  10=FutLogRet(I)
-    // Col 11=PrevFutDailyVol(J)  12=CurFutDailyVol(K)  13=FutAnnVol(L)
-    // Col 14=AppDailyVol(M)  15=AppAnnVol(N)
-    const iSym     = colIdx('symbol','sym')>0?colIdx('symbol','sym'):1;
-    const iCl      = Math.max(2, colIdx('underlyingcloseprice(a)','underlyingvalue(a)','underlyinga','undrlygclosepricea','underlyingvaluea'));
-    const iPr      = Math.max(3, colIdx('underlyingpreviousdaycloseprice(b)','underlyingvalue(b)','underlyingb','undrlygprevdaycloseb','underlyingvalueb'));
-    const iLogr    = Math.max(4, colIdx('underlyinglogreturns(c)','logreturn','logret','logreturns'));
-    const iPrevVol = Math.max(5, colIdx('previousdayunderlyingvolatility(d)','previousdayvolatility','prevdayvol','prevvol'));
-    const iCurVol  = Math.max(6, colIdx('currentdayunderlyingdailyvolatility(e)','currentdaydailyvolatility','currentdayvol','dailyvolatility'));
-    const iVol     = Math.max(7, colIdx('underlyingannualisedvolatility(f)','annualisedvolatility','annualizedvolatility','annvol'));
-    const iFut     = Math.max(8, colIdx('futurescloseprice(g)','futuresprice(g)','futuresprice','futprice','closingpricefutures'));
-    const iPrevFut = Math.max(9, colIdx('futurespreviousdaycloseprice(h)','futuresprice(h)','previousfuturesprice','prevfutprice'));
-    const iFutLogr = Math.max(10,colIdx('futureslogreturns(i)','futureslogreturn','futlogret','futlogreturns'));
-    const iPrevFutVol=Math.max(11,colIdx('previousdayfuturesvolatility(j)','previousdayfuturesvolatility','prevdayfutvol','prevfutvol'));
-    const iCurFutVol =Math.max(12,colIdx('currentdayfuturesdailyvolatility(k)','currentdayfuturesvolatility','currentdayfutvol','curfutvol'));
-    const iFutAnnVol =Math.max(13,colIdx('futuresannualisedvolatility(l)','futuresannualisedvolatility','futannvol'));
-    const iAppDailyVol=Math.max(14,colIdx('applicabledailyvolatility(m)','applicabledailyvolatility','appdailyvol'));
-    const iAppAnnVol  =Math.max(15,colIdx('applicableannualisedvolatility(n)','applicableannualisedvolatility','appannvol'));
-    const iDate = 0;
-    const INDEX_SYMS=new Set(['NIFTY','BANKNIFTY','SENSEX','FINNIFTY','NIFTYNXT50','MIDCPNIFTY','BANKEX','SX40','SENSEX50']);
-
-    for(let ri=1;ri<rows.length;ri++){
-      const row=rows[ri];
-      if(row.length<9) continue;
-      try{
-        const sym=(row[iSym]||'').replace(/^"|"$/g,'').trim().toUpperCase();
-        if(!sym||INDEX_SYMS.has(sym)) continue;
-        const _f=v=>{const n=parseFloat(String(v||'').replace(/,/g,'').trim());return isNaN(n)?null:n;};
-        const cl        = _f(row[iCl]);           // C: Spot close today
-        const pr        = _f(row[iPr]);           // D: Spot close prev day
-        const logR      = _f(row[iLogr]);         // E: Spot log return
-        const pv        = row.length>iPrevVol  ? _f(row[iPrevVol])   : null; // F: Prev day spot daily vol
-        const cv        = row.length>iCurVol   ? _f(row[iCurVol])    : null; // G: Cur day spot daily vol
-        const volA      = _f(row[iVol]);           // H: Spot annualised vol
-        const futCl     = row.length>iFut      ? _f(row[iFut])       : null; // I: Futures close today
-        const prevFutCl = row.length>iPrevFut  ? _f(row[iPrevFut])   : null; // J: Futures close prev day
-        const futLogR   = row.length>iFutLogr  ? _f(row[iFutLogr])   : null; // K: Futures log return
-        const pvFut     = row.length>iPrevFutVol? _f(row[iPrevFutVol]): null; // J(vol): Prev day fut daily vol
-        const cvFut     = row.length>iCurFutVol ? _f(row[iCurFutVol]) : null; // K(vol): Cur day fut daily vol
-        const futAnnVol = row.length>iFutAnnVol ? _f(row[iFutAnnVol]) : null; // L: Futures annualised vol
-        const appDailyVol=row.length>iAppDailyVol?_f(row[iAppDailyVol]):null; // M: Applicable daily vol
-        const appAnnVol = row.length>iAppAnnVol ? _f(row[iAppAnnVol]) : null; // N: Applicable annualised vol
-        if(!cl||cl<=0) continue;
-        if(!tradingDate&&iDate>=0){tradingDate=parseTradingDate((row[iDate]||'').replace(/^"|"$/g,'').trim());}
-        // Spot 1-day return — prefer log return (exact), fallback to simple
-        let d1=0;
-        try{d1=logR?+((Math.exp(logR)-1)*100).toFixed(2):(pr&&pr>0?+((cl-pr)/pr*100).toFixed(2):0);}catch(e){}
-        // Futures 1-day return — prefer log return, fallback to simple
-        let futD1=null;
-        if(futLogR!=null)futD1=+((Math.exp(futLogR)-1)*100).toFixed(2);
-        else if(futCl!=null&&prevFutCl!=null&&prevFutCl>0)futD1=+((futCl-prevFutCl)/prevFutCl*100).toFixed(2);
-        const prem      = (futCl!=null&&cl>0)?+((futCl-cl)/cl*100).toFixed(3):0;
-        const vol       = volA!=null?+volA.toFixed(1):0;                 // H: spot annualised vol %
-        const volDelta  = (cv!=null&&pv!=null)?+(cv-pv).toFixed(4):null; // G-F: spot daily vol delta
-        const futVolDelta=(cvFut!=null&&pvFut!=null)?+(cvFut-pvFut).toFixed(4):null; // K-J: fut daily vol delta
-        // Legacy score kept for backwards-compat display labels; real scoring now in computeProbScore
-        const raw=(d1/3.0)+(prem*0.5);
-        const score=Math.round(Math.max(-5,Math.min(5,raw))*100)/100;
-        const label=score>=3?'Strong Bullish':score>=1.5?'Bullish':score>=0.5?'Mild Bullish':
-                    score<=-3?'Strong Bearish':score<=-1.5?'Bearish':score<=-0.5?'Mild Bearish':'Neutral';
-        signals[sym]={
-          score,label,cl,pr,logR,
-          futCl:futCl??null, prevFutCl:prevFutCl??null, futD1:futD1??null,
-          prevVol:pv??null,  curVol:cv??null,   volDelta:volDelta??null,
-          prevFutVol:pvFut??null, curFutVol:cvFut??null, futVolDelta:futVolDelta??null,
-          spotAnnVol:volA??null, futAnnVol:futAnnVol??null,
-          appDailyVol:appDailyVol??null, appAnnVol:appAnnVol??null,
-          d1:String(d1), d2:String(d1), prem:String(prem), vol:String(vol)
-        };
-      }catch(e){errors.push(ri);}
-    }
-    console.log(`FOVOLT parsed: ${Object.keys(signals).length} stocks, date=${tradingDate} (cols up to ${rows[1]?.length||0})`);
-  }
-
-  if(!Object.keys(signals).length) return{error:'No valid stock rows found. Check file format and column names.'};
-  return{signals,tradingDate,isBhavCopy,stockCount:Object.keys(signals).length};
-}
-
 function parseTradingDate(raw){
   if(!raw) return null;
   const s=String(raw).replace(/^"|"$/g,'').trim();
@@ -2974,166 +2861,27 @@ function parseTradingDate(raw){
 }
 
 // ── parseFiiDiiFile: parse NSE fii-dii CSV in browser ─────────────────────
-function parseFiiDiiFile(text, filename){
-  const rows=parseCSVRows(text);
-  if(rows.length<2) return null;
-  // Collapse multi-line headers (quoted newlines)
-  const header=rows[0].map(h=>h.replace(/^"|"$/g,'').trim().toLowerCase().replace(/[^a-z0-9]/g,''));
-  // Check if this looks like a fii-dii file: should have 'category','buy','sell' or 'net' columns
-  const hasCat=header.some(h=>h.includes('category'));
-  const hasBuy=header.some(h=>h.includes('buy'));
-  if(!hasCat&&!hasBuy) return null; // not a fii-dii file
-
-  const iCat = header.findIndex(h=>h.includes('category'));
-  const iBuy = header.findIndex(h=>h.includes('buyvalue')||h.includes('buy'));
-  const iSell= header.findIndex(h=>h.includes('sellvalue')||h.includes('sell'));
-  const iNet = header.findIndex(h=>h.includes('netvalue')||h.includes('net'));
-  const iDt  = header.findIndex(h=>h.includes('date'));
-
-  let fiiNet=0, diiNet=0, fiiBuy=0, fiiSell=0, diiBuy=0, diiSell=0, fileDate=null;
-  const _f=v=>{const n=parseFloat(String(v||'').replace(/,/g,'').trim());return isNaN(n)?0:n;};
-
-  for(let ri=1;ri<rows.length;ri++){
-    const row=rows[ri];
-    if(!row||row.length<2) continue;
-    const cat=(row[iCat]||'').replace(/^"|"$/g,'').trim().toUpperCase().replace(/[^A-Z]/g,'');
-    const buy =iBuy >=0?_f(row[iBuy]) :0;
-    const sell=iSell>=0?_f(row[iSell]):0;
-    const net =iNet >=0?_f(row[iNet]) :0;
-    const dayNet=buy>0||sell>0?+(buy-sell).toFixed(2):+net.toFixed(2);
-    if(!fileDate&&iDt>=0){
-      const dRaw=(row[iDt]||'').replace(/^"|"$/g,'').trim();
-      fileDate=parseTradingDate(dRaw);
-    }
-    if(cat.includes('FII')){fiiBuy=buy;fiiSell=sell;fiiNet=dayNet;}
-    else if(cat.includes('DII')){diiBuy=buy;diiSell=sell;diiNet=dayNet;}
-  }
-
-  // Fallback: extract date from filename DDMMYYYY
-  if(!fileDate){
-    const m=filename.match(/(\d{8})/);
-    if(m){const ds=m[1];try{const c=`${ds.slice(4,8)}-${ds.slice(2,4)}-${ds.slice(0,2)}`;new Date(c);fileDate=c;}catch(e){}}
-  }
-
-  if(fiiNet===0&&diiNet===0) return null; // nothing parsed
-  return{date:fileDate,fii:fiiNet,dii:diiNet,fiiBuy,fiiSell,diiBuy,diiSell,source:'manual_html_upload'};
-}
-
-function handleManualCSVUpload(fileOrList){
-  // Accept single File or FileList (from multiple="true" input)
-  const files=fileOrList instanceof FileList?Array.from(fileOrList):[fileOrList];
-  if(!files.length||!files[0]) return;
-  // Process each file sequentially
-  let idx=0;
-  function processNext(){
-    const file=files[idx++];
-    if(!file) return;
-    const reader=new FileReader();
-  reader.onload=e=>{
-    const text=e.target.result;
-    const fname=file.name.toLowerCase();
-
-    // ── Detect file type by name first, then by content ─────────────
-    const isFiiDii = fname.includes('fii-dii')||fname.includes('fiidii')||fname.includes('fii_dii');
-
-    if(!STATE.foData) STATE.foData={signals:{},meta:{},fiiDii:{},fiiDiiHistory:[],bulkDeals:[],blockDeals:[],insiderData:[],pcr:{}};
-
-    if(isFiiDii){
-      // ── Parse as FII-DII CSV ──────────────────────────────────────
-      const fd=parseFiiDiiFile(text, file.name);
-      if(!fd||(!fd.fii&&!fd.dii)){
-        showToast('❌ Could not parse FII-DII data from '+file.name);
-        return;
-      }
-      // Update current fiiDii
-      STATE.foData.fiiDii={...fd};
-      STATE.foData.meta=STATE.foData.meta||{};
-      if(fd.date) STATE.foData.meta.fiiDiiDate=fd.date;
-      if(!STATE.foData.fiiDiiHistory) STATE.foData.fiiDiiHistory=[];
-      const hist=STATE.foData.fiiDiiHistory;
-      const wd=fd.date?['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(fd.date+'T00:00:00Z').getUTCDay()]:'';
-      const ne={date:fd.date||'',d:wd,fii:fd.fii,dii:fd.dii,fiiBuy:fd.fiiBuy||0,fiiSell:fd.fiiSell||0,diiBuy:fd.diiBuy||0,diiSell:fd.diiSell||0};
-      const ei=fd.date?hist.findIndex(r=>r.date===fd.date):-1;
-      if(ei>=0) hist[ei]=ne; else hist.push(ne);
-      STATE.foData.fiiDiiHistory=hist.filter(r=>r.date).sort((a,b)=>a.date>b.date?1:-1).slice(-30);
-      updateFreshness();
-      renderMarket();
-      renderFiiDiiChart();
-      const fs=fd.fii>=0?'+':'',ds=fd.dii>=0?'+':'';
-      showToast(`FII/DII ${fd.date||'?'} loaded — FII ${fs}${fd.fii.toFixed(0)}Cr DII ${ds}${fd.dii.toFixed(0)}Cr · ${STATE.foData.fiiDiiHistory.length} days in chart`);
-      return;
-    }
-
-    // ── Parse as FOVOLT / BhavCopy ───────────────────────────────────
-    const result=parseBhavCopyFile(text, file.name);
-    if(!result||result.error){
-      showToast('❌ Parse error: '+(result?.error||'Unknown error'));
-      console.error('CSV parse error:',result);
-      return;
-    }
-    // Signals: new data overrides existing for this date
-    Object.assign(STATE.foData.signals, result.signals);
-    // Date: use TradDt from file (authoritative)
-    if(result.tradingDate){
-      STATE.foData.meta=STATE.foData.meta||{};
-      STATE.foData.meta.date=result.tradingDate;
-      try{
-        const [y,mo,d]=result.tradingDate.split('-');
-        const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-        STATE.foData.meta.latestDate=`${d}-${months[+mo-1]}-${y}`;
-      }catch(e){}
-    }
-    STATE.foData.meta.source='manual_html_upload_fovolt';
-    STATE.foData.meta.stockCount=Object.keys(STATE.foData.signals).length;
-    updateFreshness();updateFoDataBadge();renderNiftyFromFOVOLT();renderMarket();renderIntelligence();renderPicks();checkPriceAlerts();checkExitSignals();
-    showToast(`FOVOLT ${result.tradingDate||'date?'} · ${result.stockCount} stocks loaded`);
-  };
-      reader.onloadend=()=>{if(idx<files.length)processNext();};
-    reader.readAsText(file);
-  }
-  processNext();
-}
 
 async function fetchFOData(forceRemote=false){
   try{
-    // If user uploaded files via the browser this session, don't overwrite with GitHub JSON
-    // unless explicitly forced (Shift+click Refresh)
-    const hasLocalUpload = STATE.foData?.meta?.source?.startsWith('manual_html_upload');
-    if(hasLocalUpload && !forceRemote){
-      updateFreshness();updateFoDataBadge();renderNiftyFromFOVOLT();renderMarket();renderIntelligence();renderPicks();checkExitSignals();
-      return;
-    }
     const cfg=await fetch('/api/config').then(r=>r.json()).catch(()=>null);
     if(cfg?.dataUrl){
-      // Use Cache-Control: no-cache so the CDN (raw.githubusercontent.com) is bypassed
-      // ?_cb= ensures even aggressive proxies see a new URL on every call
       const bust=cfg.dataUrl+(cfg.dataUrl.includes('?')?'&':'?')+'_cb='+Date.now();
       const r=await fetch(bust,{cache:'no-store',headers:{'Cache-Control':'no-cache','Pragma':'no-cache'}});
       if(r.ok){
         const remoteData=await r.json();
         const remoteDate=remoteData?.meta?.date||'';
-        const localDate =STATE.foData?.meta?.date||'';
-        // If remote is OLDER than what we already have (local or previous fetch), keep current
-        // This prevents a CDN-cached stale response from downgrading fresh data
-        if(!forceRemote && localDate && remoteDate && remoteDate < localDate){
-          console.warn(`fetchFOData: remote date ${remoteDate} < local ${localDate} — keeping current`);
+        const localDate=STATE.foData?.meta?.date||'';
+        if(!forceRemote&&localDate&&remoteDate&&remoteDate<localDate){
+          console.warn('fetchFOData: remote '+remoteDate+' < local '+localDate+' — skipping');
           updateFreshness();return;
         }
-        // Preserve local fiiDiiHistory if it has more days than the remote JSON
-        const localHist = STATE.foData?.fiiDiiHistory||[];
-        if(localHist.length > (remoteData.fiiDiiHistory?.length||0)){
-          // Merge: remote + local, deduplicated by date, sorted
-          const merged={...Object.fromEntries((remoteData.fiiDiiHistory||[]).map(r=>[r.date,r])),
-                        ...Object.fromEntries(localHist.filter(r=>r.date).map(r=>[r.date,r]))};
-          remoteData.fiiDiiHistory=Object.values(merged).sort((a,b)=>a.date>b.date?1:-1).slice(-30);
-        }
         STATE.foData=remoteData;
+        _rankCache.date=null;
         updateFreshness();updateFoDataBadge();renderNiftyFromFOVOLT();renderMarket();renderIntelligence();renderPicks();checkExitSignals();
         return;
       }
     }
-    const r=await fetch('/api/history?type=trends&days=5');
-    if(r.ok){STATE.trendsData=await r.json();}
     updateFreshness();updateFoDataBadge();renderMarket();renderIntelligence();renderPicks();checkExitSignals();
   }catch(e){console.warn('FO fetch:',e);}
 }
@@ -3167,41 +2915,7 @@ const MFDATA_SCHEME_MAP={
    Fires all requests in parallel (Promise.allSettled), 4s hard timeout each.
    Runs only once per session. Never blocks the UI. ── */
 async function fetchLiveHoldings(){
-  if(STATE._holdingsFetched)return;
-  STATE._holdingsFetched=true;
-
-  const entries=Object.entries(MFDATA_SCHEME_MAP);
-  // Fire ALL requests in parallel — never await in a loop
-  const results=await Promise.allSettled(
-    entries.map(([fundId,schemeCode])=>
-      fetch(`https://mfapi.in/mf/${schemeCode}`,{signal:AbortSignal.timeout(4000)})
-        .then(r=>r.ok?r.json():null)
-        .then(d=>{
-          if(!d||!d.data?.length)return null;
-          // mfapi.in returns NAV history — not portfolio holdings.
-          // Only use it to update latest NAV for the scheme, not holdings.
-          // Holdings come from embedded SEBI-disclosed data.
-          return{fundId,nav:parseFloat(d.data[0]?.nav||0),date:d.data[0]?.date||''};
-        })
-        .catch(()=>null)
-    )
-  );
-  let updated=0;
-  results.forEach(r=>{
-    if(r.status==='fulfilled'&&r.value){
-      const{fundId,nav,date}=r.value;
-      if(HOLDINGS[fundId]&&nav>0){
-        HOLDINGS[fundId].latestNav=nav;
-        HOLDINGS[fundId].navDate=date;
-        updated++;
-      }
-    }
-  });
-  if(updated>0)console.log(`✓ NAV updated for ${updated} funds from mfapi.in`);
-  // Note: mfapi.in does NOT provide portfolio holdings — only NAV.
-  // Portfolio holdings data comes from the embedded SEBI-disclosed dataset.
-  // To get live holdings, use your GitHub Actions workflow to fetch from
-  // individual AMC websites and push to foData.json.
+  // Holdings are hardcoded — live fetch removed
 }
 
 function renderNiftyTile(prefix,d){
@@ -4388,7 +4102,6 @@ function init(){
     checkExitSignals();
   });
   // mfapi.in NAV fetch — parallel, non-blocking, single run
-  setTimeout(()=>fetchLiveHoldings(),2000);
 }
 document.addEventListener('DOMContentLoaded',init);
 </script>
