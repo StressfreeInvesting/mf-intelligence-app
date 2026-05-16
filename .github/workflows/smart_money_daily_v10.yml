@@ -688,32 +688,60 @@ jobs:
                   print(f"  Could not load existing: {e}")
 
           # Determine fetch date — priority order (highest to lowest):
-          #   1. BhavCopy TradDt field (most authoritative — comes from inside the file)
-          #   2. FII-DII CSV date rows (actual trading date from file content)
-          #   3. FOVOLT filename date (FOVOLT_DDMMYYYY.csv)
-          #   4. Today's date (last resort)
+          #   1. FOVOLT data row col 0 (actual NSE trading date inside the file — most reliable)
+          #   2. BhavCopy TradDt field (from inside the BhavCopy CSV)
+          #   3. FII-DII CSV date rows (actual trading date from file content)
+          #   4. FOVOLT filename date (FOVOLT_DDMMYYYY.csv)
+          #   5. Today's UTC date (last resort)
           upload_date_iso = datetime.utcnow().strftime('%Y-%m-%d')
           date_source = 'utcnow_fallback'
 
-          if bhavcopy_date_iso:
-              # Highest priority: TradDt from inside the BhavCopy CSV
+          # ── Priority 1: Extract date from actual FOVOLT data rows (col 0) ────────
+          fovolt_data_date = None
+          if fovolt_files:
+              _fp_newest = sorted(fovolt_files)[-1]
+              try:
+                  with open(_fp_newest, newline='', encoding='utf-8-sig') as _fh_date:
+                      _cr_date = csv.reader(_fh_date)
+                      next(_cr_date, None)  # skip header
+                      for _row_date in _cr_date:
+                          if _row_date and _row_date[0].strip():
+                              _raw_d = _row_date[0].strip().strip('"')
+                              for _fmt in ('%d-%b-%Y', '%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y', '%d-%B-%Y'):
+                                  try:
+                                      fovolt_data_date = datetime.strptime(_raw_d, _fmt).strftime('%Y-%m-%d')
+                                      break
+                                  except: continue
+                              if fovolt_data_date: break
+              except: pass
+              if fovolt_data_date:
+                  upload_date_iso = fovolt_data_date
+                  date_source = 'fovolt_data_col0'
+                  print(f"  Date from FOVOLT data rows: {upload_date_iso}")
+
+          # ── Priority 2: BhavCopy TradDt (if higher than FOVOLT date or FOVOLT missing) ─
+          if bhavcopy_date_iso and (not fovolt_data_date or bhavcopy_date_iso >= fovolt_data_date):
               upload_date_iso = bhavcopy_date_iso
               date_source = 'bhavcopy_traddt'
               print(f"  Date from BhavCopy TradDt: {upload_date_iso}")
-          elif fiidii_files and fiidii_rows:
-              # Second priority: actual date parsed from inside the FII-DII CSV
-              upload_date_iso = fiidii_rows[-1]['date']
+
+          # ── Priority 3: FII-DII CSV rows ─────────────────────────────────────────
+          if date_source == 'utcnow_fallback' and fiidii_files and fiidii_rows:
+              upload_date_iso = sorted(fiidii_rows, key=lambda r: r['date'])[-1]['date']
               date_source = 'fiidii_csv'
               print(f"  Date from FII-DII CSV rows: {upload_date_iso}")
-          elif fovolt_files and 'fovolt_basename' in dir():
-              # Third priority: parse from FOVOLT filename (FOVOLT_DDMMYYYY.csv)
+
+          # ── Priority 4: FOVOLT filename ───────────────────────────────────────────
+          if date_source == 'utcnow_fallback' and fovolt_files:
               try:
-                  ds_part = fovolt_basename.replace('FOVOLT_','').replace('.csv','')  # DDMMYYYY
-                  if len(ds_part) == 8:
-                      upload_date_iso = f"{ds_part[4:8]}-{ds_part[2:4]}-{ds_part[0:2]}"
+                  _bn = os.path.basename(sorted(fovolt_files)[-1])
+                  _ds = _bn.replace('FOVOLT_','').replace('.csv','')
+                  if len(_ds) == 8:
+                      upload_date_iso = f"{_ds[4:8]}-{_ds[2:4]}-{_ds[0:2]}"
                       date_source = 'fovolt_filename'
                       print(f"  Date from FOVOLT filename: {upload_date_iso}")
               except: pass
+
           print(f"  Upload date resolved: {upload_date_iso} (source={date_source})")
 
           fetch_date_str = datetime.strptime(upload_date_iso,'%Y-%m-%d').strftime('%d-%b-%Y')
@@ -788,10 +816,17 @@ jobs:
                   "stockCount":         final_count,
                   "trendDays":          max((v["daysTracked"] for v in trend_stats.values()), default=0),
                   "fovoltFiles":        len(fovolt_files),
+                  "fiiDiiDays":         len(fiidii_rows),
+                  "deliveryDays":       len(del_hist_sorted),
                   "workflowCompletedAt": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
                   "carriedForwardFrom": None,
                   "source":             "manual_upload",
-                  "version":            "V10"
+                  "version":            "V10",
+                  "availableDates":     sorted(set(
+                      [_parse_fovolt_date_fn(os.path.basename(f)) for f in fovolt_files if _parse_fovolt_date_fn(os.path.basename(f))] +
+                      [r["date"] for r in fiidii_rows if r.get("date")] +
+                      list(del_hist_sorted.keys())
+                  ))
               }
           }
 
