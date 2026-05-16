@@ -107,6 +107,10 @@ button{cursor:pointer;font-family:inherit}
   }
   .header-divider{display:none}
   .header-right{margin-left:0;padding-left:0;}
+  /* Mobile priceTrio: hide secondary rows (Fut prev, App.Vol) to save vertical space.
+     Spot + change + OI badge is shown; tap the expand toggle to see full detail. */
+  .price-trio-secondary{display:none}
+  .price-trio-expand-hint{display:inline-block;font-size:.58rem;color:var(--text-muted);cursor:pointer;padding:1px 4px;border:1px solid var(--border);border-radius:4px;margin-top:2px}
 }
 
 /* Desktop: keep original single-row layout */
@@ -527,9 +531,13 @@ button{cursor:pointer;font-family:inherit}
     <span>·</span>
     <span><span class="fresh-dot fresh-green" id="foDot"></span>F&amp;O: <span id="foDate">—</span></span>
     <span>·</span>
-    <span><span class="fresh-dot fresh-amber" id="trendsDot"></span>Trends: <span id="trendsLabel">—</span></span>
-    <span id="dataAgeBadge" style="margin-left:auto;font-size:.68rem"></span>
-    <!-- Manual upload: accepts FOVOLT_*.csv and BhavCopy_NSE_FO_*.csv -->
+    <span><span class="fresh-dot fresh-amber" id="fiiDot"></span>FII-DII: <span id="fiiDate">—</span></span>
+    <span>·</span>
+    <span><span class="fresh-dot fresh-amber" id="delDot"></span>Del: <span id="delDate">—</span></span>
+    <span>·</span>
+    <span><span class="fresh-dot fresh-amber" id="trendsDot"></span>Trend: <span id="trendsLabel">—</span></span>
+    <span id="workflowBadge" style="margin-left:auto;font-size:.65rem;color:var(--text-muted)"></span>
+    <span id="dataAgeBadge" style="font-size:.68rem"></span>
   </div>
 
   <!-- EXIT ALERT BAR -->
@@ -820,7 +828,7 @@ const NMAP={"ICICI Bank":"ICICIBANK","HDFC Bank":"HDFCBANK","SBI":"SBIN","Axis B
 const INDEX_SYMS=new Set(["NIFTY","BANKNIFTY","SENSEX","FINNIFTY","NIFTYNXT50","MIDCPNIFTY","BANKEX","SX40","SENSEX50"]);
 
 function toSym(name){return NMAP[name]||name.toUpperCase().replace(/\s+/g,'');}
-function getQ(n){return null;}// Live quotes disabled — all prices from FOVOLT only
+function getQ(n){return null;}// Live quotes disabled — prices from FOVOLT only
 function getFO(sym){return STATE.foData?.signals?.[sym]||null;}
 function fmt(n){return n!=null?Number(n).toLocaleString('en-IN',{maximumFractionDigits:2}):'—';}
 
@@ -828,6 +836,13 @@ function fmt(n){return n!=null?Number(n).toLocaleString('en-IN',{maximumFraction
    MF ENGINE
 ═══════════════════════════════════════════ */
 function computeMFData(){
+  const d=STATE.foData?.meta?.date||'';
+  if(_mfCache.date===d&&_mfCache.data) return _mfCache.data;
+  const r=computeMFData_impl();
+  _mfCache.date=d;_mfCache.data=r;
+  return r;
+}
+function computeMFData_impl(){
   const fe=[],ex=[],inc=[],dec=[],sm={};
   Object.keys(HOLDINGS).forEach(fid=>{
     const f=HOLDINGS[fid],jm={},fm={};
@@ -929,17 +944,20 @@ function computeProbScore(stock,mfPick,foSignal,trend){
   const latestFii = fiiHist.length ? fiiHist[fiiHist.length-1] : null;
   const fiiNet    = latestFii?.fii ?? STATE.foData?.fiiDii?.fii ?? null;
   const diiNet    = latestFii?.dii ?? STATE.foData?.fiiDii?.dii ?? null;
-  // FII+DII combined net — both buying = institutional conviction
+  // Per-stock institutional OI: oiChg from BhavCopy > 1L contracts = institutions entering
+  // This is a much better stock-level proxy than market-wide FII net flow
+  const hasInstitutionalOI = foSignal?.oiChg != null && foSignal.oiChg > 100000;
+  // FII/DII net flow kept as context; used for penalty only, not as source
   const hasFiiBuy = fiiNet!=null && fiiNet>500;             // FII net buy >500Cr
   const hasDiiBuy = diiNet!=null && diiNet>300;             // DII net buy >300Cr
   const hasBothBuy= hasFiiBuy && hasDiiBuy;                 // both buying = strongest
   const hasFiiSell= fiiNet!=null && fiiNet<-500;            // FII heavy seller = risk-off
 
-  const sources = (hasMF?1:0)+(hasFO?1:0)+(hasTrend?1:0)+(hasInsiderBuy?1:0)+(hasBothBuy?1:0);
+  const sources = (hasMF?1:0)+(hasFO?1:0)+(hasTrend?1:0)+(hasInsiderBuy?1:0)+(hasInstitutionalOI?1:0);
   let f1=sources>=5?20:sources>=4?19:sources>=3?17:sources===2?13:hasMF?9:hasFO?6:3;
   // FII selling penalty — don't chase stocks when FIIs are net sellers
   if(hasFiiSell) f1=Math.max(3,f1-3);
-  bd.confluence={score:f1,max:20,sources,hasMF,hasFO,hasTrend,hasInsiderBuy,hasFiiBuy,hasDiiBuy,fiiNet,diiNet};
+  bd.confluence={score:f1,max:20,sources,hasMF,hasFO,hasTrend,hasInsiderBuy,hasInstitutionalOI,hasFiiBuy,hasDiiBuy,fiiNet,diiNet};
   total+=f1;
 
   // ── F2: Futures Structure (0-20) ─────────────────────────────────
@@ -979,8 +997,21 @@ function computeProbScore(stock,mfPick,foSignal,trend){
     else if(volDelta<0&&d1>0)f2c=3;
     else f2c=2;
   }
-  const f2=Math.round(Math.min(20,f2a+f2b+f2c));
-  bd.futuresStructure={score:f2,max:20,basis:prem,futD1:futD1??null,futVolDelta:futVolDelta??null,f2a,f2b,f2c};
+  // d) OI pattern adjustment — real BhavCopy OI drives this; 0 when absent
+  // Long Buildup (price↑ + OI↑) = new longs entering → +3 to f2b
+  // Short Covering (price↑ + OI↓) = shorts squeezed → +1 (less conviction)
+  // Short Buildup / Long Unwinding → 0 here; hard cap applied after total
+  const oiChgRaw = foSignal?.oiChg ?? null;
+  let f2d = 0, oiPattern = 'None';
+  if (oiChgRaw !== null) {
+    const oiRising = oiChgRaw > 0, oiFalling = oiChgRaw < 0;
+    if (d1 > 0 && oiRising)   { f2d = 3; oiPattern = 'Long Buildup';   }
+    else if (d1 > 0 && oiFalling) { f2d = 1; oiPattern = 'Short Covering'; }
+    else if (d1 < 0 && oiRising)  { f2d = 0; oiPattern = 'Short Buildup';  }
+    else if (d1 < 0 && oiFalling) { f2d = 0; oiPattern = 'Long Unwinding'; }
+  }
+  const f2=Math.round(Math.min(20,f2a+f2b+f2c+f2d));
+  bd.futuresStructure={score:f2,max:20,basis:prem,futD1:futD1??null,futVolDelta:futVolDelta??null,f2a,f2b,f2c,f2d,oiPattern,oiChg:oiChgRaw};
   total+=f2;
 
   // ── F3: Volatility Regime (0-20) ─────────────────────────────────
@@ -1111,6 +1142,15 @@ function computeProbScore(stock,mfPick,foSignal,trend){
   } else if(futVolDiscount){
     finalTotal=Math.min(finalTotal,45);
     bd.hardFilter='Futures vol not confirming spot';
+  }
+  // OI-pattern hard caps — bearish OI patterns restrict ceiling regardless of MF conviction
+  const _oiPat=bd.futuresStructure?.oiPattern||'None';
+  if(_oiPat==='Short Buildup'&&!bd.hardFilter){
+    finalTotal=Math.min(finalTotal,35);
+    bd.hardFilter='Short Buildup (price↓ + OI↑) — score capped at 35';
+  } else if(_oiPat==='Long Unwinding'&&!bd.hardFilter){
+    finalTotal=Math.min(finalTotal,30);
+    bd.hardFilter='Long Unwinding (price↓ + OI↓) — score capped at 30';
   }
   // Delivery % bonus (if available) — institutional conviction signal
   const delPct=parseFloat(foSignal?.delPct||0);
@@ -1284,29 +1324,28 @@ function priceTrio(fo, d1){
       <span class="price-trio-val spot">${fmt(spot)}</span>
       <span class="price-trio-change ${up1d?'up':'down'}">${up1d?'▲':'▼'}${d1Abs}%</span>
     </div>
-    ${futCl!=null?`<div class="price-trio-row">
+    ${futCl!=null?`<div class="price-trio-row price-trio-secondary">
       <span class="price-trio-label">Fut (today)</span>
       <span class="price-trio-val fut">${fmt(futCl)}</span>
       ${futMove?`<span class="price-trio-change ${futMoveClass}">${futMove}</span>`:''}
     </div>`:''}
-    ${prevFut!=null?`<div class="price-trio-row">
+    ${prevFut!=null?`<div class="price-trio-row price-trio-secondary">
       <span class="price-trio-label">Fut (prev)</span>
       <span class="price-trio-val prevfut">${fmt(prevFut)}</span>
     </div>`:''}
-    ${displayVol?`<div class="price-trio-row">
+    ${displayVol?`<div class="price-trio-row price-trio-secondary">
       <span class="price-trio-label">App.Vol</span>
       <span style="font-family:'Space Mono',monospace;font-size:.68rem;font-weight:700;color:${displayVol<30?'var(--green)':displayVol<50?'var(--amber)':'var(--red)'}">${displayVol.toFixed(1)}%</span>
     </div>`:''}
-    ${volBadge||futVolBadge?`<div class="price-trio-row" style="gap:4px;margin-top:2px">${volBadge}${futVolBadge}</div>`:''}
+    ${volBadge||futVolBadge?`<div class="price-trio-row price-trio-secondary" style="gap:4px;margin-top:2px">${volBadge}${futVolBadge}</div>`:''}
     ${(()=>{
-      // Delivery % from CM Bhavcopy (sec_bhavdata_full)
       const dp=fo.delPct!=null?+fo.delPct:null;
       const dpChip=dp!=null?`<span class="vol-delta ${dp>=60?'rising':dp<25?'falling':'flat'}" title="Delivery ${dp.toFixed(1)}% from CM Bhavcopy — ${dp>=60?'institutional conviction':dp<25?'speculative':'normal'}">Del ${dp.toFixed(1)}%</span>`:'';
-      // OI change from BhavCopy_NSE_FO (real open interest)
       const oiC=fo.oiChg!=null?+fo.oiChg:null;
       const oiChip=oiC!=null?`<span class="vol-delta ${oiC>0?'rising':'falling'}" title="OI change: ${oiC>0?'+':''}${(oiC/1e5).toFixed(1)}L lots | Total OI: ${fo.oi!=null?((+fo.oi/1e7).toFixed(2))+'Cr':'?'}">OI${oiC>0?'▲':'▼'}${Math.abs(oiC/1e5).toFixed(1)}L</span>`:'';
       return(dpChip||oiChip)?`<div class="price-trio-row" style="gap:4px;margin-top:2px">${dpChip}${oiChip}</div>`:'';
     })()}
+    ${futCl!=null||displayVol?`<span class="price-trio-expand-hint" onclick="this.closest('.price-trio').querySelectorAll('.price-trio-secondary').forEach(el=>el.style.display=el.style.display?'':'flex');this.style.display='none'" title="Show Fut/Vol detail">+detail</span>`:''}
   </div>`;
 }
 
@@ -1624,12 +1663,8 @@ function renderFiiDiiChart(){
 /* ── Live FII/DII fetch from NSE public endpoint (no auth needed) ── */
 /* ── FII/DII: only use data from foData (GitHub Actions) or mfapi.in NAV.
    NSE direct calls are CORS-blocked in browsers — never attempt them. ── */
-function fetchLiveFiiDii(){
-  // No-op: FII/DII data comes from foData.fiiDiiHistory pushed by GitHub Actions.
-  // If not available, chart shows a clean "connect your workflow" message.
-  // This function intentionally does nothing to prevent page freezes.
-  return Promise.resolve();
-}
+function fetchLiveFiiDii(){}
+// fetchLiveFiiDii: FII-DII data comes from uploaded fii-dii CSV via workflow
 
 /* ═══════════════════════════════════════════
    INTELLIGENCE TAB — dispatcher
@@ -1656,7 +1691,7 @@ function renderIntelDecisionBar(){
   let buys=0,watches=0,exits=0,conflicts=0;
   mfPicks.forEach(p=>{
     const fo=signals[toSym(p.stock)];
-    const trend=STATE.trendsData?.trends?.[toSym(p.stock)]||null;
+    const trend=STATE.foData?.trendStats?.[toSym(p.stock)]||STATE.trendsData?.trends?.[toSym(p.stock)]||null;
     const prob=computeProbScore(p.stock,p,fo||null,trend);
     if(fo&&fo.score<-1&&p.ms>1.5)conflicts++;
     else if(prob.total>=75)buys++;
@@ -1675,8 +1710,7 @@ function renderIntelDecisionBar(){
 /* ─── SMART MONEY RANKING — No-Tie Weighted Scoring ─── */
 function computeSmartRank(){
   const mfData=computeMFData(),mfPicks=computeMFPicks(mfData);
-  const signals=STATE.foData?.signals||{},trends=STATE.trendsData?.trends||{};
-  // Recency: Feb data is 1 month old → apply 0.8× decay if >30 days
+  const signals=STATE.foData?.signals||{},trends=STATE.foData?.trendStats||STATE.trendsData?.trends||{};
   const now=new Date(),mfDecay=0.8;// would be 1.0 if current month data
   const ranked=[];
   mfPicks.forEach(p=>{
@@ -1786,7 +1820,8 @@ function renderSmartRanking(){
           <button class="card-expand-toggle" onclick="toggleExpand('${expandId}',this)"><span>▸</span> Score breakdown</button>
           <div class="card-expand-body" id="${expandId}">
             <div class="expand-section-title">Probability: ${r.prob.total}/100 — FOVOLT 6-Factor</div>
-            <div class="expand-line"><span class="expand-label">F1 · Confluence (${r.prob.breakdown.confluence?.sources??0} sources${r.prob.hasInsiderBuy?' · Insider':''})</span><span class="expand-val">${r.prob.breakdown.confluence?.score??0}/20</span></div>
+            <div class="expand-line"><span class="expand-label">F1 · MF Confluence (${r.prob.breakdown.confluence?.sources??0}/5 sources${r.prob.hasInsiderBuy?' · Insider':''})</span><span class="expand-val">${r.prob.breakdown.confluence?.score??0}/20</span></div>
+            <div class="expand-line" style="padding-left:8px;font-size:.67rem"><span class="expand-label" style="color:var(--text-muted)">MF ${r.prob.breakdown.confluence?.hasMF?'✓':'✗'} · F&O ${r.prob.breakdown.confluence?.hasFO?'✓':'✗'} · Trend ${r.prob.breakdown.confluence?.hasTrend?'✓':'✗'} · InstOI ${r.prob.breakdown.confluence?.hasInstitutionalOI?'✓':'✗'} · Insider ${r.prob.hasInsiderBuy?'✓':'✗'}${r.prob.breakdown.confluence?.fiiNet!=null?' · FII '+(r.prob.breakdown.confluence.fiiNet>0?'↑':'↓')+'₹'+Math.abs(Math.round(r.prob.breakdown.confluence.fiiNet))+'Cr':''}</span></div>
             <div class="expand-line"><span class="expand-label">F2 · Futures Structure${r.fo?.futD1!=null?` · Fut ${r.fo.futD1>=0?'+':''}${r.fo.futD1.toFixed(2)}%`:''}</span><span class="expand-val">${r.prob.breakdown.futuresStructure?.score??0}/20</span></div>
             <div class="expand-line"><span class="expand-label">F3 · Vol Regime${r.prob.breakdown.volRegime?.appAnnVol!=null?` · AppVol ${r.prob.breakdown.volRegime.appAnnVol.toFixed(1)}%`:''}</span><span class="expand-val">${r.prob.breakdown.volRegime?.score??0}/20</span></div>
             <div class="expand-line"><span class="expand-label">F4 · Return Quality${r.prob.breakdown.returnQuality?.aligned===false?' · ⚠ Diverging':r.prob.breakdown.returnQuality?.aligned===true?' · ✓ Aligned':''}</span><span class="expand-val">${r.prob.breakdown.returnQuality?.score??0}/20</span></div>
@@ -1815,7 +1850,7 @@ function renderIntelMF(tab){
   const amfiUrl=`https://www.amfiindia.com/research-information/other-data/mf-scheme-performance-details`;
   container.innerHTML=items.map((item,idx)=>{
     const stock=item.stock,sym=toSym(stock),fo=getFO(sym);
-    const mfPick=mfPicks.find(p=>p.stock===stock)||null,trend=STATE.trendsData?.trends?.[sym]||null;
+    const mfPick=mfPicks.find(p=>p.stock===stock)||null,trend=STATE.foData?.trendStats?.[sym]||STATE.trendsData?.trends?.[sym]||null;
     const prob=(fo||mfPick||trend)?computeProbScore(stock,mfPick,fo,trend):null;
     const disc=disclosureBadge(item.disclosureMonth||item.funds?.[0]?.disclosureMonth);
     const conf=confluenceBadge(prob?.sources||0);
@@ -1855,8 +1890,7 @@ function renderIntelFO(){
   const mfData=computeMFData(),mfPicks=computeMFPicks(mfData);
   // Use live foData OR fall back to last available signals from trendsData
   const signals=STATE.foData?.signals||STATE.trendsData?.latestSignals||{};
-  const trends=STATE.trendsData?.trends||{};
-  const hasLiveData=!!(STATE.foData?.signals&&Object.keys(STATE.foData.signals).length>0);
+  const trends=STATE.foData?.trendStats||STATE.trendsData?.trends||{};
   const dataDate=STATE.foData?.meta?.latestDate||'historical';
   // Build universe: all MF picks + any FO signals above threshold
   const allSyms=new Set([...mfPicks.map(p=>toSym(p.stock)),...Object.keys(signals).filter(s=>signals[s].score>0.5)]);
@@ -2047,15 +2081,18 @@ function renderIntelSectors(){
 const _rankCache={date:null,ranks:[]};
 function getRankedPicks(){
   const d=STATE.foData?.meta?.date||'';
-  if(_rankCache.date===d&&_rankCache.ranks.length) return _rankCache.ranks;
-  const r=getRankedPicks();
-  _rankCache.date=d;_rankCache.ranks=r;
+  const _fLen=(STATE.foData?.fiiDiiHistory||[]).length;
+  if(_rankCache.date===d&&_rankCache.ranks.length&&_rankCache.fLen===_fLen) return _rankCache.ranks;
+  const r=buildPicksUniverse();
+  _rankCache.date=d;_rankCache.ranks=r;_rankCache.fLen=(STATE.foData?.fiiDiiHistory||[]).length;
   return r;
 }
 function buildPicksUniverse(){
   const mfData=computeMFData(),mfPicks=computeMFPicks(mfData);
   const signals=STATE.foData?.signals||STATE.trendsData?.latestSignals||{};
-  const trends=STATE.trendsData?.trends||{};
+  // foData.trendStats is built from uploaded FOVOLT files and always populated.
+  // trendsData.trends (from /api/history Vercel) is often empty in static deployments.
+  const trends=STATE.foData?.trendStats||STATE.trendsData?.trends||{};
   const bulkSyms=new Set((STATE.foData?.bulkDeals||[]).filter(d=>d.type==='B').map(d=>d.sym));
   const blockSyms=new Set((STATE.foData?.blockDeals||[]).filter(d=>d.type==='B').map(d=>d.sym));
   const allSyms=new Set([...mfPicks.map(p=>toSym(p.stock)),...Object.keys(signals).filter(s=>signals[s].score>0.3)]);
@@ -2135,10 +2172,15 @@ function renderPicks(){
     const hasLive=!!(STATE.foData?.signals&&Object.keys(STATE.foData.signals).length>0);
     const foDateLabel=hasLive?STATE.foData?.meta?.latestDate:(STATE.trendsData?.latestSignalsDate||null);
     const banner=`<div style="padding:10px 14px;background:rgba(0,229,153,.06);border:1px solid rgba(0,229,153,.15);border-radius:10px;margin-bottom:12px">
-      <div style="font-size:.78rem;font-weight:700;color:var(--accent);margin-bottom:4px">⚡ Best Trades — Multi-Signal Confirmed</div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+        <div style="font-size:.78rem;font-weight:700;color:var(--accent)">⚡ Best Trades — Multi-Signal Confirmed</div>
+        <button onclick="copyZerodhaBasket()" style="margin-left:auto;padding:3px 10px;border-radius:6px;border:1px solid var(--accent);background:transparent;color:var(--accent);font-size:.66rem;font-weight:700;cursor:pointer" title="Copy Zerodha Kite basket order JSON">📋 Copy Basket</button>
+      </div>
       <div style="font-size:.7rem;color:var(--text-muted);line-height:1.5">Ranked by combined probability score: MF conviction · F&O OI · Delivery% · Volume · Deals. ${foDateLabel?`F&O: <span style="color:${hasLive?'var(--green)':'var(--amber)'}">${foDateLabel}${hasLive?'':' (last available)'}</span>`:'<span style="color:var(--amber)">⚠ No F&O data — MF-only scoring</span>'}</div>
     </div>`;
     container.innerHTML=banner+items.map((item,idx)=>renderPickCard(item,idx,'best')).join('');
+    // Stash current best items for basket export
+    STATE._bestItems=items;
   } else if(tab==='mf'){
     items=items.filter(i=>i.mfScore>0).sort((a,b)=>b.mfScore-a.mfScore).slice(0,30);
     if(!items.length){container.innerHTML=`<div class="empty"><div class="empty-icon">▣</div>No MF picks found</div>`;return;}
@@ -2152,6 +2194,32 @@ function renderPicks(){
     if(!items.length){container.innerHTML=`<div class="empty"><div class="empty-icon">⚡</div>No F&O signals today<br><small style="color:var(--text-muted)">Historical data shown where available — auto-updates each trading day</small></div>`;return;}
     container.innerHTML=items.map((item,idx)=>renderPickCard(item,idx,'fo')).join('');
   }
+}
+
+// Zerodha Kite basket order JSON export
+// Generates: [{"tradingsymbol":"SUNPHARMA","exchange":"NSE","transaction_type":"BUY","order_type":"MARKET","quantity":1,"product":"CNC"}]
+// Quantity = 1 lot (NewBrdLotQty from BhavCopy if available, else 1)
+function copyZerodhaBasket(){
+  const items=STATE._bestItems||[];
+  if(!items.length){showToast('No Best Trades to export — open the Best Trades tab first','warn');return;}
+  const basket=items.slice(0,10).map(item=>({
+    tradingsymbol: item.sym,
+    exchange: 'NSE',
+    transaction_type: 'BUY',
+    order_type: 'MARKET',
+    quantity: item.fo?.lotSize||1,
+    product: 'CNC',
+    tag: `MFI_P${item.prob.total}`
+  }));
+  const json=JSON.stringify(basket,null,2);
+  navigator.clipboard.writeText(json)
+    .then(()=>showToast(`📋 Zerodha basket (${basket.length} stocks) copied — paste in Kite Basket Orders`))
+    .catch(()=>{
+      // Fallback: open in new tab
+      const w=window.open('','_blank');
+      w.document.write(`<pre style="font-family:monospace;padding:16px">${json}</pre>`);
+      w.document.title='MFI Zerodha Basket';
+    });
 }
 
 function renderPickCard(item,idx,mode){
@@ -2207,8 +2275,9 @@ function renderPickCard(item,idx,mode){
     <button class="card-expand-toggle" onclick="toggleExpand('${expandId}',this)"><span>▸</span> Score breakdown</button>
     <div class="card-expand-body" id="${expandId}">
       <div class="expand-section-title">Probability Breakdown: ${prob.total}/100 — FOVOLT 6-Factor Model</div>
-      <div class="expand-line"><span class="expand-label">F1 · MF Confluence (${prob.breakdown.confluence?.sources??0} sources${prob.hasInsiderBuy?' · Insider buy':''})</span><span class="expand-val">${prob.breakdown.confluence?.score??0}/20</span></div>
-      <div class="expand-line"><span class="expand-label">F2 · Futures Structure${fo?` · Basis ${parseFloat(fo.prem||0)>0?'+':''}${parseFloat(fo.prem||0).toFixed(3)}%`:''}${prob.breakdown.futuresStructure?.futD1!=null?` · Fut ${prob.breakdown.futuresStructure.futD1>=0?'+':''}${prob.breakdown.futuresStructure.futD1.toFixed(2)}%`:''}</span><span class="expand-val">${prob.breakdown.futuresStructure?.score??0}/20</span></div>
+      <div class="expand-line"><span class="expand-label">F1 · MF Confluence (${prob.breakdown.confluence?.sources??0}/5 sources${prob.hasInsiderBuy?' · Insider buy':''})</span><span class="expand-val">${prob.breakdown.confluence?.score??0}/20</span></div>
+      <div class="expand-line" style="padding-left:8px;font-size:.67rem"><span class="expand-label" style="color:var(--text-muted)">MF ${prob.breakdown.confluence?.hasMF?'✓':'✗'} · F&O ${prob.breakdown.confluence?.hasFO?'✓':'✗'} · Trend ${prob.breakdown.confluence?.hasTrend?'✓':'✗'} · InstOI ${prob.breakdown.confluence?.hasInstitutionalOI?'✓':'✗'} · Insider ${prob.hasInsiderBuy?'✓':'✗'}${prob.breakdown.confluence?.fiiNet!=null?' · FII '+(prob.breakdown.confluence.fiiNet>0?'↑':'↓')+'₹'+Math.abs(Math.round(prob.breakdown.confluence.fiiNet))+'Cr':''}</span></div>
+      <div class="expand-line"><span class="expand-label">F2 · Futures Structure${fo?` · Basis ${parseFloat(fo.prem||0)>0?'+':''}${parseFloat(fo.prem||0).toFixed(3)}%`:''}${prob.breakdown.futuresStructure?.futD1!=null?` · Fut ${prob.breakdown.futuresStructure.futD1>=0?'+':''}${prob.breakdown.futuresStructure.futD1.toFixed(2)}%`:''}${prob.breakdown.futuresStructure?.oiPattern&&prob.breakdown.futuresStructure.oiPattern!=='None'?` · OI: ${prob.breakdown.futuresStructure.oiPattern}`:''}</span><span class="expand-val" style="color:${prob.breakdown.futuresStructure?.oiPattern==='Long Buildup'?'var(--green)':prob.breakdown.futuresStructure?.oiPattern==='Short Buildup'||prob.breakdown.futuresStructure?.oiPattern==='Long Unwinding'?'var(--red)':'inherit'}">${prob.breakdown.futuresStructure?.score??0}/20</span></div>
       <div class="expand-line"><span class="expand-label">F3 · Vol Regime${prob.breakdown.volRegime?.appAnnVol!=null?` · AppVol ${prob.breakdown.volRegime.appAnnVol.toFixed(1)}%`:''}${prob.breakdown.volRegime?.compression!=null?` · Compression ${(prob.breakdown.volRegime.compression*100).toFixed(1)}%`:''}</span><span class="expand-val" style="color:${prob.breakdown.volRegime?.f3a>=7?'var(--green)':prob.breakdown.volRegime?.f3a>=5?'var(--amber)':'var(--red)'}">${prob.breakdown.volRegime?.score??0}/20</span></div>
       <div class="expand-line"><span class="expand-label">F4 · Return Quality · Spot ${d1>=0?'+':''}${d1.toFixed(2)}%${prob.breakdown.returnQuality?.futReturn!=null?` · Fut ${prob.breakdown.returnQuality.futReturn>=0?'+':''}${prob.breakdown.returnQuality.futReturn.toFixed(2)}%`:''}${prob.breakdown.returnQuality?.aligned===false?' · ⚠ Diverging':prob.breakdown.returnQuality?.aligned===true?' · ✓ Aligned':''}</span><span class="expand-val">${prob.breakdown.returnQuality?.score??0}/20</span></div>
       <div class="expand-line"><span class="expand-label">F5 · Trend Consistency (${prob.breakdown.consistency?.daysTracked??0}d tracked)</span><span class="expand-val">${prob.breakdown.consistency?.score??0}/15</span></div>
@@ -2267,7 +2336,7 @@ const AUTO_THRESHOLD=75,AUTO_MAX=5,AUTO_MAX_SEC=2,AUTO_HOLD=15,AUTO_COOL=10;
 function runAutoPilot(){
   if(!STATE.foData?.signals)return;
   const mfData=computeMFData(),mfPicks=computeMFPicks(mfData);
-  const signals=STATE.foData.signals,trends=STATE.trendsData?.trends||{};
+  const signals=STATE.foData.signals,trends=STATE.foData?.trendStats||STATE.trendsData?.trends||{};
   const candidates=new Set();
   mfPicks.forEach(p=>candidates.add(toSym(p.stock)));
   Object.keys(signals).forEach(sym=>{if(signals[sym].score>1.5)candidates.add(sym);});
@@ -2390,7 +2459,7 @@ function renderWatching(){
   if(!STATE.watchlist.size){container.innerHTML=`<div class="empty"><div class="empty-icon">👁</div>Star stocks to add to watchlist</div>`;return;}
   container.innerHTML=[...STATE.watchlist].map(stock=>{
     const sym=toSym(stock),fo=getFO(sym),price=fo?.cl||null,d1=fo?parseFloat(fo.d1):null,up=(d1??0)>=0;
-    const prob=fo?computeProbScore(stock,null,fo,STATE.trendsData?.trends?.[sym]||null):null;
+    const prob=fo?computeProbScore(stock,null,fo,STATE.foData?.trendStats?.[sym]||STATE.trendsData?.trends?.[sym]||null):null;
     return`<div class="card"><div class="card-accent amber"></div>
       <div class="card-header">
         <div class="card-title">${stock} ${livePriceChip(stock,true)}</div>
@@ -2414,9 +2483,7 @@ function renderWatching(){
 function openTrade(stock){
   const sym=toSym(stock),fo=getFO(sym);
   const mfPick=computeMFPicks(computeMFData()).find(p=>toSym(p.stock)===sym)||null;
-  const trend=STATE.trendsData?.trends?.[sym]||null;
-  const prob=computeProbScore(stock,mfPick,fo,trend);
-  const entry=fo?.cl||0;
+  const trend=STATE.foData?.trendStats?.[sym]||STATE.trendsData?.trends?.[sym]||null;
   const ts=entry>0?calcTargetSL(entry,fo,trend,prob):null;
   const capital=STATE.capital||0;
   const sizing=ts&&entry>0&&capital>0?calcPositionSize(entry,ts.sl,capital,STATE.riskPct||1.5):null;
@@ -2533,22 +2600,121 @@ function renderAnalytics(){
 }
 function renderAccuracy(){
   const c=document.getElementById('analyticsContent');
-  const bands=[{label:'P ≥75',win:84},{label:'P ≥60',win:71},{label:'All',win:62}];
-  c.innerHTML=`<div class="analytics-card"><div class="analytics-title">📊 Signal Accuracy by Probability Band</div>
-  ${bands.map(b=>`<div class="accuracy-row"><div class="accuracy-label">${b.label}</div><div class="accuracy-track"><div class="accuracy-fill" style="width:${b.win}%"></div></div><div class="accuracy-pct">${b.win}%</div></div>`).join('')}
-  <div style="margin-top:12px;font-size:.75rem;color:var(--text-muted)">${Object.keys(STATE.trendsData?.trends||{}).length} stocks tracked · ${STATE.trendsData?.daysAvailable||0} days of history</div></div>`;
+  const closed=[...STATE.trades,...(STATE.autoLog||[])].filter(t=>t.status==='closed'||t.outcome);
+  const byBand=(minP,maxP)=>{
+    const grp=closed.filter(t=>{const p=t.prob?.total||t.p||0;return p>=minP&&p<maxP;});
+    const wins=grp.filter(t=>t.outcome==='win'||t.pnl>0).length;
+    return{n:grp.length,win:grp.length?Math.round(wins/grp.length*100):null};
+  };
+  const bands=[{label:'P ≥ 80',r:byBand(80,101)},{label:'P 65–80',r:byBand(65,80)},{label:'P 50–65',r:byBand(50,65)},{label:'All trades',r:byBand(0,101)}];
+  const total=closed.length;
+  const totalWins=closed.filter(t=>t.outcome==='win'||t.pnl>0).length;
+  const avgReturn=total?+(closed.filter(t=>t.pnl!=null).reduce((a,b)=>a+b.pnl,0)/Math.max(1,closed.filter(t=>t.pnl!=null).length)).toFixed(1):null;
+
+  // 30-trade rolling win rate — sorts by close date, computes rolling window
+  const WINDOW=30;
+  const sorted=[...closed].filter(t=>t.closeDate||t.date).sort((a,b)=>(a.closeDate||a.date)>(b.closeDate||b.date)?1:-1);
+  const rollingPoints=sorted.length>=5?sorted.map((_,i)=>{
+    if(i<Math.min(WINDOW-1,4))return null; // need at least 5 trades before plotting
+    const slice=sorted.slice(Math.max(0,i-WINDOW+1),i+1);
+    const w=slice.filter(t=>t.outcome==='win'||t.pnl>0).length;
+    return{i,win:Math.round(w/slice.length*100),label:(sorted[i].closeDate||sorted[i].date||'').slice(5)};
+  }).filter(Boolean):[];
+  const chartW=320,chartH=80,pad=30;
+  const rolling50Line=`<line x1="${pad}" y1="${chartH-pad-(50/100*(chartH-pad*1.2))}" x2="${chartW-10}" y2="${chartH-pad-(50/100*(chartH-pad*1.2))}" stroke="var(--border)" stroke-dasharray="3,3" stroke-width="1"/>`;
+  let sparkSvg='';
+  if(rollingPoints.length>=2){
+    const pts=rollingPoints.map((p,i)=>{
+      const x=pad+(i/(rollingPoints.length-1))*(chartW-pad-10);
+      const y=chartH-pad-(p.win/100*(chartH-pad*1.2));
+      return`${x},${y}`;
+    }).join(' ');
+    const lastP=rollingPoints[rollingPoints.length-1];
+    const lastX=chartW-10, lastY=chartH-pad-(lastP.win/100*(chartH-pad*1.2));
+    sparkSvg=`<svg width="${chartW}" height="${chartH}" style="display:block;overflow:visible;margin:10px 0">
+      ${rolling50Line}
+      <text x="${pad-2}" y="${chartH-pad-(50/100*(chartH-pad*1.2))}" font-size="8" fill="var(--text-muted)" text-anchor="end" dominant-baseline="middle">50%</text>
+      <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>
+      <circle cx="${lastX}" cy="${lastY}" r="3" fill="var(--accent)"/>
+      <text x="${lastX+4}" y="${lastY}" font-size="9" fill="var(--accent)" dominant-baseline="middle">${lastP.win}%</text>
+      <text x="${pad}" y="${chartH-4}" font-size="8" fill="var(--text-muted)">older</text>
+      <text x="${chartW-10}" y="${chartH-4}" font-size="8" fill="var(--text-muted)" text-anchor="end">recent</text>
+    </svg>`;
+  }
+
+  c.innerHTML=`<div class="analytics-card">
+    <div class="analytics-title">📊 Signal Accuracy — from your trade history</div>
+    ${total===0?`<div style="font-size:.8rem;color:var(--text-muted);padding:12px">No closed trades yet. Log trades in the Portfolio tab to track accuracy.</div>`:`
+    <div style="display:flex;gap:16px;margin-bottom:14px;flex-wrap:wrap">
+      <div style="text-align:center"><div style="font-size:1.4rem;font-weight:800;color:var(--accent)">${Math.round(totalWins/total*100)}%</div><div style="font-size:.65rem;color:var(--text-muted)">Overall win rate</div></div>
+      <div style="text-align:center"><div style="font-size:1.4rem;font-weight:800;color:var(--text)">${total}</div><div style="font-size:.65rem;color:var(--text-muted)">Total trades</div></div>
+      ${avgReturn!=null?`<div style="text-align:center"><div style="font-size:1.4rem;font-weight:800;color:${avgReturn>=0?'var(--green)':'var(--red)'}">${avgReturn>=0?'+':''}${avgReturn}%</div><div style="font-size:.65rem;color:var(--text-muted)">Avg P&L per trade</div></div>`:''}
+    </div>
+    ${bands.filter(b=>b.r.n>0).map(b=>`<div class="accuracy-row">
+      <div class="accuracy-label">${b.label} <span style="font-size:.6rem;opacity:.6">(${b.r.n})</span></div>
+      <div class="accuracy-track"><div class="accuracy-fill" style="width:${b.r.win}%;background:${b.r.win>=65?'var(--green)':b.r.win>=50?'var(--amber)':'var(--red)'}"></div></div>
+      <div class="accuracy-pct" style="color:${b.r.win>=65?'var(--green)':b.r.win>=50?'var(--amber)':'var(--red)'}">${b.r.win}%</div>
+    </div>`).join('')}
+    ${sparkSvg?`<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
+      <div style="font-size:.7rem;font-weight:600;color:var(--text-muted);margin-bottom:2px">Rolling ${WINDOW}-trade win rate <span style="font-weight:400">(is accuracy improving?)</span></div>
+      ${sparkSvg}
+    </div>`:''}
+    `}
+  </div>`;
 }
 function renderOI(){
   const c=document.getElementById('analyticsContent');
   const signals=STATE.foData?.signals||{};
-  const rows=Object.entries(signals).filter(([,s])=>Math.abs(parseFloat(s.prem||0))>0.05&&Math.abs(s.score)>1)
-    .map(([sym,s])=>({sym,type:parseFloat(s.prem)>0&&s.score>1?'Long Buildup':'Short Buildup',prem:s.prem,d1:s.d1,score:s.score}))
-    .sort((a,b)=>Math.abs(b.score)-Math.abs(a.score)).slice(0,10);
-  c.innerHTML=`<div class="analytics-card"><div class="analytics-title">📈 OI Signals (${STATE.foData?.meta?.latestDate||'latest'})</div>
-  <table class="oi-table"><tr><th>Stock</th><th>Type</th><th>Premium</th><th>1D</th></tr>
-  ${rows.map(r=>`<tr><td style="font-weight:600">${r.sym}</td><td><span class="badge ${r.type.includes('Long')?'badge-green':'badge-red'}">${r.type}</span></td><td style="font-family:'Space Mono',monospace;font-size:.75rem">${r.prem}%</td><td style="font-family:'Space Mono',monospace;font-size:.75rem;color:${parseFloat(r.d1)>=0?'var(--green)':'var(--red)'}">${r.d1}%</td></tr>`).join('')}
-  ${!rows.length?`<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:16px">Upload F&O data to see OI signals</td></tr>`:''}
-  </table></div>`;
+  const d1Dt=STATE.foData?.meta?.date||'';
+  const rows=Object.entries(signals)
+    .filter(([,s])=>s.oi!=null||Math.abs(parseFloat(s.prem||0))>0.05)
+    .map(([sym,s])=>{
+      const d1=parseFloat(s.d1||0);
+      const oiC=s.oiChg!=null?+s.oiChg:null;
+      const hasRealOI=oiC!=null;
+      let type,cls;
+      if(hasRealOI){
+        type=d1>0&&oiC>0?'Long Buildup':d1<0&&oiC>0?'Short Buildup':d1>0&&oiC<0?'Short Covering':'Long Unwinding';
+        cls=type==='Long Buildup'?'badge-green':type==='Short Buildup'?'badge-red':type==='Short Covering'?'badge-amber':'badge-muted';
+      } else {
+        const prem=parseFloat(s.prem||0);
+        type=prem>0.05&&s.score>1?'Long Buildup (est.)':prem<-0.05&&s.score<-1?'Short Buildup (est.)':'Neutral (est.)';
+        cls=type.includes('Long')?'badge-green':type.includes('Short')?'badge-red':'badge-muted';
+      }
+      const oiLakhs=oiC!=null?(oiC/1e5).toFixed(1):null;
+      const totalOI=s.oi!=null?((+s.oi/1e7).toFixed(1)+'Cr'):null;
+      return{sym,type,cls,prem:s.prem,d1:s.d1,score:+s.score,oiLakhs,totalOI,hasRealOI};
+    })
+    .filter(r=>r.type!=='Neutral (est.)')
+    .sort((a,b)=>Math.abs(b.score)-Math.abs(a.score));
+
+  const longs=rows.filter(r=>r.type.includes('Long Buildup')).slice(0,8);
+  const shorts=rows.filter(r=>r.type.includes('Short Buildup')).slice(0,8);
+  const covers=rows.filter(r=>r.type.includes('Short Covering')).slice(0,5);
+
+  const tbl=(items,title,colr)=>!items.length?'':
+    `<div style="margin-bottom:12px">
+      <div style="font-size:.72rem;font-weight:700;color:${colr};text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px">${title} (${items.length})</div>
+      <table class="oi-table" style="width:100%">
+        <tr><th>Stock</th><th>1D</th><th>Premium</th><th>OI Chg</th><th>Total OI</th></tr>
+        ${items.map(r=>`<tr>
+          <td style="font-weight:700">${r.sym}</td>
+          <td style="font-family:'Space Mono',monospace;color:${parseFloat(r.d1)>=0?'var(--green)':'var(--red)'}">${r.d1}%</td>
+          <td style="font-family:'Space Mono',monospace">${r.prem}%</td>
+          <td style="font-family:'Space Mono',monospace;color:${r.oiLakhs>0?'var(--green)':'var(--red)'}">${r.oiLakhs!=null?(r.oiLakhs>0?'+':'')+r.oiLakhs+'L':'est.'}</td>
+          <td style="font-size:.7rem;color:var(--text-muted)">${r.totalOI||'—'}</td>
+        </tr>`).join('')}
+      </table>
+    </div>`;
+
+  c.innerHTML=`<div class="analytics-card">
+    <div class="analytics-title">📈 OI Signals — ${d1Dt||'latest'}</div>
+    <div style="font-size:.68rem;color:var(--text-muted);margin-bottom:10px">${rows.some(r=>r.hasRealOI)?'Real OI from BhavCopy_NSE_FO':'⚠ Estimated — upload BhavCopy_NSE_FO for real OI'}</div>
+    ${tbl(longs,'▲ Long Buildup','var(--green)')}
+    ${tbl(covers,'↑ Short Covering','var(--amber)')}
+    ${tbl(shorts,'▼ Short Buildup','var(--red)')}
+    ${!rows.length?`<div style="color:var(--text-muted);text-align:center;padding:16px">No OI signals — upload BhavCopy_NSE_FO + FOVOLT</div>`:''}
+  </div>`;
 }
 function renderSectorPulse(){
   const c=document.getElementById('analyticsContent');
@@ -2559,36 +2725,170 @@ function renderSectorPulse(){
 }
 function renderTopPerformers(){
   const c=document.getElementById('analyticsContent');
-  const trends=STATE.trendsData?.trends||{};
-  const tops=Object.entries(trends).filter(([,t])=>t.periodReturn!=null).sort(([,a],[,b])=>b.periodReturn-a.periodReturn).slice(0,10);
-  c.innerHTML=`<div class="analytics-card"><div class="analytics-title">🏆 Top Performers (period return)</div>
-  ${tops.map(([sym,t],i)=>`<div class="leaderboard-row"><div class="rank">${i+1}</div><div style="flex:1;font-weight:600">${sym}</div><span class="badge ${t.positionalStrength==='Strong'?'badge-green':'badge-sector'}">${t.positionalStrength}</span><div class="leaderboard-move" style="color:${t.periodReturn>=0?'var(--green)':'var(--red)'}">${t.periodReturn>=0?'+':''}${t.periodReturn.toFixed(1)}%</div></div>`).join('')}
-  ${!tops.length?`<div class="empty">Upload 3+ days of data to see performers</div>`:''}</div>`;
+  // Use trendStats from uploaded FOVOLTs — no Vercel needed
+  const ts=STATE.foData?.trendStats||{};
+  const syms=Object.keys(ts).filter(sym=>ts[sym].daysTracked>=3);
+  if(!syms.length){
+    c.innerHTML=`<div class="analytics-card"><div class="analytics-title">🏆 Top & Bottom Performers</div>
+    <div style="font-size:.8rem;color:var(--text-muted);padding:12px">Upload 3+ FOVOLT files to see multi-day score trends.<br>Current: ${Object.keys(ts).length} stocks, ${Object.keys(ts).length?Math.max(...Object.values(ts).map(t=>t.daysTracked)):0} days max.</div></div>`;
+    return;
+  }
+  // Compute period return = avg score of last 3 days vs avg of first 3 days in series
+  const perf=syms.map(sym=>{
+    const t=ts[sym];
+    const sc=t.scoreSeries||[];
+    const first=sc.slice(0,3).map(e=>e.score);
+    const last=sc.slice(-3).map(e=>e.score);
+    const firstAvg=first.reduce((a,b)=>a+b,0)/Math.max(1,first.length);
+    const lastAvg=last.reduce((a,b)=>a+b,0)/Math.max(1,last.length);
+    const delta=+(lastAvg-firstAvg).toFixed(2);
+    const fo=STATE.foData?.signals?.[sym];
+    return{sym,delta,days:t.daysTracked,consist:t.consistencyPct,momentum:t.momentum,pos:t.positionalStrength,latestScore:lastAvg,fo};
+  }).sort((a,b)=>b.delta-a.delta);
+
+  const tops=perf.slice(0,8), bots=perf.slice(-5).reverse();
+
+  const row=(r,i,isTop)=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--surface2);border-radius:5px;border:1px solid var(--border);margin-bottom:3px">
+    <div style="font-size:.75rem;color:var(--text-muted);width:16px">${i+1}</div>
+    <div style="flex:1;font-weight:700;font-size:.82rem">${r.sym}</div>
+    <span style="font-size:.65rem;color:var(--text-muted)">${r.days}d</span>
+    <span style="font-size:.65rem;color:${r.pos==='Strong'?'var(--green)':'var(--text-muted)'}">${r.consist}%</span>
+    <span style="font-size:.65rem;font-style:italic;color:${r.momentum==='improving'?'var(--green)':r.momentum==='declining'?'var(--red)':'var(--text-muted)'}">${r.momentum}</span>
+    <div style="font-family:'Space Mono',monospace;font-weight:700;font-size:.8rem;min-width:44px;text-align:right;color:${r.delta>=0?'var(--green)':'var(--red)'}">${r.delta>=0?'+':''}${r.delta.toFixed(2)}</div>
+  </div>`;
+
+  c.innerHTML=`<div class="analytics-card">
+    <div class="analytics-title">🏆 Score Momentum — ${Object.keys(ts).length} stocks · up to ${Math.max(...Object.values(ts).map(t=>t.daysTracked))} days</div>
+    <div style="font-size:.68rem;color:var(--text-muted);margin-bottom:10px">Score delta = recent 3-day avg vs earliest 3-day avg. From ${Object.keys(ts).length} stocks across uploaded FOVOLT files.</div>
+    <div style="font-size:.72rem;font-weight:700;color:var(--green);margin-bottom:5px;text-transform:uppercase;letter-spacing:.05em">▲ Improving Score</div>
+    ${tops.map((r,i)=>row(r,i,true)).join('')}
+    <div style="font-size:.72rem;font-weight:700;color:var(--red);margin:10px 0 5px;text-transform:uppercase;letter-spacing:.05em">▼ Declining Score</div>
+    ${bots.map((r,i)=>row(r,i,false)).join('')}
+  </div>`;
 }
 function renderCalendar(){
   const c=document.getElementById('analyticsContent');
-  const dates=new Set(STATE.foData?.availableDates||[]),now=new Date(),y=now.getFullYear(),m=now.getMonth();
+  // availableDates from workflow OR derive from trendStats scoreSeries dates
+  let dateSet=new Set(STATE.foData?.availableDates||[]);
+  // Supplement from trendStats — aggregate all unique dates across all stocks
+  const ts=STATE.foData?.trendStats||{};
+  Object.values(ts).forEach(t=>(t.scoreSeries||[]).forEach(e=>e.date&&dateSet.add(e.date)));
+  // Also add fiiDiiHistory dates
+  (STATE.foData?.fiiDiiHistory||[]).forEach(r=>r.date&&dateSet.add(r.date));
+  // And deliveryHistory dates
+  Object.keys(STATE.foData?.deliveryHistory||{}).forEach(d=>dateSet.add(d));
+
+  const now=new Date(); const y=now.getFullYear(),m=now.getMonth();
   const daysInMonth=new Date(y,m+1,0).getDate(),firstDow=new Date(y,m,1).getDay();
   const days=[];
-  for(let d=1;d<=daysInMonth;d++){const date=new Date(y,m,d),dow=date.getDay(),iso=date.toISOString().split('T')[0],cls=dow===0||dow===6?'holiday':dates.has(iso)?'uploaded':date<=now?'missing':'holiday';days.push({d,cls});}
-  c.innerHTML=`<div class="analytics-card"><div class="analytics-title">📅 Upload Calendar — ${now.toLocaleDateString('en-IN',{month:'long',year:'numeric'})}</div>
-  <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><span class="streak">🔥 ${dates.size} uploads</span></div>
-  <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px">
-  ${'SMTWTFS'.split('').map(h=>`<div style="text-align:center;font-size:.6rem;color:var(--text-muted);padding:2px">${h}</div>`).join('')}
-  ${Array(firstDow).fill(0).map(()=>`<div></div>`).join('')}
-  ${days.map(d=>`<div class="cal-day ${d.cls}">${d.d}</div>`).join('')}
-  </div>
-  <div style="display:flex;gap:12px;margin-top:10px;font-size:.68rem;color:var(--text-muted)"><span><span class="fresh-dot fresh-green"></span>Uploaded</span><span><span class="fresh-dot fresh-red"></span>Missing</span><span><span class="fresh-dot" style="background:var(--border)"></span>Holiday</span></div></div>`;
+  for(let d=1;d<=daysInMonth;d++){
+    const date=new Date(y,m,d),dow=date.getDay();
+    const iso=date.toISOString().split('T')[0];
+    const cls=dow===0||dow===6?'holiday':dateSet.has(iso)?'uploaded':date<=now?'missing':'holiday';
+    days.push({d,cls,iso});
+  }
+  const streak=days.filter(d=>d.cls==='uploaded').length;
+  const missed=days.filter(d=>d.cls==='missing').length;
+  // Data sources summary
+  const fovoltDates=[...new Set(Object.values(ts).flatMap(t=>(t.scoreSeries||[]).map(e=>e.date)))].filter(Boolean).sort();
+  const fiiDates=(STATE.foData?.fiiDiiHistory||[]).filter(r=>r.date).map(r=>r.date).sort();
+  const delDates=Object.keys(STATE.foData?.deliveryHistory||{}).sort();
+
+  c.innerHTML=`<div class="analytics-card">
+    <div class="analytics-title">📅 Data Calendar — ${now.toLocaleDateString('en-IN',{month:'long',year:'numeric'})}</div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+      <span class="streak">🔥 ${streak} days uploaded</span>
+      ${missed?`<span style="font-size:.72rem;color:var(--red)">⚠ ${missed} trading days missing</span>`:''}
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:10px">
+      ${'SMTWTFS'.split('').map(h=>`<div style="text-align:center;font-size:.6rem;color:var(--text-muted);padding:2px">${h}</div>`).join('')}
+      ${Array(firstDow).fill(0).map(()=>`<div></div>`).join('')}
+      ${days.map(d=>`<div class="cal-day ${d.cls}" title="${d.iso}">${d.d}</div>`).join('')}
+    </div>
+    <div style="display:flex;gap:12px;margin-bottom:10px;font-size:.68rem">
+      <span><span class="fresh-dot fresh-green"></span>Uploaded</span>
+      <span><span class="fresh-dot fresh-red"></span>Missing</span>
+      <span><span class="fresh-dot" style="background:var(--border)"></span>Holiday</span>
+    </div>
+    <div style="font-size:.7rem;color:var(--text-muted);border-top:1px solid var(--border);padding-top:8px;display:grid;gap:3px">
+      <div><strong style="color:var(--text)">FOVOLT:</strong> ${fovoltDates.length} days (${fovoltDates[0]?.slice(5)||'—'} → ${fovoltDates[fovoltDates.length-1]?.slice(5)||'—'})</div>
+      <div><strong style="color:var(--text)">FII-DII:</strong> ${fiiDates.length} days (${fiiDates[0]?.slice(5)||'—'} → ${fiiDates[fiiDates.length-1]?.slice(5)||'—'})</div>
+      <div><strong style="color:var(--text)">Delivery:</strong> ${delDates.length} days (${delDates[0]?.slice(5)||'—'} → ${delDates[delDates.length-1]?.slice(5)||'—'})</div>
+      ${STATE.foData?.meta?.workflowCompletedAt?`<div><strong style="color:var(--text)">Last workflow run:</strong> ${STATE.foData.meta.workflowCompletedAt.replace('T',' ').replace('Z',' UTC')}</div>`:''}
+    </div>
+  </div>`;
 }
 function renderCorrelation(){
   const c=document.getElementById('analyticsContent');
   const openSyms=[...STATE.autoLog.filter(t=>t.status==='open').map(t=>t.sym),...STATE.trades.filter(t=>t.status==='open').map(t=>toSym(t.stock))];
-  const PAIRS=[['ICICIBANK','HDFCBANK',.91],['TCS','INFY',.88],['RELIANCE','BHARTIARTL',.61],['SBIN','AXISBANK',.85],['SUNPHARMA','CIPLA',.72]];
-  const relevant=PAIRS.filter(([a,b])=>openSyms.includes(a)||openSyms.includes(b));
-  c.innerHTML=`<div class="analytics-card"><div class="analytics-title">🔗 Correlation — Position Overlap</div>
-  <div style="font-size:.75rem;color:var(--text-muted);margin-bottom:10px">High correlation = similar risk. Avoid holding both simultaneously.</div>
-  ${relevant.map(([a,b,score])=>`<div class="corr-pair"><span style="font-weight:600">${a} × ${b}</span><span class="corr-score ${score>=0.8?'corr-high':'corr-med'}">${score.toFixed(2)}</span></div>`).join('')}
-  ${!relevant.length?`<div style="font-size:.8rem;color:var(--text-muted)">No correlated pairs in current open positions</div>`:''}</div>`;
+  const ts=STATE.foData?.trendStats||{};
+
+  // Pearson correlation between two score series (signal correlation, not price)
+  function scorePearson(symA,symB){
+    const sA=(ts[symA]?.scoreSeries||[]);
+    const sB=(ts[symB]?.scoreSeries||[]);
+    if(sA.length<4||sB.length<4)return null;
+    const mapB=Object.fromEntries(sB.map(e=>[e.date,e.score]));
+    const pairs=sA.filter(e=>mapB[e.date]!=null).map(e=>[e.score,mapB[e.date]]);
+    if(pairs.length<4)return null;
+    const n=pairs.length;
+    const mA=pairs.reduce((a,b)=>a+b[0],0)/n, mB=pairs.reduce((a,b)=>a+b[1],0)/n;
+    const num=pairs.reduce((a,b)=>a+(b[0]-mA)*(b[1]-mB),0);
+    const dA=Math.sqrt(pairs.reduce((a,b)=>a+(b[0]-mA)**2,0));
+    const dB=Math.sqrt(pairs.reduce((a,b)=>a+(b[1]-mB)**2,0));
+    if(!dA||!dB)return null;
+    return+(num/(dA*dB)).toFixed(2);
+  }
+
+  const symsWithSeries=Object.keys(ts).filter(s=>(ts[s]?.scoreSeries||[]).length>=4);
+  const openSet=new Set(openSyms);
+  const pairs=[], seen=new Set();
+
+  // Cross all open positions with each other
+  for(let i=0;i<openSyms.length;i++){
+    for(let j=i+1;j<openSyms.length;j++){
+      const a=openSyms[i],b=openSyms[j];
+      const k=[a,b].sort().join(':');
+      if(seen.has(k))continue; seen.add(k);
+      const r=scorePearson(a,b);
+      if(r!==null)pairs.push([a,b,r,'open-open']);
+    }
+  }
+  // Cross open positions with all tracked stocks (hidden exposure discovery)
+  openSyms.forEach(os=>{
+    symsWithSeries.filter(s=>s!==os&&!openSet.has(s)).forEach(s=>{
+      const k=[os,s].sort().join(':');
+      if(seen.has(k))return; seen.add(k);
+      const r=scorePearson(os,s);
+      if(r!==null&&r>=0.78)pairs.push([os,s,r,'open-watch']);
+    });
+  });
+
+  pairs.sort((a,b)=>(b[2]??0)-(a[2]??0));
+  const hasData=symsWithSeries.length>=2;
+  const high=pairs.filter(p=>p[2]>=0.75);
+  const med=pairs.filter(p=>p[2]>=0.50&&p[2]<0.75);
+
+  // Fallback static reference pairs (shown only when no score-series data)
+  const STATIC=[['ICICIBANK','HDFCBANK'],['TCS','INFY'],['SBIN','AXISBANK'],['SUNPHARMA','CIPLA'],['RELIANCE','BHARTIARTL']];
+  const staticRelevant=STATIC.filter(([a,b])=>openSet.has(a)||openSet.has(b));
+
+  c.innerHTML=`<div class="analytics-card">
+  <div class="analytics-title">🔗 Correlation — Signal Score Co-movement</div>
+  <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:8px">
+    ${hasData
+      ?`Live signal correlation from ${symsWithSeries.length} stocks × ${ts[symsWithSeries[0]]?.scoreSeries?.length||0} days of FOVOLT score series. High = similar F&O exposure — avoid doubling up.`
+      :'⚠ Upload 4+ FOVOLT files to compute live signal correlations. Showing static reference pairs below.'}
+  </div>
+  ${openSyms.length<2&&hasData?`<div style="font-size:.78rem;color:var(--text-muted);padding:6px 0">Add 2+ open trades in Portfolio to see correlation between your holdings.</div>`:''}
+  ${high.length?`<div style="font-size:.68rem;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px">⚠ High signal correlation (≥0.75) — double-exposure risk</div>
+    ${high.map(([a,b,r,src])=>`<div class="corr-pair"><span style="font-weight:600">${a} × ${b}</span><span style="font-size:.62rem;color:var(--text-muted);flex:1;padding-left:6px">${src==='open-watch'?'(not held — similar signal pattern)':''}</span><span class="corr-score ${r>=0.85?'corr-high':'corr-med'}">${r.toFixed(2)}</span></div>`).join('')}`:''}
+  ${med.length?`<div style="font-size:.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin:8px 0 5px">Moderate (0.50–0.75)</div>
+    ${med.map(([a,b,r])=>`<div class="corr-pair"><span style="font-weight:600">${a} × ${b}</span><span class="corr-score corr-low">${r.toFixed(2)}</span></div>`).join('')}`:''}
+  ${!hasData&&staticRelevant.length?`<div style="font-size:.68rem;font-weight:700;color:var(--text-muted);margin-bottom:5px">Static reference pairs (historical price correlation)</div>${staticRelevant.map(([a,b])=>`<div class="corr-pair"><span style="font-weight:600">${a} × ${b}</span><span class="corr-score corr-med" title="Historical estimate — upload FOVOLT files for live signal correlation">est.</span></div>`).join('')}`:''}
+  ${hasData&&!pairs.length&&openSet.size>=2?`<div style="font-size:.8rem;color:var(--green);padding:6px 0">✓ No significant signal correlation found — positions are well diversified.</div>`:''}
+  ${!openSet.size?`<div style="font-size:.8rem;color:var(--text-muted)">No open positions. Log trades in Portfolio to see overlap analysis.</div>`:''}
+  </div>`;
 }
 
 /* ═══════════════════════════════════════════
@@ -2637,132 +2937,143 @@ function toggleExpand(id,btn){
    FRESHNESS + STALE BANNER
 ═══════════════════════════════════════════ */
 function updateFreshness(){
-  if(!STATE.foData)return;
-  const meta=STATE.foData.meta||{};
-  const isManual=meta.source==='manual_upload'||STATE.foData?.fiiDii?.source==='manual_upload';
+  if(!STATE.foData) return;
+  const meta = STATE.foData.meta || {};
+  const isManual = meta.source === 'manual_upload' || STATE.foData?.fiiDii?.source === 'manual_upload';
 
-  // Resolve data date strictly from meta.date (ISO YYYY-MM-DD, sourced from TradDt/BizDt inside the file).
-  // meta.latestDate is a formatted string like "05-May-2026" — parse it only as a fallback.
-  // NEVER use Date.now() / utcnow() here — that was the root cause of the stale-date bug.
-  let rawDate='';
-  if(meta.date&&/^\d{4}-\d{2}-\d{2}/.test(meta.date)){
-    rawDate=meta.date;           // ISO YYYY-MM-DD from TradDt/BizDt — most reliable
-  } else if(meta.latestDate){
-    // Formatted string e.g. "05-May-2026" — parse carefully
-    const parts=meta.latestDate.match(/^(\d{2})-([A-Za-z]{3})-(\d{4})$/);
-    if(parts){
-      const months={Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
-      const mo=months[parts[2]];
-      if(mo!==undefined){
-        const dt=new Date(Date.UTC(+parts[3],mo,+parts[1]));
-        rawDate=dt.toISOString().slice(0,10);
-      }
-    }
-  } else if(STATE.foData.date){
-    rawDate=STATE.foData.date;
-  }
-  const dataDate=rawDate?new Date(rawDate+'T00:00:00Z'):null;
-
-  // Display date label in freshness strip
-  const dateLabel=dataDate?dataDate.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'2-digit'}):'—';
-  const foDateEl=document.getElementById('foDate');
-  if(foDateEl){const _td=STATE.foData?.meta?.trendDays||0;foDateEl.textContent=dateLabel+(isManual?' 📁':'')+(_td>1?' · '+_td+'d trend':'');}
-
-  // ── Trading-date staleness (not wall-clock hours) ─────────────────
-  // Logic: data is "current" if it covers the latest completed trading day.
-  // A trading day is Mon–Fri (NSE). Market closes at 15:30 IST = 10:00 UTC.
-  // FIX: We do NOT roll back to "yesterday" just because it's before 10:00 UTC
-  //      if today IS a weekday — that was causing same-day uploads to show as
-  //      stale until 10:00 UTC. Instead we only treat today as "not yet done"
-  //      if market hasn't closed yet (before 10:00 UTC on a weekday).
-  //      If the data date matches the resolved latest trading date, it's fresh.
+  // ── Helpers (defined first, used below) ───────────────────────────
   function latestTradingDate(){
-    const now=new Date();
-    const d=new Date(now);
-    const isWeekday=d.getUTCDay()!==0&&d.getUTCDay()!==6;
-    // Market closed (>=10:00 UTC) or weekend: today's session is done (or no session)
-    // Market not yet closed (<10:00 UTC on weekday): latest complete session was yesterday
-    if(isWeekday&&now.getUTCHours()<10){
-      // Before market close today — latest complete session is the previous trading day
+    const now = new Date(), d = new Date(now);
+    if(d.getUTCDay()!==0 && d.getUTCDay()!==6 && now.getUTCHours()<10)
       d.setUTCDate(d.getUTCDate()-1);
-    }
-    // Roll back over weekends
-    while(d.getUTCDay()===0||d.getUTCDay()===6) d.setUTCDate(d.getUTCDate()-1);
+    while(d.getUTCDay()===0 || d.getUTCDay()===6) d.setUTCDate(d.getUTCDate()-1);
     d.setUTCHours(0,0,0,0);
     return d;
   }
-
-  function tradingDaysBetween(from,to){
-    // Count Mon-Fri days between two dates (exclusive of from, inclusive of to)
+  function tradingDaysBetween(from, to){
     if(!from||!to) return 99;
     let count=0;
     const cur=new Date(from); cur.setUTCDate(cur.getUTCDate()+1);
-    while(cur<=to){
-      if(cur.getDay()!==0&&cur.getDay()!==6) count++;
-      cur.setUTCDate(cur.getUTCDate()+1);
-    }
+    while(cur<=to){ if(cur.getUTCDay()!==0&&cur.getUTCDay()!==6) count++; cur.setUTCDate(cur.getUTCDate()+1); }
     return count;
   }
-
-  const latestTD=latestTradingDate();
-  const dataDt=dataDate?(new Date(dataDate.toISOString().slice(0,10))):null;
-  if(dataDt) dataDt.setUTCHours(0,0,0,0);
-
-  // missedDays = how many trading days the data is behind
-  const missedDays=dataDt?tradingDaysBetween(dataDt,latestTD):99;
-
-  // FII-DII date tracking: history[] > meta.fiiDiiDate > fiiDii.date
-  const _h=STATE.foData?.fiiDiiHistory||[];
-  const _sh=[..._h].filter(r=>r.date).sort((a,b)=>a.date>b.date?1:-1);
-  const _fiso=_sh.length?_sh[_sh.length-1].date:(STATE.foData?.meta?.fiiDiiDate||STATE.foData?.fiiDii?.date||null);
-  const fiiDiiDt=_fiso?new Date(_fiso+'T00:00:00Z'):null;
-  const fiiDiiMissed=fiiDiiDt?tradingDaysBetween(fiiDiiDt,latestTD):99;
-  const fiiDiiLabel=fiiDiiDt?fiiDiiDt.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'2-digit'}):'no data';
-  // Update trends dot
-  const _tdot=document.getElementById('trendsDot'),_tlbl=document.getElementById('trendsLabel');
-  if(_tdot&&_tlbl){
-    _tdot.className='fresh-dot '+(_sh.length>=3?'fresh-green':_sh.length>=1?'fresh-amber':'fresh-red');
-    _tlbl.textContent=_sh.length>=1?_sh.length+'d':'—';
+  function fmtDate(isoStr){
+    if(!isoStr) return '—';
+    return new Date(isoStr+'T00:00:00Z').toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'2-digit'});
   }
 
+  const latestTD = latestTradingDate();
 
-  // Dot colour in freshness strip: green if 0 missed, amber if 1, red if 2+
-  const dot=document.getElementById('foDot');
-  if(dot) dot.className='fresh-dot '+(missedDays<=0||(missedDays===1&&isManual)?'fresh-green':missedDays===1?'fresh-amber':'fresh-red');
+  // ── Resolve FOVOLT data date ───────────────────────────────────────
+  let rawDate = '';
+  if(meta.date && /^\d{4}-\d{2}-\d{2}/.test(meta.date)){
+    rawDate = meta.date;
+  } else if(meta.latestDate){
+    const p = meta.latestDate.match(/^(\d{2})-([A-Za-z]{3})-(\d{4})$/);
+    if(p){
+      const mo={Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11}[p[2]];
+      if(mo!=null) rawDate = new Date(Date.UTC(+p[3],mo,+p[1])).toISOString().slice(0,10);
+    }
+  }
+  const dataDate  = rawDate ? new Date(rawDate+'T00:00:00Z') : null;
+  const dateLabel = dataDate ? fmtDate(rawDate) : '—';
+  const dataDt    = dataDate ? new Date(dataDate) : null;
+  if(dataDt) dataDt.setUTCHours(0,0,0,0);
+  const missedDays = dataDt ? tradingDaysBetween(dataDt, latestTD) : 99;
 
+  // ── Resolve FII-DII date ───────────────────────────────────────────
+  const _h    = STATE.foData?.fiiDiiHistory || [];
+  const _sh   = [..._h].filter(r=>r.date).sort((a,b)=>a.date>b.date?1:-1);
+  const _fiso = _sh.length ? _sh[_sh.length-1].date : (meta.fiiDiiDate || STATE.foData?.fiiDii?.date || null);
+  const fiiDiiDt     = _fiso ? new Date(_fiso+'T00:00:00Z') : null;
+  const fiiDiiMissed = fiiDiiDt ? tradingDaysBetween(fiiDiiDt, latestTD) : 99;
+  const fiiDiiLabel  = fmtDate(_fiso);
 
-  // tLabel/tDot updated in banner section below after fiiDiiMissed is computed
-  const tLabel=document.getElementById('trendsLabel'),tDot=document.getElementById('trendsDot');
+  // ── Resolve Delivery date ──────────────────────────────────────────
+  const delDates     = Object.keys(STATE.foData?.deliveryHistory||{}).sort();
+  const latestDelIso = delDates[delDates.length-1] || null;
 
-  // ── Banner ────────────────────────────────────────────────────────
-  let banner=document.getElementById('staleBanner');
+  // ── Helper: update one freshness chip ─────────────────────────────
+  function setChip(dotId, lblId, isoDate, staleDays, suffix){
+    const dot = document.getElementById(dotId);
+    const lbl = document.getElementById(lblId);
+    if(!dot||!lbl) return;
+    if(!isoDate){ dot.className='fresh-dot fresh-red'; lbl.textContent='no data'; return; }
+    const stale = tradingDaysBetween(new Date(isoDate+'T00:00:00Z'), latestTD);
+    dot.className = 'fresh-dot ' + (stale<=1?'fresh-green':stale<=3?'fresh-amber':'fresh-red');
+    lbl.textContent = fmtDate(isoDate) + (suffix||'');
+  }
+
+  // ── Update freshness strip chips ───────────────────────────────────
+  const td = meta.trendDays || 0;
+  setChip('foDot',    'foDate',  rawDate,  1, (isManual?' 📁':'') + (td>1?' · '+td+'d':''));
+  setChip('fiiDot',   'fiiDate', _fiso,    1, ' ('+(_sh.length||0)+'d)');
+  setChip('delDot',   'delDate', latestDelIso, 1, ' ('+delDates.length+'d)');
+
+  // Trends chip — driven by fiiDiiHistory depth (proxy for data richness)
+  const trendsDot = document.getElementById('trendsDot');
+  const trendsLbl = document.getElementById('trendsLabel');
+  if(trendsDot && trendsLbl){
+    const dn = _sh.length;
+    trendsDot.className = 'fresh-dot ' + (dn>=5?'fresh-green':dn>=2?'fresh-amber':'fresh-red');
+    trendsLbl.textContent = dn>=1 ? dn+'d of history' : 'no data';
+  }
+
+  // F&O dot (legacy id — keep in sync)
+  const foDot = document.getElementById('foDot');
+  if(foDot) foDot.className = 'fresh-dot ' + (missedDays<=1?'fresh-green':missedDays<=3?'fresh-amber':'fresh-red');
+
+  // Workflow run time badge
+  const wfBadge = document.getElementById('workflowBadge');
+  if(wfBadge && meta.workflowCompletedAt){
+    const wt = new Date(meta.workflowCompletedAt);
+    wfBadge.textContent = 'Run: ' + wt.toLocaleDateString('en-IN',{day:'numeric',month:'short'})
+      + ' ' + wt.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:false}) + ' UTC';
+  }
+
+  // foDateEl (used in other places)
+  const foDateEl = document.getElementById('foDate');
+  if(foDateEl) foDateEl.textContent = dateLabel + (isManual?' 📁':'') + (td>1?' · '+td+'d':'');
+
+  // ── Staleness banner ──────────────────────────────────────────────
+  let banner = document.getElementById('staleBanner');
   if(!banner){
-    banner=document.createElement('div');
-    banner.id='staleBanner';
-    banner.style.cssText='padding:6px 16px;font-size:.75rem;font-weight:600;text-align:center;transition:background .3s;';
-    const strip=document.querySelector('.freshness-strip');
+    banner = document.createElement('div');
+    banner.id = 'staleBanner';
+    banner.style.cssText = 'padding:6px 16px;font-size:.75rem;font-weight:600;text-align:center;transition:background .3s;';
+    const strip = document.querySelector('.freshness-strip');
     if(strip) strip.after(banner);
   }
 
-  const foStale=missedDays>1, fiiStale=fiiDiiMissed>1;
-  if(!dataDate&&fiiDiiMissed===99){
-    banner.style.background='rgba(255,184,48,.08)';banner.style.color='var(--amber)';
-    banner.textContent='No F&O or FII-DII data — use the Upload button or push CSVs to data/uploads/';
-  } else if(!foStale&&!fiiStale){
-    const src=isManual?'browser upload':'auto-fetch';
-    banner.style.background='rgba(0,229,153,.06)';banner.style.color='var(--green)';
+  const foStale  = missedDays > 1;
+  const fiiStale = fiiDiiMissed > 1;
+
+  if(!rawDate && fiiDiiMissed===99){
+    banner.style.background='rgba(255,184,48,.08)'; banner.style.color='var(--amber)';
+    banner.textContent='No data — push 4 CSV files to data/uploads/ on GitHub';
+  } else if(!foStale && !fiiStale){
+    const src = isManual ? 'manual upload' : 'auto-fetch';
+    banner.style.background='rgba(0,229,153,.06)'; banner.style.color='var(--green)';
     banner.textContent=`✓ F&O ${dateLabel} · FII/DII ${fiiDiiLabel} · ${src}`;
-  } else if(foStale&&fiiStale){
-    const urg=missedDays>=3||fiiDiiMissed>=3;
-    banner.style.background=urg?'rgba(255,69,96,.1)':'rgba(255,184,48,.08)';
-    banner.style.color=urg?'var(--red)':'var(--amber)';
-    banner.textContent=`${urg?"":"⚠ "}FOVOLT ${dateLabel} (${missedDays}d) · FII/DII ${fiiDiiLabel} (${fiiDiiMissed}d) — upload both CSVs`;
+  } else if(foStale && fiiStale){
+    const urg = missedDays>=3 || fiiDiiMissed>=3;
+    banner.style.background = urg?'rgba(255,69,96,.1)':'rgba(255,184,48,.08)';
+    banner.style.color      = urg?'var(--red)':'var(--amber)';
+    banner.textContent = `${urg?'🔴 ':'⚠ '}FOVOLT ${dateLabel} (${missedDays}d) · FII/DII ${fiiDiiLabel} (${fiiDiiMissed}d) — upload both CSVs`;
   } else if(foStale){
-    banner.style.background='rgba(255,184,48,.08)';banner.style.color='var(--amber)';
+    banner.style.background='rgba(255,184,48,.08)'; banner.style.color='var(--amber)';
     banner.textContent=`⚠ FOVOLT ${missedDays}d old (${dateLabel}) · FII/DII current (${fiiDiiLabel}) — upload FOVOLT`;
   } else {
-    banner.style.background='rgba(255,184,48,.08)';banner.style.color='var(--amber)';
+    banner.style.background='rgba(255,184,48,.08)'; banner.style.color='var(--amber)';
     banner.textContent=`⚠ FII/DII ${fiiDiiMissed}d old (${fiiDiiLabel}) · F&O current (${dateLabel}) — upload fii-dii CSV`;
+  }
+
+  // ── dataAgeBadge ──────────────────────────────────────────────────
+  const el = document.getElementById('dataAgeBadge');
+  if(el){
+    if(missedDays>=3||fiiDiiMissed>=3){el.textContent='⚠ Stale data';el.style.color='var(--red)';}
+    else if(missedDays>=2||fiiDiiMissed>=2){el.textContent='⏱ Data 1-2 days old';el.style.color='var(--amber)';}
+    else{el.textContent='';el.style.color='';}
   }
 }
 
@@ -2877,8 +3188,9 @@ async function fetchFOData(forceRemote=false){
           updateFreshness();return;
         }
         STATE.foData=remoteData;
+        _mfCache.date=null;
         _rankCache.date=null;
-        updateFreshness();updateFoDataBadge();renderNiftyFromFOVOLT();renderMarket();renderIntelligence();renderPicks();checkExitSignals();
+        updateFreshness();updateFoDataBadge();renderNiftyFromFOVOLT();renderMarket();renderIntelligence();renderPicks();checkExitSignals();if(STATE.activeTab==='guide')renderGuide();
         return;
       }
     }
@@ -3114,7 +3426,10 @@ function renderIntelInsider(){
 /* ═══════════════════════════════════════════
    #3 PROMOTER PLEDGE ALERTS (in ranking cards)
 ═══════════════════════════════════════════ */
-// Pledge data — fetched via workflow from BSE shareholding pattern
+// Pledge data — as of Q3 FY2024 BSE shareholding patterns.
+// WARNING: pledge levels change quarterly. This data may be stale.
+// Either refresh quarterly via NSE bulk pledge CSV, or treat as indicative only.
+const PLEDGE_DATA_AS_OF = 'Q3 FY2024';
 const PLEDGE_DATA = {
   'ADANIPORTS':42,'ADANIENT':35,'ADANIGREEN':68,'ADANIPOWER':51,
   'VEDL':28,'JSWSTEEL':18,'BHARTIARTI':0,'ICICIBANK':0,'HDFCBANK':0,
@@ -3124,8 +3439,9 @@ function getPledgePct(sym){return PLEDGE_DATA[sym]??null;}
 function pledgeFlag(sym,msBuySignal){
   const pct=getPledgePct(sym);
   if(pct===null||pct<10)return'';
-  if(msBuySignal&&pct>20)return`<span class="pledge-flag" title="Promoter pledge ${pct}% — MF buying while promoter is pledging shares. Monitor carefully.">⚠ Pledge ${pct}%</span>`;
-  if(pct>30)return`<span class="pledge-flag">⚠ Pledge ${pct}%</span>`;
+  const staleNote=` title="Pledge ${pct}% — data as of ${PLEDGE_DATA_AS_OF}, may have changed"`;
+  if(msBuySignal&&pct>20)return`<span class="pledge-flag"${staleNote}>⚠ Pledge ${pct}% <span style="font-size:.55rem;opacity:.7">(${PLEDGE_DATA_AS_OF})</span></span>`;
+  if(pct>30)return`<span class="pledge-flag"${staleNote}>⚠ Pledge ${pct}% <span style="font-size:.55rem;opacity:.7">(${PLEDGE_DATA_AS_OF})</span></span>`;
   return'';
 }
 
@@ -3513,14 +3829,28 @@ function ingestFoDelivery(){
 
 // Delivery conviction score 0-100 (pure computation, no I/O)
 function calcDelScore(sym){
-  const arr=DEL_HISTORY[sym]||[];
-  if(!arr.length)return 0;
-  const last5=arr.slice(-5);
+  // Build history: deliveryHistory (from JSON, multi-day) + DEL_HISTORY (session)
+  const jsonHist=STATE.foData?.deliveryHistory||{};
+  const combined=[];
+  // Add JSON delivery history entries for this sym
+  Object.entries(jsonHist).sort(([a],[b])=>a>b?1:-1).forEach(([date,dayData])=>{
+    const dp=dayData[sym];
+    if(dp!=null) combined.push({date,delPct:+dp});
+  });
+  // Merge session DEL_HISTORY (may have today's data not yet in JSON)
+  (DEL_HISTORY[sym]||[]).forEach(entry=>{
+    if(!combined.find(c=>c.date===entry.date)) combined.push(entry);
+  });
+  combined.sort((a,b)=>a.date>b.date?1:-1);
+
+  if(!combined.length) return 0;
+  const last5=combined.slice(-5);
   const avgDel=last5.reduce((s,d)=>s+d.delPct,0)/last5.length;
   const avgScore=Math.min(40,Math.round(avgDel*0.55));
-  let consec=0;for(let i=arr.length-1;i>=0&&arr[i].delPct>=60;i--)consec++;
+  let consec=0;
+  for(let i=combined.length-1;i>=0&&combined[i].delPct>=60;i--) consec++;
   const consecScore=Math.min(30,consec*8);
-  const s10=arr.slice(-10);
+  const s10=combined.slice(-10);
   let slopeScore=10;
   if(s10.length>=3){
     const n=s10.length,my=s10.reduce((a,b)=>a+b.delPct,0)/n,mx=(n-1)/2;
@@ -3528,7 +3858,7 @@ function calcDelScore(sym){
     const den=s10.reduce((s,_,i)=>s+(i-mx)**2,0)||1;
     slopeScore=Math.min(20,Math.max(0,Math.round((num/den)*3+10)));
   }
-  const todayDel=(arr[arr.length-1]?.delPct||0);
+  const todayDel=combined[combined.length-1]?.delPct||0;
   const todayScore=todayDel>=75?10:todayDel>=65?7:todayDel>=55?4:0;
   return Math.min(100,avgScore+consecScore+slopeScore+todayScore);
 }
@@ -3537,7 +3867,6 @@ function calcDelScore(sym){
 // Data flows via GitHub Actions → foData.json → ingestFoDelivery().
 // This function is intentionally a no-op to prevent page freezes.
 function fetchLiveDelivery(){return Promise.resolve();}
-
 if(!STATE.delTab)STATE.delTab='spikes';
 
 function renderDeliverySpikes(){
@@ -3756,8 +4085,7 @@ async function fetchPCRData(){
 function renderDigestPanel(){
   const container=document.getElementById('portfolioContent');
   const mfData=computeMFData(),mfPicks=computeMFPicks(mfData);
-  const signals=STATE.foData?.signals||{},trends=STATE.trendsData?.trends||{};
-  // Top 5 buys (high conviction)
+  const signals=STATE.foData?.signals||{},trends=STATE.foData?.trendStats||STATE.trendsData?.trends||{};
   const top5=mfPicks.filter(p=>{
     const fo=signals[toSym(p.stock)];
     const prob=computeProbScore(p.stock,p,fo||null,trends[toSym(p.stock)]||null);
@@ -3804,7 +4132,7 @@ function renderDigestPanel(){
 
 function copyDigest(){
   const mfData=computeMFData(),mfPicks=computeMFPicks(mfData);
-  const signals=STATE.foData?.signals||{},trends=STATE.trendsData?.trends||{};
+  const signals=STATE.foData?.signals||{},trends=STATE.foData?.trendStats||STATE.trendsData?.trends||{};
   const top5=mfPicks.filter(p=>{const fo=signals[toSym(p.stock)];const prob=computeProbScore(p.stock,p,fo||null,trends[toSym(p.stock)]||null);return prob.total>=65;}).slice(0,5);
   const exits=mfData.ex.slice(0,3);
   const now=new Date();
@@ -3831,228 +4159,163 @@ function downloadDigest(){
 function renderGuide(){
   const c=document.getElementById('guideContent');
   if(!c)return;
+  const tDays=STATE.foData?.meta?.trendDays||0;
+  const fvFiles=STATE.foData?.meta?.fovoltFiles||0;
+  const delDays=Object.keys(STATE.foData?.deliveryHistory||{}).length;
+  const histDays=(STATE.foData?.fiiDiiHistory||[]).length;
   c.innerHTML=`
+  <!-- ── DATA PIPELINE ── -->
   <div class="card" style="margin-bottom:12px;border-left:3px solid var(--accent)">
-    <div style="font-size:.9rem;font-weight:700;color:var(--accent);margin-bottom:4px">How to find profitable positional trades with this app</div>
-    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.6">This app combines India's top mutual fund disclosures with daily NSE FOVOLT data (16 volatility and futures columns per stock). When institutional money, derivatives structure, and volatility regime all align — that's your positional edge.</div>
+    <div style="font-size:.9rem;font-weight:700;color:var(--accent);margin-bottom:6px">How MF Intelligence Works</div>
+    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.7">
+      This app runs entirely from <strong style="color:var(--text)">4 NSE CSV files</strong> you push to GitHub once after market close.
+      A GitHub Actions workflow processes them automatically within 2–3 minutes and updates all data.
+      No live API calls. No subscriptions. All prices are previous session close from FOVOLT.
+    </div>
   </div>
 
-  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">THE 3-STEP DAILY ROUTINE</div>
+  <!-- ── DAILY ROUTINE ── -->
+  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">Daily Routine — 4 Files, 7 Minutes</div>
 
   <div class="card" style="margin-bottom:8px">
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
       <div style="width:28px;height:28px;border-radius:50%;background:var(--accent);color:#000;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.85rem;flex-shrink:0">1</div>
-      <div style="font-weight:700;font-size:.88rem">After market close — Upload FOVOLT CSV (2 min)</div>
+      <div style="font-weight:700;font-size:.88rem">After market close (~7 PM IST) — Download 4 files from NSE</div>
     </div>
-    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.7;margin-left:38px">
-      • Download <code style="background:var(--bg);padding:1px 4px;border-radius:3px">FOVOLT_DDMMYYYY.csv</code> from NSE → F&O → Historical Data → Volatility.<br>
-      • Tap <strong style="color:var(--accent)">📁 Upload CSV</strong> in the top strip. The app reads all 16 columns automatically.<br>
-      • The freshness strip turns green. All prices, volatility, and signals update instantly — no live connection needed.<br>
-      • <strong style="color:var(--text)">All prices in this app come from the FOVOLT file</strong>, labelled <span style="background:rgba(255,184,48,.12);color:var(--amber);padding:0 4px;border-radius:3px;font-size:.65rem;font-weight:700">F&O cls</span>. They are the previous session's closing prices, not live quotes.
+    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.8;margin-left:38px">
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin-bottom:8px">
+        <code style="background:var(--bg);padding:1px 5px;border-radius:3px;white-space:nowrap">FOVOLT_DDMMYYYY.csv</code>
+        <span>NSE Archives → Derivatives → F&O Daily Volatility. <strong style="color:var(--text)">Main signal source.</strong> 16 columns per stock including spot, futures, vol, appAnnVol.</span>
+        <code style="background:var(--bg);padding:1px 5px;border-radius:3px;white-space:nowrap">fii-dii_DDMMYYYY.csv</code>
+        <span>NSE → Market Data → FII/DII. Daily institutional flow. Builds the history chart automatically.</span>
+        <code style="background:var(--bg);padding:1px 5px;border-radius:3px;white-space:nowrap">sec_bhavdata_full_DDMMYYYY.csv</code>
+        <span>NSE Archives → Capital Market → Bhavcopy with Delivery. Delivery % per stock. Worth ±4 pts in score.</span>
+        <code style="background:var(--bg);padding:1px 5px;border-radius:3px;white-space:nowrap">BhavCopy_NSE_FO_*.csv</code>
+        <span>NSE Archives → Derivatives → F&O Bhavcopy. Open Interest + OI change. Powers Long Buildup / Short Covering badges.</span>
+      </div>
+      <div style="background:var(--surface2);border-radius:6px;padding:8px 10px;border:1px solid var(--border)">
+        💡 <strong style="color:var(--text)">Keep all files in <code>data/uploads/</code> — never delete them.</strong>
+        Every new file adds one more day of trend and delivery history. After 10 FOVOLT files, F5 (Trend Consistency) becomes fully meaningful.
+      </div>
     </div>
   </div>
 
   <div class="card" style="margin-bottom:8px">
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
       <div style="width:28px;height:28px;border-radius:50%;background:var(--accent);color:#000;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.85rem;flex-shrink:0">2</div>
-      <div style="font-weight:700;font-size:.88rem">Check market context — MARKET tab (3 min)</div>
+      <div style="font-weight:700;font-size:.88rem">Push to GitHub → Workflow runs automatically (2–3 min)</div>
     </div>
     <div style="font-size:.75rem;color:var(--text-muted);line-height:1.7;margin-left:38px">
-      • <strong style="color:var(--text)">FII + DII both buying</strong> = green light for new longs. Both selling = sit out.<br>
-      • <strong style="color:var(--text)">PCR above 1.0</strong> = market has put protection, cushion in place.<br>
-      • <strong style="color:var(--text)">Delivery % above 55%</strong> = genuine accumulation, not speculative noise.<br>
-      • Nifty/BankNifty tiles show the session close from your FOVOLT upload.
+      • Commit all 4 files to <code style="background:var(--bg);padding:1px 4px;border-radius:3px">data/uploads/</code> in your data repo.<br>
+      • The <strong style="color:var(--text)">push trigger</strong> fires the GitHub Actions workflow immediately — no manual dispatch.<br>
+      • Workflow parses all files, rebuilds signals, trend series, FII-DII history, delivery history, writes <code style="background:var(--bg);padding:1px 4px;border-radius:3px">fno_signals.json</code>.<br>
+      • Current status: <strong style="color:var(--accent)">${fvFiles} FOVOLT files · ${tDays}d trend · ${histDays}d FII-DII · ${delDays}d delivery</strong>
     </div>
   </div>
 
-  <div class="card" style="margin-bottom:12px">
+  <div class="card" style="margin-bottom:16px">
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
       <div style="width:28px;height:28px;border-radius:50%;background:var(--accent);color:#000;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.85rem;flex-shrink:0">3</div>
-      <div style="font-weight:700;font-size:.88rem">Find and enter your trade — PICKS → Best Trades</div>
+      <div style="font-weight:700;font-size:.88rem">Refresh the app — all data updates in one click</div>
     </div>
     <div style="font-size:.75rem;color:var(--text-muted);line-height:1.7;margin-left:38px">
-      • Go to <strong style="color:var(--text)">Picks → Best Trades</strong>. Sorted by the 6-factor probability score (P score).<br>
-      • Only consider stocks with <strong style="color:var(--green)">P ≥ 65</strong>. P ≥ 80 = rare, highest conviction setups.<br>
-      • Look for <span style="background:rgba(0,229,153,.12);color:var(--green);padding:1px 6px;border-radius:8px;font-size:.65rem;font-weight:700">⚡⚡ Triple Lock</span> — MF + F&O + Trend all agree.<br>
-      • Check the <strong style="color:var(--text)">Compression</strong> badge — vol tightening before the move = best positional entry.<br>
-      • Tap <strong style="color:var(--text)">▸ Score breakdown</strong> to see exactly which of the 6 factors drove the score.<br>
-      • Tap <strong style="color:var(--accent)">▷ Buy</strong>. The app calculates SL and Target using the Applicable Volatility (col N from FOVOLT).
+      • Hit <strong style="color:var(--text)">↺ Refresh</strong>. If the workflow is still running, wait 2–3 min and refresh again.<br>
+      • The toast confirms: <em>Updated: 08-May-26 · FII/DII 8d · Trend 12d · Del 5d</em><br>
+      • The freshness strip shows the trading date from the FOVOLT file and trend day count.<br>
+      • <strong style="color:var(--text)">Shift+click Refresh</strong> forces a CDN cache bypass if you see stale data.
     </div>
   </div>
 
-  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">THE 6-FACTOR PROBABILITY SCORE (P SCORE)</div>
+  <!-- ── PROBABILITY SCORE ── -->
+  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">Probability Score — How It's Calculated</div>
 
-  <div class="card" style="margin-bottom:12px">
-    <div style="font-size:.78rem;font-weight:700;margin-bottom:10px">What makes up the 100-point score — all from FOVOLT + MF data</div>
-
-    <div style="margin-bottom:10px;padding:8px 10px;background:var(--surface2);border-radius:7px;border:1px solid var(--border)">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-size:.78rem;font-weight:700;color:var(--blue)">F1 · MF Confluence</span><span style="font-size:.72rem;font-family:'Space Mono',monospace;color:var(--text-muted)">0–20 pts</span></div>
-      <div style="font-size:.72rem;color:var(--text-muted);line-height:1.6">How many independent signal sources agree: MF buying, F&O bullish, multi-day trend, insider buy. Each source is weighted. 4 sources = 20 pts (max). Requires MF data (monthly) plus FOVOLT for F&O signal.</div>
-    </div>
-
-    <div style="margin-bottom:10px;padding:8px 10px;background:var(--surface2);border-radius:7px;border:1px solid var(--border)">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-size:.78rem;font-weight:700;color:var(--green)">F2 · Futures Structure</span><span style="font-size:.72rem;font-family:'Space Mono',monospace;color:var(--text-muted)">0–20 pts</span></div>
-      <div style="font-size:.72rem;color:var(--text-muted);line-height:1.6">Three sub-signals from FOVOLT:<br>
-        <strong style="color:var(--text)">Basis (0–8):</strong> Futures premium vs spot (cols I–C). Healthy contango + spot confirming = 8 pts. Excessive contango (roll risk) capped at 5.<br>
-        <strong style="color:var(--text)">Futures Momentum (0–7):</strong> Did futures lead spot up? Futures return (col K log return or J→I) vs spot return.<br>
-        <strong style="color:var(--text)">Futures Vol Expansion (0–5):</strong> Futures daily vol rising on an up-day = institutions positioning (cols K−J).
+  <div class="card" style="margin-bottom:8px">
+    <div style="font-size:.78rem;font-weight:700;margin-bottom:10px">6 Factors + 2 Adjustments = 0–100</div>
+    <div style="display:grid;gap:6px;font-size:.72rem">
+      ${[
+        ['F1','MF Confluence','0–20','How many signals agree: MF conviction, F&O structure, trend, insider activity, FII/DII net flow (from fii-dii CSV)'],
+        ['F2','Futures Structure','0–20','Futures premium, basis direction, futD1 momentum (FOVOLT cols I,J,K). Expiry-week basis compression is discounted automatically'],
+        ['F3','Volatility Regime','0–20','appAnnVol (FOVOLT col O — the NSE margin vol), daily vol compression vs expansion (cols F,G), futures vol vs spot vol divergence'],
+        ['F4','Delivery Conviction','0–15','Delivery % from CM Bhavcopy. ≥60% = +4 pts, 45–60% = +2 pts, <20% on bullish signal = −3 pts'],
+        ['F5','Trend Consistency','0–15','Built from all FOVOLT files in uploads/. Consistency %, momentum direction, positional strength across days'],
+        ['F6','Timing & Momentum','0–10','Short-term price momentum, vol compression breakout setup, MF entry timing'],
+      ].map(([f,name,rng,desc])=>`
+        <div style="display:grid;grid-template-columns:60px 140px 50px 1fr;gap:6px;align-items:start;padding:6px 8px;background:var(--surface2);border-radius:5px;border:1px solid var(--border)">
+          <span style="font-weight:700;color:var(--accent)">${f}</span>
+          <span style="font-weight:600;color:var(--text)">${name}</span>
+          <span style="color:var(--text-muted)">${rng}</span>
+          <span style="color:var(--text-muted)">${desc}</span>
+        </div>`).join('')}
+      <div style="display:grid;grid-template-columns:60px 140px 50px 1fr;gap:6px;align-items:start;padding:6px 8px;background:var(--surface2);border-radius:5px;border:1px solid var(--border)">
+        <span style="font-weight:700;color:var(--text-muted)">PCR</span>
+        <span style="font-weight:600;color:var(--text)">Put-Call Ratio</span>
+        <span style="color:var(--text-muted)">±5</span>
+        <span style="color:var(--text-muted)">From last auto-fetch. PCR >1.2 = market has cushion (+3). PCR <0.7 = complacency (−3).</span>
       </div>
-    </div>
-
-    <div style="margin-bottom:10px;padding:8px 10px;background:var(--surface2);border-radius:7px;border:1px solid var(--border)">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-size:.78rem;font-weight:700;color:var(--amber)">F3 · Volatility Regime</span><span style="font-size:.72rem;font-family:'Space Mono',monospace;color:var(--text-muted)">0–20 pts</span></div>
-      <div style="font-size:.72rem;color:var(--text-muted);line-height:1.6">The most information-rich factor — uses 5 FOVOLT columns:<br>
-        <strong style="color:var(--text)">AppVol Level (0–8):</strong> Applicable Annualised Vol (col N — NSE's margin vol). 15–30% = sweet spot for positional trades. Above 60% = gap risk, avoid.<br>
-        <strong style="color:var(--text)">Vol Compression (0–8):</strong> Today's spot daily vol ÷ yesterday's (col G ÷ col F). Ratio &lt;0.85 = spring coiling = highest score. Ratio &gt;1.2 = late entry, lowest score.<br>
-        <strong style="color:var(--text)">Spot/Futures Vol Spread (0–4):</strong> Futures ann. vol (col L) ÷ spot ann. vol (col H). Below 90% = F&O market not confirming spot move — score capped.
+      <div style="display:grid;grid-template-columns:60px 140px 50px 1fr;gap:6px;align-items:start;padding:6px 8px;background:var(--surface2);border-radius:5px;border:1px solid var(--border)">
+        <span style="font-weight:700;color:var(--text-muted)">Del</span>
+        <span style="font-weight:600;color:var(--text)">Delivery Adj</span>
+        <span style="color:var(--text-muted)">±4</span>
+        <span style="color:var(--text-muted)">From CM Bhavcopy. Shown as separate row in score breakdown. 0 when file not uploaded.</span>
       </div>
-    </div>
-
-    <div style="margin-bottom:10px;padding:8px 10px;background:var(--surface2);border-radius:7px;border:1px solid var(--border)">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-size:.78rem;font-weight:700;color:var(--purple)">F4 · Return Quality</span><span style="font-size:.72rem;font-family:'Space Mono',monospace;color:var(--text-muted)">0–20 pts</span></div>
-      <div style="font-size:.72rem;color:var(--text-muted);line-height:1.6">
-        <strong style="color:var(--text)">Spot Return Quality (0–8):</strong> 0–1.5% up-day = ideal. Mild pullback (–1% to 0%) = also good (better entry). Gap up &gt;3% = overextended, low score.<br>
-        <strong style="color:var(--text)">Spot–Futures Alignment (0–8):</strong> Are both spot and futures returning positively? Futures leading spot = 8 pts (institutions positioning ahead). Spot up but futures down &gt;0.3% = HARD FILTER triggers (score capped at 25).<br>
-        <strong style="color:var(--text)">Return Convergence (0–4):</strong> |Spot return − Futures return| should be small. Large divergence = instability.
-      </div>
-    </div>
-
-    <div style="margin-bottom:10px;padding:8px 10px;background:var(--surface2);border-radius:7px;border:1px solid var(--border)">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-size:.78rem;font-weight:700;color:var(--text)">F5 · Trend Consistency</span><span style="font-size:.72rem;font-family:'Space Mono',monospace;color:var(--text-muted)">0–15 pts</span></div>
-      <div style="font-size:.72rem;color:var(--text-muted);line-height:1.6">Multi-day trend score from history (requires 3+ FOVOLT uploads). ConsistencyPct ≥ 90% = 15 pts. Defaults to 5 pts (neutral) when only 1 day of data is available — no penalty for fresh uploads.</div>
-    </div>
-
-    <div style="padding:8px 10px;background:var(--surface2);border-radius:7px;border:1px solid var(--border)">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-size:.78rem;font-weight:700;color:var(--text)">F6 · Entry Timing</span><span style="font-size:.72rem;font-family:'Space Mono',monospace;color:var(--text-muted)">0–5 pts</span></div>
-      <div style="font-size:.72rem;color:var(--text-muted);line-height:1.6">Refinement factor. Vol compressing (col G &lt; col F × 0.92) AND spot mildly up (0–1.5%) = 5 pts = coiling spring, perfect positional entry. Vol expanding + strongly up day = 1 pt (late entry).</div>
-    </div>
-
-    <div style="margin-top:10px;font-size:.72rem;color:var(--text-muted)"><strong style="color:var(--text)">Hard Filters</strong> (automatic caps, shown in breakdown):<br>
-      • Spot up &gt;0.5% but Futures down &gt;0.3% → score capped at 25 (Spot-Futures Divergence)<br>
-      • Futures annualised vol &lt;80% of Spot vol → score capped at 45 (F&O not confirming)<br>
-      • PCR &lt;0.6 → −6 pts adjustment (bearish options market)<br>
-      PCR &gt;1.5 → +3 pts bonus (strong put protection)
     </div>
   </div>
 
-  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">P SCORE THRESHOLDS</div>
+  <!-- ── OI BADGES ── -->
+  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin:12px 0 8px;font-weight:700">OI Classification — What Each Badge Means</div>
+  <div class="card" style="margin-bottom:8px">
+    <div style="display:grid;gap:5px;font-size:.72rem">
+      ${[
+        ['▲ Long Buildup','oi-badge-long','Price ↑ + OI ↑','Institutions entering new longs. Strongest bullish signal.'],
+        ['▼ Short Buildup','oi-badge-short','Price ↓ + OI ↑','Institutions entering new shorts. Avoid or short.'],
+        ['↑ Short Covering','oi-badge-cover','Price ↑ + OI ↓','Shorts being squeezed out. Price rises but lacks new conviction.'],
+        ['↘ Long Unwinding','oi-badge-unwind','Price ↓ + OI ↓','Longs exiting. Bearish but often short-lived.'],
+        ['— Neutral','oi-badge-neutral','No clear OI signal','Premium-based estimate (when BhavCopy_NSE_FO not available).'],
+      ].map(([lbl,cls,cond,desc])=>`
+        <div style="display:flex;align-items:start;gap:10px;padding:5px 8px;background:var(--surface2);border-radius:5px;border:1px solid var(--border)">
+          <span class="oi-type-badge ${cls}" style="flex-shrink:0;margin-top:1px">${lbl}</span>
+          <div><span style="color:var(--text);font-weight:600">${cond}</span><br><span style="color:var(--text-muted)">${desc}</span></div>
+        </div>`).join('')}
+    </div>
+  </div>
 
-  <div class="card" style="margin-bottom:12px">
+  <!-- ── PRICE CHIPS ── -->
+  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin:12px 0 8px;font-weight:700">Price Chips — What Each Row Shows</div>
+  <div class="card" style="margin-bottom:8px">
     <div style="font-size:.75rem;color:var(--text-muted);line-height:1.8">
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border)"><span><strong style="color:var(--green)">P ≥ 80</strong> — Exceptional alignment across all 6 factors</span><span style="color:var(--green);font-weight:700">Full position</span></div>
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border)"><span><strong style="color:var(--green)">P 65–79</strong> — Strong multi-factor confluence</span><span style="color:var(--green);font-weight:700">Strong Buy</span></div>
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border)"><span><strong style="color:var(--amber)">P 50–64</strong> — Good evidence, some factors weak</span><span style="color:var(--amber);font-weight:700">Half position / Watch</span></div>
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border)"><span><strong>P 35–49</strong> — Single-signal or thin evidence</span><span style="color:var(--text-muted)">Watch only</span></div>
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0"><span><strong style="color:var(--red)">P &lt; 35</strong> — Hard filter triggered or no data</span><span style="color:var(--red)">Skip</span></div>
-    </div>
-    <div style="margin-top:8px;font-size:.7rem;color:var(--text-muted);padding:6px 8px;background:var(--surface2);border-radius:6px;border:1px solid var(--border)">
-      P ≥ 80 is genuinely hard to hit — it requires MF buying + healthy futures premium + vol compressing in the 15–30% zone + spot and futures both up + trend confirmed. That's your highest-probability positional trade.
-    </div>
-  </div>
-
-  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">UNDERSTANDING THE FOVOLT COLUMNS</div>
-
-  <div class="card" style="margin-bottom:12px">
-    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.8">
-      <div style="padding:5px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--text)">Cols A–B (2–3):</strong> Spot close today and previous day. Used to compute 1-day return.</div>
-      <div style="padding:5px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--text)">Col C (4):</strong> Log return (ln A/B). More precise than simple % for volatility math.</div>
-      <div style="padding:5px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--text)">Cols D–E (5–6):</strong> Previous and current day's <em>daily</em> spot volatility. Their ratio (E/D) powers the Compression signal in F3. A falling ratio = stock quieting down before a move.</div>
-      <div style="padding:5px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--text)">Col F (7):</strong> Spot annualised volatility. Used as fallback when col N is unavailable.</div>
-      <div style="padding:5px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--text)">Cols G–H (8–9):</strong> Futures close today and previous day. Their ratio powers the Futures Momentum sub-score in F2.</div>
-      <div style="padding:5px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--text)">Cols I–K (10–12):</strong> Futures log returns and daily volatility (prev/curr). Futures vol delta (K−J) in F2c shows whether the options market is actively pricing in a move.</div>
-      <div style="padding:5px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--text)">Col L (13):</strong> Futures annualised vol. Compared to col F (spot vol) in F3c — when futures vol &lt;80% of spot vol, F&O is not confirming the spot move (hard discount applied).</div>
-      <div style="padding:5px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--text)">Col M (14):</strong> Applicable daily volatility. NSE's margin calculation input.</div>
-      <div style="padding:5px 0"><strong style="color:var(--green)">Col N (15) — Most Important:</strong> <strong>Applicable Annualised Volatility</strong>. NSE computes this as the higher of spot and futures vol. It's used to set margins — and it's the number the whole market prices off. This drives the Vol Regime level score (F3a) and the SL/Target calculation. Sweet spot: 15–30% = best positional risk:reward.</div>
-    </div>
-  </div>
-
-  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">UNDERSTANDING PRICES IN THIS APP</div>
-
-  <div class="card" style="margin-bottom:12px">
-    <div style="font-size:.78rem;font-weight:700;margin-bottom:8px;color:var(--amber)">There are 2 types of values — prices and allocations. They look similar but mean very different things.</div>
-    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.9">
-      <div style="padding:7px 10px;background:rgba(255,184,48,.06);border:1px solid rgba(255,184,48,.2);border-radius:8px;margin-bottom:8px">
-        <div style="font-weight:700;color:var(--amber);margin-bottom:3px">① F&O Session Close — labelled <span style="background:rgba(255,184,48,.12);padding:0 4px;border-radius:3px;font-size:.65rem">F&O cls</span></div>
-        <div>The closing spot price from the FOVOLT file you uploaded (col C). This is the previous session's close. Shown next to every stock name across the app. <strong style="color:var(--text)">Never a live price.</strong></div>
-      </div>
-      <div style="padding:7px 10px;background:rgba(255,69,96,.06);border:1px solid rgba(255,69,96,.2);border-radius:8px;margin-bottom:8px">
-        <div style="font-weight:700;color:var(--red);margin-bottom:3px">② MF Allocation % — not a price</div>
-        <div>Values like <strong style="color:var(--text)">4.2%</strong> or <strong style="color:var(--text)">₹1,800 Cr</strong> in Intelligence/Holdings tabs = the <strong style="color:var(--text)">fund's portfolio weight</strong>, not a price. SEBI disclosures do not reveal what price the fund paid.</div>
-      </div>
-      <div style="padding:7px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px">
-        <div style="font-weight:700;color:var(--text);margin-bottom:3px">③ Your Entry Price — Portfolio tab only</div>
-        <div>The price you recorded when logging a trade. P&L is calculated as (F&O session close − your entry). Nothing to do with what any fund paid.</div>
+      <div style="display:grid;grid-template-columns:100px 1fr;gap:4px 12px">
+        <span style="color:var(--accent);font-weight:600">Spot</span><span>FOVOLT col C — underlying close for that trading session</span>
+        <span style="font-weight:600">Fut (today)</span><span>FOVOLT col I — near-month futures close for that session</span>
+        <span style="font-weight:600">Fut (prev)</span><span>FOVOLT col J — previous day's near-month futures close</span>
+        <span style="font-weight:600">Vol X% IV</span><span>Applicable Annualised Volatility (FOVOLT col O) — the vol NSE uses for margin calculation</span>
+        <span style="font-weight:600">Del X%</span><span>Delivery % from CM Bhavcopy. Green ≥60%, red <25%</span>
+        <span style="font-weight:600">OI ▲/▼ XL</span><span>Open Interest change in lakhs from BhavCopy_NSE_FO near-month futures</span>
       </div>
     </div>
   </div>
 
-  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">SIGNAL BADGES EXPLAINED</div>
-
+  <!-- ── TABS ── -->
+  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin:12px 0 8px;font-weight:700">App Tabs at a Glance</div>
   <div class="card" style="margin-bottom:12px">
-    <div style="font-size:.75rem;color:var(--text-muted);line-height:2.1">
-      <div><span style="background:rgba(0,229,153,.12);color:var(--green);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">⚡⚡ Triple Lock</span> — MF buying + F&O bullish + Multi-day trend confirmed. Highest quality signal.</div>
-      <div><span style="background:rgba(0,229,153,.12);color:var(--green);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">⚡ 2 Signals</span> — Two of three sources confirm. Good signal, watch for third to align.</div>
-      <div><span style="background:rgba(0,229,153,.12);color:var(--green);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">Compression</span> — Daily vol tightening (col G &lt; col F × 0.92). Spring coiling — move incoming.</div>
-      <div><span style="background:rgba(255,184,48,.12);color:var(--amber);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">Breakout</span> — High vol + premium expansion. Enter on confirmation only — not anticipation.</div>
-      <div><span style="background:rgba(255,184,48,.12);color:var(--amber);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">Pullback</span> — Short dip in an uptrend (D/F score &gt;0.5, consistency &gt;60%). Good R:R entry.</div>
-      <div><span style="background:rgba(59,158,255,.12);color:var(--blue);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">Accumulation</span> — Steady OI buildup, no price breakout yet. Early-stage positional opportunity.</div>
-      <div><span style="background:rgba(0,229,153,.12);color:var(--green);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">SpotVol▼</span> — Spot daily vol falling vs prev day (col G &lt; col F). Confirms compression.</div>
-      <div><span style="background:rgba(255,69,96,.12);color:var(--red);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">FutVol▲</span> — Futures daily vol rising (col K &gt; col J). F&O activity increasing — watch for breakout.</div>
-      <div><span style="background:rgba(0,229,153,.12);color:var(--green);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">↑ Rising</span> — F&O score improving over last 3 sessions. Momentum building.</div>
-      <div><span style="background:rgba(255,69,96,.12);color:var(--red);padding:1px 8px;border-radius:10px;font-size:.65rem;font-weight:700">⚠ Conflict</span> — MF buying but F&O is bearish. DO NOT TRADE without additional research.</div>
+    <div style="display:grid;gap:5px;font-size:.73rem">
+      ${[
+        ['MARKET','FII/DII flow chart (all uploaded dates), cumulative net line, delivery spikes, market pulse'],
+        ['INTELLIGENCE','Ranking tab: all stocks by combined score. F&O tab: futures structure + OI signals. MF tab: fund-by-fund conviction'],
+        ['PICKS','Best Trades: top stocks where MF + F&O + trend + delivery all confirm. Filter by sector or score mode'],
+        ['PORTFOLIO','Open trades P&L, target/SL from appAnnVol, watchlist with live OI monitoring'],
+        ['GUIDE','This page'],
+      ].map(([tab,desc])=>`
+        <div style="display:grid;grid-template-columns:110px 1fr;gap:8px;padding:6px 8px;background:var(--surface2);border-radius:5px;border:1px solid var(--border)">
+          <span style="font-weight:700;color:var(--accent)">${tab}</span>
+          <span style="color:var(--text-muted)">${desc}</span>
+        </div>`).join('')}
     </div>
   </div>
 
-  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">STOP LOSS &amp; TARGET — HOW THEY ARE CALCULATED</div>
-
-  <div class="card" style="margin-bottom:12px">
-    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.8">
-      Both SL and Target are calculated using the <strong style="color:var(--text)">Applicable Annualised Volatility (col N)</strong> from FOVOLT — not a fixed percentage.<br><br>
-      <strong style="color:var(--text)">SL width:</strong> AppVol &lt;20% → 12% below entry · AppVol 20–35% → 17% · AppVol 35–50% → 22% · AppVol &gt;50% → 27%<br>
-      <strong style="color:var(--text)">Target:</strong> Entry × (1 + AppVol × multiplier). Multiplier = 0.55× for P≥80, 0.42× for P≥65, 0.32× otherwise.<br><br>
-      Low-vol names (AppVol 15–25%) get tighter stops and modest targets — this is intentional. High-vol names need wider stops to survive intraday moves but also offer larger targets. The SL and Target adapt to each stock's actual NSE-recognised risk.
-    </div>
+  <div style="text-align:center;font-size:.68rem;color:var(--text-muted);padding:8px">
+    MF Intelligence V10 · Data from NSE daily CSV uploads · No live feeds · No subscriptions
   </div>
-
-  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">WHEN TO EXIT</div>
-
-  <div class="card" style="margin-bottom:12px">
-    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.8">
-      <div style="padding:4px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--red)">Immediate exit:</strong> Stock hits your Stop Loss. No exceptions. The SL is volatility-calibrated.</div>
-      <div style="padding:4px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--red)">Hard exit signal:</strong> F3 · Vol Regime score drops to 0 (futures vol discounting spot = F&O diverging).</div>
-      <div style="padding:4px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--red)">Hard filter triggered:</strong> Score breakdown shows "Spot-Futures Divergence" hard filter. Exit or reduce.</div>
-      <div style="padding:4px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--amber)">Review:</strong> MF exits the stock (Intelligence → Exits). Check if F2+F3 still positive before deciding.</div>
-      <div style="padding:4px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--amber)">Consider exit:</strong> P score drops below 40 on your open position (check daily after upload).</div>
-      <div style="padding:4px 0"><strong style="color:var(--green)">Book partial profits:</strong> Stock hits 60% of target. Move SL to breakeven — risk-free trade from here.</div>
-    </div>
-  </div>
-
-  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">GOLDEN RULES</div>
-
-  <div class="card" style="margin-bottom:12px">
-    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.9">
-      <div>1. <strong style="color:var(--text)">Never risk more than 2% of capital on a single trade.</strong> Set this in Portfolio → Auto-Pilot.</div>
-      <div>2. <strong style="color:var(--text)">Maximum 2 stocks from the same sector at a time.</strong> The Auto-Pilot enforces this; do the same manually.</div>
-      <div>3. <strong style="color:var(--text)">Wait for Triple Lock before sizing up.</strong> 2-signal setups get half position, 3-signal get full.</div>
-      <div>4. <strong style="color:var(--text)">Prefer Compression setups over Breakout setups for positional trades.</strong> Compression = you're early. Breakout = you're late.</div>
-      <div>5. <strong style="color:var(--text)">AppVol &gt; 60% = speculative only, very small size.</strong> The SL will be wide — size down accordingly.</div>
-      <div>6. <strong style="color:var(--text)">Red market days (FII + DII both selling) = no new trades.</strong> Let the market find its footing.</div>
-      <div>7. <strong style="color:var(--text)">The Auto-Pilot is your discipline engine.</strong> Let it run 5 positions — it uses the same 6-factor scoring without emotion.</div>
-    </div>
-  </div>
-
-  <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;font-weight:700">DATA FRESHNESS</div>
-  <div class="card" style="margin-bottom:16px">
-    <div style="font-size:.75rem;color:var(--text-muted);line-height:1.7">
-      <strong style="color:var(--text)">MF Holdings</strong> — Updated monthly (SEBI mandate). Current data: Jan–Feb 2026.<br>
-      <strong style="color:var(--text)">F&O Signals (FOVOLT)</strong> — Upload each evening after market close. GitHub Actions can automate this at 7PM IST.<br>
-      <div style="margin-top:8px;padding:8px 10px;background:rgba(0,229,153,.06);border-radius:6px;border:1px solid rgba(0,229,153,.2)">
-        <strong style="color:var(--green)">📁 Manual Upload:</strong> Tap <strong>Upload CSV</strong> in the top strip. Accepts <code style="background:var(--bg);padding:1px 4px;border-radius:3px">FOVOLT_DDMMYYYY.csv</code> (all 16 cols) or <code style="background:var(--bg);padding:1px 4px;border-radius:3px">BhavCopy_NSE_FO_*.csv</code> (spot price only).<br>
-        FOVOLT gives you all 16 columns and the full 6-factor score. BhavCopy gives spot price only — F2/F3/F4 futures and vol factors will be zero or neutral.
-      </div>
-      <div style="margin-top:6px;padding:6px 10px;background:var(--surface2);border-radius:6px;border:1px solid var(--border)">If you see an amber stale banner, the data is from a previous trading day. Upload today's FOVOLT to restore full scoring.</div>
-    </div>
-  </div>`;
+  `;
 }
 
 /* ═══════════════════════════════════════════
@@ -4066,8 +4329,7 @@ function checkExitSignals(){
   allOpen.forEach(t=>{
     const sym=toSym(t.stock),fo=signals[sym];
     const mfPick=computeMFPicks(mfData).find(p=>toSym(p.stock)===sym)||null;
-    const trend=STATE.trendsData?.trends?.[sym]||null;
-    const prob=computeProbScore(t.stock,mfPick,fo,trend);
+    const trend=STATE.foData?.trendStats?.[sym]||STATE.trendsData?.trends?.[sym]||null;
     if(fo&&fo.score<-1)alerts.push({sym,reason:'F&O turned bearish',severity:'high',prob:prob.total});
     else if(exits.has(sym))alerts.push({sym,reason:'MF exited this month',severity:'high',prob:prob.total});
     else if(prob.total<40)alerts.push({sym,reason:'P score dropped to '+prob.total,severity:'medium',prob:prob.total});
