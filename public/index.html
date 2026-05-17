@@ -3175,24 +3175,24 @@ function parseTradingDate(raw){
 
 async function fetchFOData(forceRemote=false){
   try{
-    const cfg=await fetch('/api/config').then(r=>r.json()).catch(()=>null);
-    if(cfg?.dataUrl){
-      const bust=cfg.dataUrl+(cfg.dataUrl.includes('?')?'&':'?')+'_cb='+Date.now();
-      const r=await fetch(bust,{cache:'no-store',headers:{'Cache-Control':'no-cache','Pragma':'no-cache'}});
-      if(r.ok){
-        const remoteData=await r.json();
-        const remoteDate=remoteData?.meta?.date||'';
-        const localDate=STATE.foData?.meta?.date||'';
-        if(!forceRemote&&localDate&&remoteDate&&remoteDate<localDate){
-          console.warn('fetchFOData: remote '+remoteDate+' < local '+localDate+' — skipping');
-          updateFreshness();return;
-        }
-        STATE.foData=remoteData;
-        _mfCache.date=null;
-        _rankCache.date=null;
-        updateFreshness();updateFoDataBadge();renderNiftyFromFOVOLT();renderMarket();renderIntelligence();renderPicks();checkExitSignals();if(STATE.activeTab==='guide')renderGuide();
-        return;
+    // Direct URL to fno_signals.json in the data repo — no backend needed.
+    // Works on GitHub Pages, Netlify, Vercel, or any static host.
+    const DATA_URL='https://raw.githubusercontent.com/StressfreeInvesting/mf-intelligence-data/main/data/fno_signals.json';
+    const bust=DATA_URL+'?_cb='+Date.now();
+    const r=await fetch(bust,{cache:'no-store',headers:{'Cache-Control':'no-cache','Pragma':'no-cache'}});
+    if(r.ok){
+      const remoteData=await r.json();
+      const remoteDate=remoteData?.meta?.date||'';
+      const localDate=STATE.foData?.meta?.date||'';
+      if(!forceRemote&&localDate&&remoteDate&&remoteDate<localDate){
+        console.warn('fetchFOData: remote '+remoteDate+' < local '+localDate+' — skipping');
+        updateFreshness();return;
       }
+      STATE.foData=remoteData;
+      _mfCache.date=null;
+      _rankCache.date=null;
+      updateFreshness();updateFoDataBadge();renderNiftyFromFOVOLT();renderMarket();renderIntelligence();renderPicks();checkExitSignals();if(STATE.activeTab==='guide')renderGuide();
+      return;
     }
     updateFreshness();updateFoDataBadge();renderMarket();renderIntelligence();renderPicks();checkExitSignals();
   }catch(e){console.warn('FO fetch:',e);}
