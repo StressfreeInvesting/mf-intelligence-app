@@ -936,9 +936,9 @@ function computeProbScore(stock,mfPick,foSignal,trend){
   const futVolDiscount = foSignal && spotAnnV!=null && futAnnV!=null && futAnnV < spotAnnV*0.80;
 
   // ── F1: MF Confluence (0-20) ─────────────────────────────────────
-  const hasMF     = mfPick && mfPick.ms>=2.0;
-  const hasFO     = foSignal && foSignal.score>=1.5;
-  const hasTrend  = trend && trend.positionalStrength==='Strong';
+  const hasMF     = mfPick && mfPick.ms>=1.5;   // lowered from 2.0 — 2-house entry still strong signal
+  const hasFO     = foSignal && foSignal.score>=1.0;  // lowered from 1.5 — captures more valid signals
+  const hasTrend  = trend && (trend.positionalStrength==='Strong'||trend.positionalStrength==='Moderate');  // include Moderate
   // FII net flow: use latest fiiDiiHistory entry (from the uploaded fii-dii CSVs)
   const fiiHist   = STATE.foData?.fiiDiiHistory||[];
   const latestFii = fiiHist.length ? fiiHist[fiiHist.length-1] : null;
@@ -1892,6 +1892,7 @@ function renderIntelFO(){
   const signals=STATE.foData?.signals||STATE.trendsData?.latestSignals||{};
   const trends=STATE.foData?.trendStats||STATE.trendsData?.trends||{};
   const dataDate=STATE.foData?.meta?.latestDate||'historical';
+  const hasLiveData=!!(STATE.foData?.signals&&Object.keys(STATE.foData.signals).length>0);
   // Build universe: all MF picks + any FO signals above threshold
   const allSyms=new Set([...mfPicks.map(p=>toSym(p.stock)),...Object.keys(signals).filter(s=>signals[s].score>0.5)]);
   let items=[];
@@ -2159,7 +2160,7 @@ function renderPicks(){
 
   if(tab==='best'){
     // Best Trades = highest probability, multi-layer confirmed, no conflict
-    items=items.filter(i=>!i.conflict&&i.prob.total>=32&&i.layers>=1);
+    items=items.filter(i=>!i.conflict&&i.prob.total>=25&&i.layers>=1);
     items.sort((a,b)=>{
       // Primary: prob score. Secondary: layer count. Tertiary: mfScore (tiebreak)
       if(b.prob.total!==a.prob.total)return b.prob.total-a.prob.total;
