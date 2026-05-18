@@ -544,9 +544,9 @@ button{cursor:pointer;font-family:inherit}
   <div id="exitAlertBar" style="display:none"></div>
   <!-- NAV -->
   <nav class="nav" id="mainNav">
-    <button class="nav-tab active" data-tab="market"><span class="nav-icon">◇</span> MARKET</button>
+    <button class="nav-tab" data-tab="market"><span class="nav-icon">◇</span> MARKET</button>
     <button class="nav-tab" data-tab="intelligence"><span class="nav-icon">▣</span> INTELLIGENCE</button>
-    <button class="nav-tab" data-tab="picks"><span class="nav-icon">⚡</span> PICKS</button>
+    <button class="nav-tab active" data-tab="picks"><span class="nav-icon">⚡</span> PICKS</button>
     <button class="nav-tab" data-tab="portfolio"><span class="nav-icon">▷</span> PORTFOLIO</button>
     <button class="nav-tab" data-tab="guide"><span class="nav-icon">?</span> GUIDE</button>
   </nav>
@@ -572,13 +572,13 @@ button{cursor:pointer;font-family:inherit}
       </div>
       <div class="section-header">Market Pulse</div>
       <div class="pulse-row" id="pulseRow">
-        <div class="pulse-chip"><div class="pulse-chip-label">FII Flow</div><div class="pulse-chip-val" id="fiiChip" style="color:var(--green)">Net Buy</div></div>
-        <div class="pulse-chip"><div class="pulse-chip-label">DII Flow</div><div class="pulse-chip-val" id="diiChip" style="color:var(--blue)">Net Buy</div></div>
-        <div class="pulse-chip"><div class="pulse-chip-label">VIX</div><div class="pulse-chip-val">13.2</div></div>
-        <div class="pulse-chip"><div class="pulse-chip-label">PCR</div><div class="pulse-chip-val">1.18</div></div>
-        <div class="pulse-chip"><div class="pulse-chip-label">OI Change</div><div class="pulse-chip-val" style="color:var(--green)">+2.4%</div></div>
-        <div class="pulse-chip"><div class="pulse-chip-label">Adv/Dec</div><div class="pulse-chip-val">1.4:1</div></div>
-        <div class="pulse-chip"><div class="pulse-chip-label">Delivery%</div><div class="pulse-chip-val">58.3</div></div>
+        <div class="pulse-chip"><div class="pulse-chip-label">FII Flow</div><div class="pulse-chip-val" id="fiiChip" style="color:var(--green)">—</div></div>
+        <div class="pulse-chip"><div class="pulse-chip-label">DII Flow</div><div class="pulse-chip-val" id="diiChip" style="color:var(--blue)">—</div></div>
+        <div class="pulse-chip"><div class="pulse-chip-label">VIX</div><div class="pulse-chip-val" id="vixChip">—</div></div>
+        <div class="pulse-chip"><div class="pulse-chip-label">PCR</div><div class="pulse-chip-val" id="pcrChip">—</div></div>
+        <div class="pulse-chip"><div class="pulse-chip-label">OI Chg</div><div class="pulse-chip-val" id="oiChgChip">—</div></div>
+        <div class="pulse-chip"><div class="pulse-chip-label">Adv/Dec</div><div class="pulse-chip-val" id="advDecChip">—</div></div>
+        <div class="pulse-chip"><div class="pulse-chip-label">Delivery%</div><div class="pulse-chip-val" id="deliveryChip">—</div></div>
       </div>
       <!-- FII/DII Divergence Alert -->
       <div id="fiiDivergenceAlert" style="display:none"></div>
@@ -631,10 +631,10 @@ button{cursor:pointer;font-family:inherit}
     <!-- ════ PICKS ════ -->
     <div class="tab-panel" id="tab-picks">
       <div class="pill-tabs" id="picksPills">
-        <button class="pill-tab active" data-ptab="best">⚡ Best Trades</button>
+        <button class="pill-tab" data-ptab="best">⚡ Best Trades</button>
         <button class="pill-tab" data-ptab="mf">MF Conviction</button>
         <button class="pill-tab" data-ptab="combined">Combined Score</button>
-        <button class="pill-tab" data-ptab="fo">F&amp;O Only</button>
+        <button class="pill-tab active" data-ptab="fo">F&amp;O Only</button>
       </div>
       <div class="sector-chips" id="sectorChips">
         <button class="sector-chip active" data-sector="all">All</button>
@@ -679,8 +679,8 @@ button{cursor:pointer;font-family:inherit}
 ═══════════════════════════════════════════ */
 const STATE={
   foData:null,trendsData:null,trades:[],watchlist:new Set(),
-  quotes:{},quotesAge:null,activeTab:'market',intelTab:'ranking',
-  picksTab:'best',sector:'all',portfolioTab:'autopilot',analyticsPanel:'accuracy',autoLog:[],
+  quotes:{},quotesAge:null,activeTab:'picks',intelTab:'ranking',
+  picksTab:'fo',sector:'all',portfolioTab:'autopilot',analyticsPanel:'accuracy',autoLog:[],
   priceAlerts:[],historyData:{},insiderData:[],pcrData:{},sparklineCache:{},
   capital:0,riskPct:1.5,
 };
@@ -1373,15 +1373,51 @@ function renderMarket(){
     el.innerHTML=Object.entries(houseMap).sort((a,b)=>b[1]-a[1]).map(([h,n])=>`<div class="fund-card" onclick="openFundModal('${h}')" title="Tap to see ${h} MF holdings"><div class="fund-card-name">${h} MF</div><div class="fund-card-count">${n}</div><div class="fund-card-label">Active picks</div><div class="fund-card-tap">👁 View holdings</div></div>`).join('')+
     `<div class="fund-card" style="border-style:dashed;cursor:default"><div class="fund-card-name">Total</div><div class="fund-card-count">${total}</div><div class="fund-card-label">Funds tracked</div></div>`;
   }
-  // Show foData date in market pulse chips
-  if(STATE.foData?.meta){
-    const meta=STATE.foData.meta;
+  // Populate pulse chips from real data
+  if(STATE.foData?.fiiDii){
+    const fd=STATE.foData.fiiDii;
     const fiiEl=document.getElementById('fiiChip');
     const diiEl=document.getElementById('diiChip');
-    if(STATE.foData.fiiDii){
-      const fd=STATE.foData.fiiDii;
-      if(fiiEl){fiiEl.textContent=(fd.fii>=0?'+':'')+fd.fii.toLocaleString('en-IN')+' Cr';fiiEl.style.color=fd.fii>=0?'var(--green)':'var(--red)';}
-      if(diiEl){diiEl.textContent=(fd.dii>=0?'+':'')+fd.dii.toLocaleString('en-IN')+' Cr';diiEl.style.color=fd.dii>=0?'var(--blue)':'var(--red)';}
+    if(fiiEl){fiiEl.textContent=(fd.fii>=0?'+':'')+fd.fii.toLocaleString('en-IN')+' Cr';fiiEl.style.color=fd.fii>=0?'var(--green)':'var(--red)';}
+    if(diiEl){diiEl.textContent=(fd.dii>=0?'+':'')+fd.dii.toLocaleString('en-IN')+' Cr';diiEl.style.color=fd.dii>=0?'var(--blue)':'var(--red)';}
+  }
+  // OI Change chip — compute average OI change across all bullish stocks
+  const signals=STATE.foData?.signals||{};
+  const oiChanges=Object.values(signals).filter(s=>s.oiChg!=null).map(s=>+s.oiChg);
+  if(oiChanges.length){
+    const totalOiChg=oiChanges.reduce((a,b)=>a+b,0);
+    const oiChip=document.getElementById('oiChgChip');
+    if(oiChip){
+      const longs=oiChanges.filter(v=>v>0).length,shorts=oiChanges.filter(v=>v<0).length;
+      oiChip.textContent=`${longs}↑ ${shorts}↓`;
+      oiChip.style.color=longs>shorts?'var(--green)':'var(--red)';
+    }
+  }
+  // Adv/Dec — count bullish vs bearish signals
+  const advDec=document.getElementById('advDecChip');
+  if(advDec&&Object.keys(signals).length){
+    const adv=Object.values(signals).filter(s=>parseFloat(s.d1)>0).length;
+    const dec=Object.values(signals).filter(s=>parseFloat(s.d1)<0).length;
+    advDec.textContent=`${adv}:${dec}`;
+    advDec.style.color=adv>dec?'var(--green)':'var(--red)';
+  }
+  // PCR from foData if available
+  const pcrData=STATE.foData?.pcr;
+  const pcrChip=document.getElementById('pcrChip');
+  if(pcrChip&&pcrData&&Object.keys(pcrData).length){
+    const pcrVals=Object.values(pcrData);
+    const avgPcr=pcrVals.reduce((a,b)=>a+b,0)/pcrVals.length;
+    pcrChip.textContent=avgPcr.toFixed(2);
+    pcrChip.style.color=avgPcr>1?'var(--green)':avgPcr<0.8?'var(--red)':'var(--text)';
+  }
+  // Delivery chip — average delivery % if available
+  const delChip=document.getElementById('deliveryChip');
+  if(delChip){
+    const delPcts=Object.values(signals).filter(s=>s.delPct!=null).map(s=>+s.delPct);
+    if(delPcts.length){
+      const avg=(delPcts.reduce((a,b)=>a+b,0)/delPcts.length).toFixed(1);
+      delChip.textContent=avg+'%';
+      delChip.style.color=+avg>=60?'var(--green)':+avg<30?'var(--red)':'var(--text)';
     }
   }
   renderFiiDiiChart();
@@ -1750,8 +1786,22 @@ function computeSmartRank(){
 
 function renderSmartRanking(){
   const container=document.getElementById('intelContent');
-  const ranked=computeSmartRank();
-  if(!ranked.length){container.innerHTML=`<div class="empty"><div class="empty-icon">🏆</div>Computing rankings…<br><small style="color:var(--text-muted)">MF data is embedded · F&O data optional</small></div>`;return;}
+  let ranked=computeSmartRank();
+  // Fallback: if MF picks produce no results, show top F&O signals directly
+  if(!ranked.length){
+    const signals=STATE.foData?.signals||{};
+    const trends=STATE.foData?.trendStats||{};
+    ranked=Object.entries(signals)
+      .filter(([sym,s])=>s.score>0.3&&!['NIFTY','BANKNIFTY','SENSEX'].includes(sym))
+      .map(([sym,s])=>{
+        const trend=trends[sym]||null;
+        const prob=computeProbScore(sym,null,s,trend);
+        return{stock:sym,sym,score:s.score,ms:0,foScore:s.score,hc:0,fc:0,sec:'',layers:[{t:'layer-fo',l:'F&O Signal'}],conflict:false,prob,fo:s,trend,isNew:false,funds:[],vel:scoreVelocity(trend)};
+      })
+      .sort((a,b)=>b.score-a.score)
+      .slice(0,20);
+  }
+  if(!ranked.length){container.innerHTML=`<div class="empty"><div class="empty-icon">🏆</div>No signals available<br><small style="color:var(--text-muted)">Upload FOVOLT files to see rankings</small></div>`;return;}
   const mfData=computeMFData();
   // Validate links
   const nseEquity=sym=>`https://www.nseindia.com/get-quotes/equity?symbol=${sym}`;
@@ -2160,7 +2210,9 @@ function renderPicks(){
 
   if(tab==='best'){
     // Best Trades = highest probability, multi-layer confirmed, no conflict
-    items=items.filter(i=>!i.conflict&&i.prob.total>=25&&i.layers>=1);
+    // Best Trades = highest probability, no conflict
+    // Threshold is low (15) because MF holdings are static — F&O signal alone is sufficient
+    items=items.filter(i=>!i.conflict&&i.prob.total>=15);
     items.sort((a,b)=>{
       // Primary: prob score. Secondary: layer count. Tertiary: mfScore (tiebreak)
       if(b.prob.total!==a.prob.total)return b.prob.total-a.prob.total;
@@ -2187,7 +2239,7 @@ function renderPicks(){
     if(!items.length){container.innerHTML=`<div class="empty"><div class="empty-icon">▣</div>No MF picks found</div>`;return;}
     container.innerHTML=items.map((item,idx)=>renderPickCard(item,idx,'mf')).join('');
   } else if(tab==='combined'){
-    items=items.filter(i=>i.prob.total>20).sort((a,b)=>b.prob.total-a.prob.total).slice(0,30);
+    items=items.filter(i=>i.prob.total>10).sort((a,b)=>b.prob.total-a.prob.total).slice(0,30);
     if(!items.length){container.innerHTML=`<div class="empty"><div class="empty-icon">⚡</div>No scored picks — upload F&O data for full scores</div>`;return;}
     container.innerHTML=items.map((item,idx)=>renderPickCard(item,idx,'combined')).join('');
   } else if(tab==='fo'){
@@ -3098,7 +3150,18 @@ function renderNiftyFromFOVOLT(){
       high:null,low:null
     });
   } else {
-    ['niftyVal','niftyChg'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=id.includes('Val')?'—':'F&O cls only';});
+    // Fallback: estimate Nifty direction from top constituent average
+    const proxies=['RELIANCE','HDFCBANK','ICICIBANK','INFY','TCS','BHARTIARTL','ITC','KOTAKBANK'];
+    const proxySignals=proxies.map(s=>signals[s]).filter(Boolean);
+    if(proxySignals.length>=3){
+      const avgD1=proxySignals.reduce((a,b)=>a+parseFloat(b.d1||0),0)/proxySignals.length;
+      const niftyEl=document.getElementById('niftyChg');
+      const niftyVal=document.getElementById('niftyVal');
+      if(niftyEl){niftyEl.textContent=(avgD1>=0?'+':'')+avgD1.toFixed(2)+'% (est.)';niftyEl.style.color=avgD1>=0?'var(--green)':'var(--red)';}
+      if(niftyVal){niftyVal.textContent='~'+proxySignals[0].cl?.toLocaleString('en-IN')||'—';}
+    } else {
+      ['niftyVal','niftyChg'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=id.includes('Val')?'—':'Upload index FOVOLT';});
+    }
   }
   if(bnk){
     renderNiftyTile('bnk',{
@@ -3108,7 +3171,17 @@ function renderNiftyFromFOVOLT(){
       high:null,low:null
     });
   } else {
-    ['bnkVal','bnkChg'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=id.includes('Val')?'—':'F&O cls only';});
+    const bankProxies=['HDFCBANK','ICICIBANK','SBIN','AXISBANK','KOTAKBANK'];
+    const bankSignals=bankProxies.map(s=>signals[s]).filter(Boolean);
+    if(bankSignals.length>=3){
+      const avgD1=bankSignals.reduce((a,b)=>a+parseFloat(b.d1||0),0)/bankSignals.length;
+      const bnkEl=document.getElementById('bnkChg');
+      const bnkVal=document.getElementById('bnkVal');
+      if(bnkEl){bnkEl.textContent=(avgD1>=0?'+':'')+avgD1.toFixed(2)+'% (est.)';bnkEl.style.color=avgD1>=0?'var(--green)':'var(--red)';}
+      if(bnkVal){bnkVal.textContent='~'+bankSignals[0].cl?.toLocaleString('en-IN')||'—';}
+    } else {
+      ['bnkVal','bnkChg'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=id.includes('Val')?'—':'Upload index FOVOLT';});
+    }
   }
 }
 
