@@ -3980,18 +3980,33 @@ function renderDeliverySpikes(){
 
   if(!hasFoData){
     tc.innerHTML=`<div style="padding:12px;background:var(--surface2);border-radius:8px;border:1px solid var(--border)">
-      <div style="font-size:.8rem;font-weight:600;margin-bottom:6px">📡 Connect your GitHub Actions workflow</div>
-      <div style="font-size:.72rem;color:var(--text-muted);line-height:1.6">
-        Delivery data comes from your <code style="background:var(--bg);padding:1px 4px;border-radius:3px">foData.json</code> file pushed by GitHub Actions.<br>
-        Add <code style="background:var(--bg);padding:1px 4px;border-radius:3px">delPct</code>, <code style="background:var(--bg);padding:1px 4px;border-radius:3px">vol</code>, <code style="background:var(--bg);padding:1px 4px;border-radius:3px">d1</code> fields to each signal in your workflow.<br>
-        NSE publishes bhavcopy daily at <a href="https://archives.nseindia.com" target="_blank" style="color:var(--accent)">archives.nseindia.com</a> — parse it server-side, not in the browser.
-      </div>
+      <div style="font-size:.8rem;font-weight:600;margin-bottom:6px">📡 Awaiting F&O data</div>
+      <div style="font-size:.72rem;color:var(--text-muted)">Upload FOVOLT files and trigger workflow to see delivery signals.</div>
     </div>`;
     return;
   }
 
+  // Check if ANY stock has delPct — tells us if CM BhavCopy was processed
+  const hasDeliveryData=Object.values(signals).some(s=>s.delPct!=null&&s.delPct>0);
+
+  if(!spikes.length){
+    if(!hasDeliveryData){
+      tc.innerHTML=`<div style="padding:12px;background:var(--surface2);border-radius:8px;border:1px solid var(--border)">
+        <div style="font-size:.8rem;font-weight:600;margin-bottom:6px">📂 CM BhavCopy not yet processed</div>
+        <div style="font-size:.72rem;color:var(--text-muted);line-height:1.7">
+          Delivery% data comes from the NSE CM BhavCopy file.<br>
+          <strong style="color:var(--text)">To enable:</strong> upload <code style="background:var(--bg);padding:1px 4px;border-radius:3px">sec_bhavdata_full_DDMMYYYY.csv</code>
+          to <code style="background:var(--bg);padding:1px 4px;border-radius:3px">data/uploads/</code> in your data repo, then re-run the workflow.<br>
+          Download from: <a href="https://archives.nseindia.com/products/content/" target="_blank" style="color:var(--accent)">NSE Archives → Bhavcopy with Delivery</a>
+        </div>
+      </div>`;
+    } else {
+      tc.innerHTML=`<div style="font-size:.75rem;color:var(--text-muted);padding:8px 0">No stocks with delivery ≥55% today — institutional accumulation signals absent.</div>`;
+    }
+    return;
+  }
+
   if(STATE.delTab==='spikes'){
-    if(!spikes.length){tc.innerHTML=`<div style="font-size:.75rem;color:var(--text-muted);padding:8px 0">No high-delivery signals today (threshold: 55%)</div>`;return;}
     tc.innerHTML=`
     <div style="font-size:.68rem;color:var(--text-muted);margin-bottom:8px">Delivery% >55% with MF signal · ${STATE.foData?.meta?.date||'latest'}</div>
     <div style="display:grid;grid-template-columns:36px 1fr auto auto auto;gap:4px 8px;font-size:.65rem;color:var(--text-muted);font-weight:700;padding-bottom:5px;border-bottom:1px solid var(--border);margin-bottom:4px">
