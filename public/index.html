@@ -2129,6 +2129,7 @@ function renderIntelSectors(){
    PICKS TAB — Unified Best Trades Engine
 ═══════════════════════════════════════════ */
 /* ── Rank cache: recompute only when data date changes ── */
+const _mfCache={date:null,data:null};
 const _rankCache={date:null,ranks:[]};
 function getRankedPicks(){
   const d=STATE.foData?.meta?.date||'';
